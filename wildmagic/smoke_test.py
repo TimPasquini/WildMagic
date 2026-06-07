@@ -6,7 +6,7 @@ import tempfile
 from .actions import GameSession
 from .models import FIRE, RUBBLE, SLICK_ICE, VINES
 from .replay import run_replay, save_replay
-from .wild_magic import MockWildMagicProvider
+from .wild_magic import MockWildMagicProvider, parse_resolution_json, validate_resolution
 
 
 def main() -> None:
@@ -199,6 +199,30 @@ def main() -> None:
     assert trigger_goblin.hp < hp_before_trigger
     assert "bleeding" in trigger_goblin.statuses
     assert not trigger_engine.state.triggers
+
+    trigger_action_resolution = parse_resolution_json(
+        '{"accepted": true, "severity": "minor", "outcome_text": "x", '
+        '"effect": "create_trigger", "trigger": "on_player_hit", "target": "player", '
+        '"action": "retaliate with fire", "cost": {"mana": 1}}'
+    )
+    assert validate_resolution(trigger_action_resolution) is None
+    trigger_action_effect = trigger_action_resolution["effects"][0]
+    assert trigger_action_effect["type"] == "create_trigger"
+    assert trigger_action_effect["effects"][0]["damage_type"] == "fire"
+    empty_trigger_resolution = parse_resolution_json(
+        '{"accepted": true, "severity": "minor", "outcome_text": "x", '
+        '"effects": [{"type": "create_trigger", "trigger": "on_player_hit", "target": "player"}], '
+        '"costs": [{"type": "mana", "amount": 1}]}'
+    )
+    assert validate_resolution(empty_trigger_resolution) == "create_trigger effects must be a non-empty list"
+
+    terrain_alias_resolution = parse_resolution_json(
+        '{"accepted": true, "severity": "minor", "outcome_text": "x", '
+        '"effects": [{"type": "create_tiles", "name": "smoke curtain", '
+        '"target": "player", "radius": 2, "tile": "?"}], '
+        '"costs": [{"type": "mana", "amount": 1}]}'
+    )
+    assert terrain_alias_resolution["effects"][0]["tile"] == "mist"
 
     with tempfile.TemporaryDirectory() as temp_dir:
         replay_path = Path(temp_dir) / "smoke_replay.json"

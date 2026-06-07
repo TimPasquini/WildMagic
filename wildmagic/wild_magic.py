@@ -11,7 +11,7 @@ import urllib.request
 from typing import Any, Protocol
 
 from .fallbacks import fallback_resolution_from_spell, fallbacks_enabled
-from .models import MECHANICAL_STATUSES
+from .models import MECHANICAL_STATUSES, TILE_ALIASES
 
 
 SUPPORTED_STATUS_TEXT = ", ".join(sorted(MECHANICAL_STATUSES))
@@ -68,7 +68,8 @@ Balance rules:
 - For "next time X happens, Y happens" spells, use create_trigger. Fields: trigger ("on_next_spell|on_player_hit|on_player_damaged|on_player_move|on_enemy_hit|on_enemy_damaged|on_enemy_death"), target ("player|nearest_enemy|all_enemies|any"), charges, duration, name, effects. Trigger effects may use target:"trigger_target" or target:"trigger_source".
 - For physically impossible global requests (reverse gravity for everything, turn all walls into X), reject with a creative reason or give a local creative interpretation using available effects.
 
-Useful tiles: floor, wall, door, open_door, stairs_down, stairs_up, water, fire, slick_ice, ice_wall, poison_cloud, vines, rubble, mist.
+Useful tiles: floor, wall, door, open_door, stairs_down, stairs_up, water, fire, slick_ice, ice_wall, poison_cloud, vines, rubble, mist. Also accepted: lava/magma→fire, caltrops/thorns/web/net→vines, spikes/debris/bones→rubble, smoke/fog→mist, acid→poison_cloud, iron_bars/barrier→ice_wall.
+Tile usage: use vines for tangling hazards (webs, thorns, nets, caltrops), rubble for destructive debris, mist for obscuring clouds, slick_ice for sliding hazards. Always use radius for room/area coverage — e.g. {"type":"create_tiles","tile":"mist","target":"player","radius":5} for filling a room with smoke.
 Supported statuses: {supported_statuses}.
 Use status only for supported mechanical statuses.
 Key behaviors: burning/bleeding/poisoned deal 1 damage/turn; regenerating heals 1 HP/turn; slowed skips every other turn; berserk deals +2 damage but self-damages; empowered deals +2 damage; marked/cursed take extra damage; invisible reduces enemy sensing; confused moves randomly; frightened flees; frozen/stunned/rooted/silenced/webbed are disabling.
@@ -114,6 +115,8 @@ Good examples:
 {"accepted": true, "severity": "moderate", "outcome_text": "A spectral archer materialises, nocking an arrow of shadow.", "effects": [{"type": "conjure_creature", "template": "spirit", "name": "shadow archer", "faction": "ally", "tags": ["ranged", "undead"], "placement": "near_player", "count": 1}], "costs": [{"type": "mana", "amount": 6}], "rejected_reason": null}
 {"accepted": true, "severity": "major", "outcome_text": "Something volatile and eager answers the call. It will not last long.", "effects": [{"type": "conjure_creature", "template": "construct", "name": "bomb golem", "faction": "ally", "hp": 4, "tags": ["explode_on_death", "bomb"], "placement": "near_player", "count": 1}], "costs": [{"type": "mana", "amount": 8}], "rejected_reason": null}
 {"accepted": true, "severity": "moderate", "outcome_text": "A healing font pulses softly. Stand near it to recover.", "effects": [{"type": "summon", "name": "healing font", "faction": "ally", "hp": 6, "attack": 0, "defense": 2, "char": "+", "tags": ["aura_heal_3", "stationary"]}], "costs": [{"type": "mana", "amount": 7}], "rejected_reason": null}
+{"accepted": true, "severity": "moderate", "outcome_text": "A ring of fire erupts around you.", "effects": [{"type": "create_tiles", "tile": "fire", "target": "player", "radius": 3, "hollow": true, "duration": 5}], "costs": [{"type": "mana", "amount": 5}], "rejected_reason": null}
+{"accepted": true, "severity": "minor", "outcome_text": "Ice draws a straight path to your enemy.", "effects": [{"type": "create_tiles", "shape": "line", "origin": "player", "target": "nearest_enemy", "tile": "slick_ice", "duration": 4}], "costs": [{"type": "mana", "amount": 3}], "rejected_reason": null}
 {"accepted": true, "severity": "moderate", "outcome_text": "Your wound learns to answer.", "effects": [{"type": "create_trigger", "name": "thorn-blood answer", "trigger": "on_player_hit", "target": "player", "charges": 1, "duration": 6, "effects": [{"type": "damage", "target": "trigger_source", "amount": 5, "damage_type": "physical"}, {"type": "add_status", "target": "trigger_source", "status": "bleeding", "duration": 3}]}], "costs": [{"type": "mana", "amount": 4}], "rejected_reason": null}
 {"accepted": false, "severity": "catastrophic", "outcome_text": "", "effects": [], "costs": [], "rejected_reason": "Reality refuses to become that convenient."}
 """.replace("{supported_statuses}", SUPPORTED_STATUS_TEXT)
@@ -719,7 +722,8 @@ _STATUS_FLAVOR_ALIASES: dict[str, str] = {
     # confused synonyms
     "deluded": "confused", "disoriented": "confused", "maddened": "confused",
     "crazed": "confused", "muddled": "confused", "lost": "confused",
-    "bewildered": "confused",
+    "bewildered": "confused", "blind": "confused", "blinded": "confused",
+    "sightless": "confused", "unseeing": "confused",
     # frightened synonyms
     "panicked": "frightened", "terrified": "frightened", "afraid": "frightened",
     "scared": "frightened", "fleeing": "frightened", "cowering": "frightened",
@@ -842,6 +846,89 @@ _STATUS_AS_TYPE: dict[str, tuple[str, str]] = {
 }
 
 
+_KNOWN_TILE_NAMES = frozenset(TILE_ALIASES)
+
+
+def _normalize_create_tiles_tile(e: dict[str, Any]) -> dict[str, Any]:
+    """Infer tile from tags/name when tile field is missing or uses an unrecognized char."""
+    tile_val = str(e.get("tile") or "").strip().lower()
+    if tile_val in _KNOWN_TILE_NAMES:
+        return e
+    _raw_tags = e.get("tags") or []
+    tags = [str(t).lower() for t in (_raw_tags if isinstance(_raw_tags, list) else [_raw_tags])]
+    name_fields = [
+        str(e.get("name") or ""),
+        str(e.get("terrain_type") or ""),
+        str(e.get("substance") or ""),
+        str(e.get("material") or ""),
+    ]
+    ctx = " ".join(tags + name_fields + [tile_val]).lower()
+    if any(w in ctx for w in ("fire", "lava", "magma", "flame", "ignite", "burn", "scorch", "incinerate")):
+        inferred = "fire"
+    elif any(w in ctx for w in ("slick", "ice_floor", "frost_floor")):
+        inferred = "slick_ice"
+    elif any(w in ctx for w in ("poison", "acid", "toxic", "fume", "vapor", "gas", "venom")):
+        inferred = "poison_cloud"
+    elif any(w in ctx for w in ("smoke", "fog", "mist", "haze", "cloud", "steam")):
+        inferred = "mist"
+    elif any(w in ctx for w in ("vine", "web", "thorn", "net", "caltrop", "snare", "entangle", "trip", "hazard", "spike", "trap")):
+        inferred = "vines"
+    elif any(w in ctx for w in ("rubble", "debris", "stone", "rock", "ruin", "bone", "gravel")):
+        inferred = "rubble"
+    elif any(w in ctx for w in ("ice_wall", "wall_ice", "barrier", "block", "iron", "bars")):
+        inferred = "ice_wall"
+    elif any(w in ctx for w in ("water", "flood", "swamp", "mud", "pool", "liquid", "puddle")):
+        inferred = "water"
+    elif any(w in ctx for w in ("ice", "frost", "frozen", "cold", "chill", "freeze")):
+        inferred = "slick_ice"
+    else:
+        return e
+    e = dict(e)
+    e["tile"] = inferred
+    return e
+
+
+def _infer_effect_from_fields(e: dict[str, Any]) -> dict[str, Any] | None:
+    """When effect type is unparseable natural language, infer the effect type from other keys."""
+    result = dict(e)
+    if "damage_type" in e or (isinstance(e.get("amount"), (int, float)) and "tile" not in e and "status" not in e):
+        result["type"] = "damage"
+        result.setdefault("target", "nearest_enemy")
+        result.setdefault("amount", 5)
+        return result
+    if "status" in e:
+        result["type"] = "add_status"
+        result.setdefault("target", "nearest_enemy")
+        return result
+    if "tile" in e:
+        result["type"] = "create_tiles"
+        result.setdefault("target", "player")
+        return result
+    if "name" in e and any(k in e for k in ("hp", "faction", "attack", "template")):
+        result["type"] = "conjure_creature"
+        result.setdefault("faction", "ally")
+        return result
+    return None
+
+
+def _infer_trigger_action(text: str) -> dict[str, Any] | None:
+    """Convert a natural-language trigger action string to a structured effect dict."""
+    t = text.lower()
+    if any(w in t for w in ("fire", "flame", "burn", "blaze", "ignite", "scorch", "incinerate")):
+        return {"type": "damage", "target": "trigger_source", "amount": 5, "damage_type": "fire"}
+    if any(w in t for w in ("ice", "frost", "freeze", "cold", "chill", "frozen")):
+        return {"type": "damage", "target": "trigger_source", "amount": 5, "damage_type": "frost"}
+    if any(w in t for w in ("lightning", "thunder", "electric", "shock", "spark", "volt")):
+        return {"type": "damage", "target": "trigger_source", "amount": 5, "damage_type": "lightning"}
+    if any(w in t for w in ("poison", "toxic", "venom", "acid")):
+        return {"type": "damage", "target": "trigger_source", "amount": 5, "damage_type": "poison"}
+    if any(w in t for w in ("heal", "restore", "mend", "recover", "regenerate")):
+        return {"type": "heal", "target": "player", "amount": 5}
+    if any(w in t for w in ("retaliate", "counter", "reflect", "strike", "attack", "damage", "hit", "hurt", "wound")):
+        return {"type": "damage", "target": "trigger_source", "amount": 5, "damage_type": "physical"}
+    return None
+
+
 def _normalize_resolution(data: dict[str, Any]) -> dict[str, Any]:
     if isinstance(data.get("outcome"), dict):
         outcome = data["outcome"]
@@ -889,6 +976,16 @@ def _normalize_resolution(data: dict[str, Any]) -> dict[str, Any]:
                 data = dict(data)
                 data["outcome_text"] = data[alias]
                 break
+    # Strip non-prose outcome texts (single-word status words from a poorly-behaved LLM).
+    _JUNK_OUTCOMES = {
+        "success", "ok", "okay", "done", "accepted", "yes", "no", "null", "none",
+        "true", "false", "error", "failed", "failure", "reject", "rejected", "completed",
+    }
+    if isinstance(data.get("outcome_text"), str):
+        _ot = data["outcome_text"].strip().rstrip(".!?").lower()
+        if _ot in _JUNK_OUTCOMES or len(_ot) < 4:
+            data = dict(data)
+            data["outcome_text"] = ""
 
     # Coerce costs dict {"mana": 5} into a list [{type: mana, amount: 5}].
     if isinstance(data.get("costs"), dict):
@@ -971,7 +1068,7 @@ def _normalize_resolution(data: dict[str, Any]) -> dict[str, Any]:
                     "hollow", "ring", "perimeter", "include_player", "affects",
                     "display_name", "expiry_text", "item", "material", "quantity",
                     "dx", "dy", "distance", "positions", "tiles", "creature",
-                    "trigger", "on", "effects", "effect", "charges", "shape",
+                    "trigger", "on", "effects", "effect", "action", "charges", "shape",
                     "pattern", "width", "length", "from", "to",
                 }
                 for _k in _EFFECT_TOP_FIELDS:
@@ -1086,6 +1183,12 @@ def _normalize_resolution(data: dict[str, Any]) -> dict[str, Any]:
                         if recovered:
                             e = recovered
                             et = str(e.get("type") or "").lower().strip()
+                        elif len(et) > 20:
+                            # Type field is natural language. Infer effect type from other fields.
+                            recovered = _infer_effect_from_fields(e)
+                            if recovered:
+                                e = recovered
+                                et = str(e.get("type") or "").lower().strip()
                 # Legacy element-type path (already in ELEMENT_DAMAGE_ALIASES but not in SUPPORTED_EFFECTS).
                 elif et in _ELEMENT_DAMAGE_ALIASES and et not in SUPPORTED_EFFECTS:
                     e = dict(e)
@@ -1134,6 +1237,50 @@ def _normalize_resolution(data: dict[str, Any]) -> dict[str, Any]:
                             e[_ik] = _iv
                 if et == "schedule_event":
                     e = _normalize_schedule_event(e)
+                # Normalize create_trigger: handle many LLM structural variations.
+                if et == "create_trigger":
+                    e = dict(e)
+                    # LLM sometimes nests the whole trigger config under "trigger" as a dict.
+                    if isinstance(e.get("trigger"), dict):
+                        trigger_obj = e.pop("trigger")
+                        trigger_str = str(
+                            trigger_obj.get("type") or trigger_obj.get("trigger")
+                            or trigger_obj.get("on") or "on_next_spell"
+                        )
+                        e["trigger"] = trigger_str
+                        if not e.get("effects"):
+                            nested = trigger_obj.get("effects") or trigger_obj.get("effect")
+                            action = trigger_obj.get("action")
+                            if isinstance(nested, list):
+                                e["effects"] = nested
+                            elif isinstance(nested, dict):
+                                e["effects"] = [nested]
+                            elif isinstance(action, dict):
+                                e["effects"] = [action]
+                            elif isinstance(action, str) and action.strip():
+                                inferred = _infer_trigger_action(action)
+                                if inferred:
+                                    e["effects"] = [inferred]
+                        if not e.get("charges") and isinstance(trigger_obj.get("condition"), dict):
+                            if trigger_obj["condition"].get("type") == "once":
+                                e["charges"] = 1
+                    # LLM uses "action" (singular dict/string) instead of "effects" (list).
+                    if not e.get("effects"):
+                        single = e.pop("action", None) or e.pop("effect", None)
+                        if isinstance(single, dict):
+                            e["effects"] = [single]
+                        elif isinstance(single, list):
+                            e["effects"] = single
+                        elif isinstance(single, str) and single.strip():
+                            inferred = _infer_trigger_action(single)
+                            if inferred:
+                                e["effects"] = [inferred]
+                    if isinstance(e.get("effect"), str):
+                        e.pop("effect", None)
+                    e.pop("conditions", None)
+                # For create_tiles: infer tile from tags/name when tile is unrecognized.
+                if et in {"create_tiles", "create_tile", "set_tile"}:
+                    e = _normalize_create_tiles_tile(e)
                 if et in {"create_tiles", "create_tile", "set_tile"} and "positions" in e and "tiles" not in e:
                     e = dict(e)
                     raw_tile = str(e.get("tile") or ".").lower()
@@ -1358,6 +1505,10 @@ def validate_resolution(data: dict[str, Any]) -> str | None:
                 return "conjure_item count must be an integer"
             if count < 1 or count > 20:
                 return "conjure_item count must be between 1 and 20"
+        if effect_type == "create_trigger":
+            trigger_effects = effect.get("effects")
+            if not isinstance(trigger_effects, list) or not trigger_effects:
+                return "create_trigger effects must be a non-empty list"
     for index, cost in enumerate(costs):
         if not isinstance(cost, dict):
             return f"cost {index} must be an object"

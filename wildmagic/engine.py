@@ -29,6 +29,7 @@ from .models import (
     Entity,
     GameStats,
     TILE_NAMES,
+    TILE_ALIASES,
     TILE_TAGS,
     WildMagicOutcome,
 )
@@ -1152,6 +1153,11 @@ class GameEngine:
     def _apply_tile_entry(self, entity: Entity) -> None:
         tile = self.tile_at(entity.x, entity.y)
         is_player = entity.id == self.state.player_id
+        # Non-player entities auto-open closed doors they walk into.
+        if tile == DOOR and not is_player:
+            self.state.tiles[entity.y][entity.x] = OPEN_DOOR
+            self.update_fov()
+            tile = OPEN_DOOR
         if tile == FIRE:
             self.damage_entity(entity, 1, "fire")
             entity.statuses["burning"] = max(status_duration(entity.statuses.get("burning")), 2)
@@ -1734,7 +1740,11 @@ class GameEngine:
         self.rng.shuffle(neighbors)
         valid: list[tuple[int, int]] = []
         for tx, ty in neighbors:
-            if not self.in_bounds(tx, ty) or self.tile_at(tx, ty) in BLOCKING_TILES:
+            if not self.in_bounds(tx, ty):
+                continue
+            tile = self.tile_at(tx, ty)
+            # Doors are openable — treat as passable for pathfinding.
+            if tile in BLOCKING_TILES and tile != DOOR:
                 continue
             # Always allow the goal tile so entities can reach their target.
             if (tx, ty) == goal:
@@ -1970,11 +1980,11 @@ class GameEngine:
         cost_type = str(cost.get("type", "")).lower()
         player = self.state.player
         if cost_type == "mana":
-            amount = clamp_int(cost.get("amount"), 0, 99)
+            amount = clamp_int(cost.get("amount"), 1, 99)
             player.mana = max(0, player.mana - amount)
             return f"Cost: {amount} mana."
         if cost_type in {"health", "hp"}:
-            amount = clamp_int(cost.get("amount"), 0, 99)
+            amount = clamp_int(cost.get("amount"), 1, 99)
             self.damage_entity(player, amount, "blood")
             return f"Cost: {amount} health."
         if cost_type == "max_health":
@@ -2056,14 +2066,14 @@ class GameEngine:
             target = self.resolve_target(str(effect.get("target") or "nearest_enemy"))
             if not target:
                 return ["The spell claws at empty air."]
-            amount = clamp_int(effect.get("amount"), 0, 999)
+            amount = clamp_int(effect.get("amount"), 1, 999) if effect.get("amount") is not None else 5
             damage_type = str(effect.get("damage_type") or "arcane")
             actual = self.damage_entity(target, amount, damage_type)
             return [f"{target.name} takes {actual} {damage_type} damage."]
         if effect_type == "area_damage":
             x, y = self.effect_position(effect)
             radius = clamp_int(effect.get("radius"), 0, 99) if effect.get("radius") is not None else 3
-            amount = clamp_int(effect.get("amount"), 0, 99)
+            amount = clamp_int(effect.get("amount"), 1, 999) if effect.get("amount") is not None else 5
             damage_type = str(effect.get("damage_type") or "arcane")
             include_player = bool(effect.get("include_player", False))
             affects = normalize_id(str(effect.get("affects") or "non_player"))
@@ -2113,16 +2123,20 @@ class GameEngine:
             target = self.resolve_target(str(effect.get("target") or "player"))
             if not target:
                 return []
-            amount = clamp_int(effect.get("amount"), 0, 999)
+            amount = clamp_int(effect.get("amount"), 1, 999) if effect.get("amount") is not None else 5
             actual = self.heal_entity(target, amount)
             if target.id == self.state.player_id:
+                if actual == 0:
+                    return ["Your wounds are already mended."]
                 return [f"You heal {actual} HP."]
+            if actual == 0:
+                return [f"{target.name} is already whole."]
             return [f"{target.name} heals {actual} HP."]
         if effect_type == "restore_mana":
             target = self.resolve_target(str(effect.get("target") or "player"))
             if not target:
                 return []
-            amount = clamp_int(effect.get("amount"), 0, 999)
+            amount = clamp_int(effect.get("amount"), 1, 999) if effect.get("amount") is not None else 5
             before = target.mana
             target.mana = min(target.max_mana, target.mana + amount)
             gained = target.mana - before
@@ -2392,9 +2406,21 @@ class GameEngine:
             effects = coerce_list(effect.get("effects") or effect.get("effect"))
             if not effects:
                 return ["The trigger has nothing to do and collapses."]
+            _TRIGGER_DEFAULT_NAMES = {
+                "on_player_hit": "Retaliatory echo",
+                "on_player_damaged": "Wound pact",
+                "on_damaged": "Wound pact",
+                "on_enemy_hit": "Predator's mark",
+                "on_enemy_damaged": "Predator's mark",
+                "on_enemy_death": "Death-pact",
+                "on_next_spell": "Spell chain",
+                "on_player_move": "Footstep echo",
+            }
+            raw_name = str(effect.get("name") or "").strip()
+            default_name = _TRIGGER_DEFAULT_NAMES.get(trigger_name, "A waiting spell")
             trigger = {
                 "id": self.next_entity_id("trigger"),
-                "name": sanitize_name(str(effect.get("name") or "A waiting spell"), "A waiting spell"),
+                "name": sanitize_name(raw_name or default_name, default_name),
                 "trigger": trigger_name,
                 "target": effect.get("target", "any"),
                 "charges": clamp_int(effect.get("charges"), 1, 9),
@@ -2739,15 +2765,25 @@ def normalize_trigger_name(value: str) -> str:
         "player_hit": "on_player_hit",
         "when_hit": "on_player_hit",
         "on_hit": "on_player_hit",
+        "on_take_damage": "on_player_hit",
+        "on_takes_damage": "on_player_hit",
+        "on_receive_damage": "on_player_hit",
+        "on_receives_damage": "on_player_hit",
+        "on_player_takes_damage": "on_player_hit",
         "player_damaged": "on_player_damaged",
+        "on_damage": "on_damaged",
         "on_damaged": "on_damaged",
         "enemy_hit": "on_enemy_hit",
         "enemy_damaged": "on_enemy_damaged",
         "enemy_death": "on_enemy_death",
         "on_kill": "on_enemy_death",
         "on_enemy_killed": "on_enemy_death",
+        "on_enemy_dies": "on_enemy_death",
+        "on_target_death": "on_enemy_death",
+        "on_target_dies": "on_enemy_death",
         "player_move": "on_player_move",
         "on_move": "on_player_move",
+        "on_player_moves": "on_player_move",
     }
     if normalized in aliases:
         return aliases[normalized]
@@ -2862,42 +2898,4 @@ def area_damage_affects(entity: Entity, affects: str, player_id: str) -> bool:
 
 def tile_from_name(name: str) -> str:
     normalized = name.lower().strip().replace(" ", "_")
-    return {
-        "floor": FLOOR,
-        ".": FLOOR,
-        "wall": WALL,
-        "#": WALL,
-        "door": DOOR,
-        "closed_door": DOOR,
-        "+": DOOR,
-        "open_door": OPEN_DOOR,
-        "/": OPEN_DOOR,
-        "stairs_down": STAIRS_DOWN,
-        "down_stairs": STAIRS_DOWN,
-        ">": STAIRS_DOWN,
-        "stairs_up": STAIRS_UP,
-        "up_stairs": STAIRS_UP,
-        "<": STAIRS_UP,
-        "water": WATER,
-        "~": WATER,
-        "fire": FIRE,
-        "wild_fire": FIRE,
-        "^": FIRE,
-        "ice": SLICK_ICE,
-        "slick_ice": SLICK_ICE,
-        "ice_floor": SLICK_ICE,
-        "_": SLICK_ICE,
-        "ice_wall": ICE_WALL,
-        "wall_of_ice": ICE_WALL,
-        "*": ICE_WALL,
-        "poison": POISON_CLOUD,
-        "poison_cloud": POISON_CLOUD,
-        "%": POISON_CLOUD,
-        "vines": VINES,
-        "vine": VINES,
-        "&": VINES,
-        "rubble": RUBBLE,
-        ";": RUBBLE,
-        "mist": MIST,
-        ":": MIST,
-    }.get(normalized, FLOOR)
+    return TILE_ALIASES.get(normalized, FLOOR)
