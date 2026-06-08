@@ -69,6 +69,16 @@ LEGION_ENEMY_TEMPLATES: list[tuple[str, str, int, int, int, str, set[str], dict[
     ("exemplar of the line", "e", 12, 4, 2, "legion", {"empire", "human", "soldier", "elite", "disciplined"}, {"physical": 25}, {}),
 ]
 
+# Tag-pairs whose bearers are mutually hostile, on top of the baseline
+# enemy-vs-(player & allies) opposition every "enemy"-faction entity already has.
+# Each entry is a standing conflict declared once, in the open — not a one-off
+# flag bolted onto a single squad. Empire vs. Hollowmere is the first of these;
+# future ones (goblins raiding a frontier camp, undead vs. the living, rival
+# Imperial cults) plug into the exact same mechanism.
+FACTION_HOSTILITIES: list[tuple[set[str], set[str]]] = [
+    ({"empire"}, {"hollowmere_townsfolk"}),
+]
+
 
 ITEM_USE_SPECS: dict[str, dict[str, Any]] = {
     "mana_crystal": {
@@ -581,12 +591,13 @@ class GameEngine:
         self.update_fov()
 
     def _generate_town_start(self) -> None:
-        """Hollowmere: a small frontier town built around the mouth of an old dungeon
-        stair. The starting area - talkable townsfolk (each with their own memory and
-        backstory) live alongside wandering threats, so the player can test dialogue
-        and combat side by side from the very first turn."""
+        """Hollowmere: a frontier town standing in the open at the mouth of an old
+        dungeon stair -- buildings on bare ground, Caves-of-Qud style, not a walled
+        warren of corridors. Talkable townsfolk (each with their own memory and
+        backstory) live here -- and the town is not safe: an Imperial raiding party
+        is already moving against it when the player arrives."""
         state = self.state
-        state.tiles = [[WALL for _ in range(state.width)] for _ in range(state.height)]
+        state.tiles = [[FLOOR for _ in range(state.width)] for _ in range(state.height)]
         state.visible.clear()
         state.explored.clear()
         state.tile_tags.clear()
@@ -594,29 +605,29 @@ class GameEngine:
         state.entities = {}
         state.npc_profiles = {}
 
-        square = Room(16, 12, 9, 5)
+        zone_rng = random.Random(hash((state.rng_seed, "hollowmere")))
+        self._scatter_terrain_features(zone_rng)
+
         inn = Room(3, 10, 8, 6)
         market = Room(30, 10, 8, 6)
         temple = Room(16, 3, 9, 6)
         gatehouse = Room(16, 20, 9, 6)
-        back_alley = Room(3, 18, 6, 5)
 
-        for room in (square, inn, market, temple, gatehouse, back_alley):
-            self._carve_room(room)
-        self._carve_corridor(square.center, inn.center)
-        self._carve_corridor(square.center, market.center)
-        self._carve_corridor(square.center, temple.center)
-        self._carve_corridor(square.center, gatehouse.center)
-        self._carve_corridor(inn.center, back_alley.center)
-        self._place_doors()
+        for room in (inn, market, temple, gatehouse):
+            self._wall_room_perimeter(room)
+        # Each building gets a single door facing the open plaza at the town's heart.
+        state.tiles[inn.y + inn.h // 2][inn.x + inn.w - 1] = DOOR
+        state.tiles[market.y + market.h // 2][market.x] = DOOR
+        state.tiles[temple.y + temple.h - 1][temple.x + temple.w // 2] = DOOR
+        state.tiles[gatehouse.y][gatehouse.x + gatehouse.w // 2] = DOOR
 
-        sx, sy = square.center
+        px, py = state.width // 2, state.height // 2
         player = Entity(
             id="player",
             name="You",
             kind="player",
-            x=sx,
-            y=sy,
+            x=px,
+            y=py,
             char="@",
             hp=24,
             max_hp=24,
@@ -628,6 +639,8 @@ class GameEngine:
             faction="player",
         )
         state.entities[player.id] = player
+        if not self.can_occupy(px, py):
+            player.x, player.y = self._find_entry_tile(px, py)
 
         gx, gy = gatehouse.center
         state.tiles[gy][gx] = STAIRS_DOWN
@@ -641,7 +654,7 @@ class GameEngine:
                 "legion under a tray of drinks and a closed mouth."
             ),
             traits=["gruff", "observant", "secretly soft-hearted"],
-            tags={"human", "townsfolk"},
+            tags={"human", "hollowmere_townsfolk"},
         )
         self.state.npc_profiles[maren.id].remember(
             "Three Imperial scouts passed through at dawn, asking after a wild mage."
@@ -656,7 +669,7 @@ class GameEngine:
                 "person's throat cut."
             ),
             traits=["chatty", "shrewd", "easily distracted by anything shiny"],
-            tags={"human", "townsfolk"},
+            tags={"human", "hollowmere_townsfolk"},
             wares={"trinket": 3, "lockpick": 1, "smoke vial": 2, "gold": 25},
         )
         self.state.npc_profiles[quill.id].remember(
@@ -672,12 +685,14 @@ class GameEngine:
                 "restless dead than any war of banners."
             ),
             traits=["serene", "watchful", "quietly stubborn"],
-            tags={"human", "townsfolk"},
+            tags={"human", "hollowmere_townsfolk"},
         )
         self.state.npc_profiles[wren.id].remember(
             "The candles in the undercroft keep guttering, as if something below is breathing."
         )
 
+        # Ressa fights -- she's the one named townsfolk who can actually anchor a
+        # defense, with the stats and faction (an ally, not neutral) to back it up.
         ressa = self.spawn_npc(
             "Captain Ressa Vane", "C", *self._random_open_tile_in_room(gatehouse),
             role="town guard captain",
@@ -687,26 +702,49 @@ class GameEngine:
                 "to say, not at all, and she'll tell you so."
             ),
             traits=["wary", "blunt", "fiercely protective of the town"],
-            tags={"human", "townsfolk", "soldier"},
+            tags={"human", "hollowmere_townsfolk", "soldier"},
+            hp=20, attack=5, defense=2, faction="ally",
         )
         self.state.npc_profiles[ressa.id].remember(
             "Something dragged a sheep carcass up from the dungeon stair last night and left it in the square."
         )
 
-        cx, cy = self._random_open_tile_in_room(market)
-        self.spawn_actor(
-            "goblin cutpurse", "g", cx, cy, 8, 3, 0, "enemy", "goblin",
-            tags={"goblin", "humanoid", "flesh"},
-        )
-        for _ in range(2):
-            rx, ry = self._random_open_tile_in_room(back_alley)
+        # The Empire is already here: a squad standing in the open plaza, weapons
+        # drawn, when the player arrives -- close enough to the player's own
+        # entry point that its three soldiers fan out toward three different
+        # buildings on their first moves rather than marching in lockstep on
+        # just one. Tagged "empire" via the templates -- FACTION_HOSTILITIES
+        # (engine.py) does the rest for free, including the soldiers knowing
+        # exactly which doors to make for.
+        occupied: set[tuple[int, int]] = {(player.x, player.y)}
+        squad_roster = (LEGION_ENEMY_TEMPLATES[0], LEGION_ENEMY_TEMPLATES[0], LEGION_ENEMY_TEMPLATES[1])
+        squad_origin = (23, 15)
+        for template, (dx, dy) in zip(squad_roster, ((0, 0), (1, 0), (0, 1))):
+            spot = (squad_origin[0] + dx, squad_origin[1] + dy)
+            if spot in occupied or not self.can_occupy(*spot):
+                spot = self.find_open_tile_near(*spot)
+            self._spawn_from_template(template, spot[0], spot[1])
+            occupied.add(spot)
+
+        spot = self._random_open_ground_tile(zone_rng, occupied)
+        if spot is not None:
             self.spawn_actor(
-                "carrion rat", "r", rx, ry, 4, 2, 0, "enemy", "simple",
+                "goblin cutpurse", "g", spot[0], spot[1], 8, 3, 0, "enemy", "goblin",
+                tags={"goblin", "humanoid", "flesh"},
+            )
+            occupied.add(spot)
+        for _ in range(2):
+            spot = self._random_open_ground_tile(zone_rng, occupied)
+            if spot is None:
+                break
+            self.spawn_actor(
+                "carrion rat", "r", spot[0], spot[1], 4, 2, 0, "enemy", "simple",
                 tags={"beast", "vermin", "scavenger"}, resistances={"poison": 50},
             )
+            occupied.add(spot)
 
         state.add_message("Hollowmere clings to the lip of the old dungeon stair, half town and half watchtower.")
-        state.add_message("Its people are glad of company - and wary of what else might come up out of the dark.")
+        state.add_message("Steel rings out across the square below - Imperial soldiers are already moving on the town.")
         self.update_fov()
 
     # ------------------------------------------------------------------
@@ -1225,9 +1263,17 @@ class GameEngine:
         traits: list[str] | None = None,
         tags: set[str] | None = None,
         wares: dict[str, int] | None = None,
+        hp: int = 14,
+        attack: int = 2,
+        defense: int = 0,
+        faction: str = "neutral",
     ) -> Entity:
         """Spawn a talkable NPC: a physical Entity plus a parallel NPCProfile carrying
-        persona/memory data (kept separate the same way Curse data lives off-Entity)."""
+        persona/memory data (kept separate the same way Curse data lives off-Entity).
+
+        `hp`/`attack`/`defense`/`faction` default to ordinary-townsfolk values, but can
+        be overridden for NPCs who are meant to actually fight -- a guard captain who
+        holds her ground rather than a peddler who'd rather not be there at all."""
         npc_tags = {normalize_id(str(tag)) for tag in (tags or set()) if str(tag).strip()}
         npc_tags.add("npc")
         entity = Entity(
@@ -1237,12 +1283,12 @@ class GameEngine:
             x=x,
             y=y,
             char=char,
-            hp=10,
-            max_hp=10,
-            attack=2,
-            defense=0,
+            hp=hp,
+            max_hp=hp,
+            attack=attack,
+            defense=defense,
             blocks=True,
-            faction="neutral",
+            faction=faction,
             ai="npc",
             tags=npc_tags,
         )
@@ -1386,6 +1432,92 @@ class GameEngine:
             for entity in self.state.entities.values()
             if entity.kind == "actor" and entity.faction == "enemy" and entity.hp > 0
         ]
+
+    def is_hostile_to(self, actor: Entity, other: Entity) -> bool:
+        """Whether `actor` is willing to fight `other` -- the general notion of
+        "who's at war with whom," not just "everything hates the player."
+
+        Baseline: enemies oppose the player and its allies, and vice versa --
+        exactly what every fight in the game already assumed. On top of that,
+        FACTION_HOSTILITIES declares standing conflicts between tagged groups
+        (e.g. {"empire"} vs {"hollowmere_townsfolk"}), so e.g. an Imperial
+        soldier and a Hollowmere local are hostile to each other without either
+        of them needing to be the player or an ally.
+        """
+        if actor.id == other.id or other.hp <= 0:
+            return False
+        if actor.faction == "enemy" and other.faction in {"player", "ally"}:
+            return True
+        if actor.faction in {"player", "ally"} and other.faction == "enemy":
+            return True
+        return self._declared_conflict(actor, other)
+
+    def _declared_conflict(self, actor: Entity, other: Entity) -> bool:
+        """Whether `actor` and `other` are bound by a standing FACTION_HOSTILITIES
+        conflict -- a known, ongoing war between tagged groups, not a perception-
+        based grudge. Used both to widen `is_hostile_to` beyond the player/ally
+        baseline and (in `_select_target`) to let such forces march on each
+        other with intent rather than waiting to physically spot one another."""
+        for side_a, side_b in FACTION_HOSTILITIES:
+            if (side_a & actor.tags and side_b & other.tags) or (side_b & actor.tags and side_a & other.tags):
+                return True
+        return False
+
+    def can_sense(self, observer: Entity, target: Entity | None = None) -> bool:
+        """Whether `observer` can currently notice `target` (defaulting to the player).
+
+        Generalized from the old player-only `enemy_can_sense_player` so any
+        entity can be judged for visibility/range to any other -- the same
+        distance/line-of-sight/status rules just no longer assume the player
+        is the only thing worth noticing.
+        """
+        target = target if target is not None else self.state.player
+        distance = self.distance(observer, target)
+        if "invisible" in target.statuses:
+            return distance <= 1.5
+        if distance <= 5:
+            return True
+        if distance <= 11 and self.has_line_of_sight(observer.x, observer.y, target.x, target.y):
+            return True
+        return "marked" in target.statuses and distance <= 14
+
+    def _select_target(self, actor: Entity, default: Entity) -> Entity:
+        """Pick who `actor` should act against this turn.
+
+        Three tiers, in order:
+
+        1. Whoever `actor` is already trading blows with (adjacent) -- engaged
+           fighters finish the fight instead of flickering between targets or
+           turning their back on a foe mid-swing, regardless of category.
+        2. The nearest target it has a *declared* FACTION_HOSTILITIES conflict
+           with, sensed or not. A force with a standing conflict came here with
+           a mission and marches on the side it's at war with by known location
+           -- an Imperial raid doesn't get distracted chasing some rando it
+           glimpsed across the square when the town it came to burn is right
+           there. (No declared conflicts ever sit in the baseline player/ally
+           hostility, so ordinary monsters -- goblins, slimes -- never have any
+           `known` candidates here and fall straight through, unchanged.)
+        3. The nearest *sensed* target otherwise -- today's perception-gated
+           behavior, preserved for baseline player/ally hostility.
+
+        Falls back to `default` (the player) when nothing qualifies at all.
+        """
+        hostiles = [
+            other for other in self.state.entities.values()
+            if other.kind in {"player", "actor", "npc"} and self.is_hostile_to(actor, other)
+        ]
+        if not hostiles:
+            return default
+        for other in hostiles:
+            if self.distance(actor, other) <= 1.5:
+                return other
+        known = [other for other in hostiles if self._declared_conflict(actor, other)]
+        if known:
+            return min(known, key=lambda other: self.distance(actor, other))
+        sensed = [other for other in hostiles if self.can_sense(actor, other)]
+        if sensed:
+            return min(sensed, key=lambda other: self.distance(actor, other))
+        return default
 
     def distance(self, a: Entity, b: Entity) -> float:
         return math.hypot(a.x - b.x, a.y - b.y)
@@ -2064,6 +2196,15 @@ class GameEngine:
             if entity.id == self.state.player_id:
                 self.state.game_over = True
                 self.state.add_message("You die. The dungeon keeps your echo.")
+            elif entity.kind == "npc":
+                # NPCs have no kill stat, loot table, or victory check of their own --
+                # this is the one piece of feedback the whole "you can lose them, and
+                # it matters" premise depends on, so it gets a message of its own.
+                if source is not None:
+                    self.state.add_message(f"{entity.name} falls before {source.name}!")
+                else:
+                    self.state.add_message(f"{entity.name} falls.")
+                self._fire_death_triggers(entity, source, hp_before, damage_type)
             else:
                 self.state.stats.enemies_killed += 1
                 self._drop_loot(entity)
@@ -2273,6 +2414,7 @@ class GameEngine:
         self.update_fov()
         self._enemy_turns()
         self._ally_turns()
+        self._npc_turns()
         self._process_entity_behaviors()
         self._regenerate_player()
         self._ambient_sounds()
@@ -2739,22 +2881,26 @@ class GameEngine:
     def _enemy_single_action(self, enemy: Entity, player: Entity) -> None:
         if "pacifist" in enemy.tags or "noncombatant" in enemy.tags:
             return
+        # Who this enemy actually moves against -- the player by default, but
+        # FACTION_HOSTILITIES can put nearer, more pressing targets in range
+        # (Imperial soldiers vs. Hollowmere townsfolk, etc).
+        target = self._select_target(enemy, player)
         # Scavengers are cowardly by nature: they keep their distance and only
         # turn to fight when flight is impossible (cornered).
-        if "scavenger" in enemy.tags and 1.5 < self.distance(enemy, player) <= 6:
-            step = self._flee_step(enemy, player.x, player.y)
+        if "scavenger" in enemy.tags and 1.5 < self.distance(enemy, target) <= 6:
+            step = self._flee_step(enemy, target.x, target.y)
             if step is not None:
                 enemy.x, enemy.y = step
                 self._apply_tile_entry(enemy)
                 return
-        if "frightened" in enemy.statuses and self.distance(enemy, player) <= 8:
-            step = self._flee_step(enemy, player.x, player.y)
+        if "frightened" in enemy.statuses and self.distance(enemy, target) <= 8:
+            step = self._flee_step(enemy, target.x, target.y)
             if step is not None:
                 enemy.x, enemy.y = step
                 self._apply_tile_entry(enemy)
             return
-        if self.distance(enemy, player) <= 1.5:
-            self.attack(enemy, player)
+        if self.distance(enemy, target) <= 1.5:
+            self.attack(enemy, target)
             return
         if any(status in enemy.statuses for status in ["rooted", "webbed"]):
             return
@@ -2768,19 +2914,23 @@ class GameEngine:
         # Stationary hazards never give chase; they only ever strike what comes within reach.
         if "stationary" in enemy.tags:
             return
-        if self.enemy_can_sense_player(enemy):
+        # A target picked because of a *declared* conflict is a known objective --
+        # pursue it by location even if it's currently out of sight (e.g. holed up
+        # behind a building's walls); `_select_target` already restricts this to
+        # forces actually bound by such a conflict, not perception-based chasing.
+        if self.can_sense(enemy, target) or self._declared_conflict(enemy, target):
             # Ranged casters keep their distance and snipe rather than closing in.
             if (
                 "ranged" in enemy.tags
-                and self.distance(enemy, player) <= 7
-                and self.has_line_of_sight(enemy.x, enemy.y, player.x, player.y)
+                and self.distance(enemy, target) <= 7
+                and self.has_line_of_sight(enemy.x, enemy.y, target.x, target.y)
             ):
-                self.attack(enemy, player)
+                self.attack(enemy, target)
                 return
             # Summoners spend a turn calling reinforcements instead of approaching.
             if "summoner" in enemy.tags and self._try_enemy_summon(enemy):
                 return
-            step = self.next_path_step(enemy, player.x, player.y)
+            step = self.next_path_step(enemy, target.x, target.y)
             if step is not None:
                 enemy.x, enemy.y = step
                 self._apply_tile_entry(enemy)
@@ -2876,6 +3026,30 @@ class GameEngine:
                 if step is not None:
                     ally.x, ally.y = step
                     self._apply_tile_entry(ally)
+
+    def _npc_turns(self) -> None:
+        """Ordinary townsfolk have no combat AI -- when something hostile closes
+        in, their one instinct is to run. Reuses `_flee_step` (engine.py), the
+        exact helper scavengers and frightened enemies already lean on."""
+        for npc in [
+            e for e in self.state.entities.values()
+            if e.kind == "npc" and e.faction not in {"ally", "enemy"} and e.hp > 0
+        ]:
+            if any(s in npc.statuses for s in ["stunned", "frozen", "rooted", "webbed"]):
+                continue
+            threats = [
+                e for e in self.state.entities.values()
+                if e.kind in {"actor", "player"} and e.hp > 0
+                and self.is_hostile_to(e, npc)
+                and self.distance(e, npc) <= 6
+            ]
+            if not threats:
+                continue
+            nearest = min(threats, key=lambda e: self.distance(e, npc))
+            step = self._flee_step(npc, nearest.x, nearest.y)
+            if step is not None:
+                npc.x, npc.y = step
+                self._apply_tile_entry(npc)
 
     _AURA_RE = re.compile(r"^aura_([a-z]+)(?:_(\d+))?$")
 
@@ -2986,15 +3160,7 @@ class GameEngine:
             self.state.add_message(f"{entity.name} bursts open - something crawls out!")
 
     def enemy_can_sense_player(self, enemy: Entity) -> bool:
-        player = self.state.player
-        distance = self.distance(enemy, player)
-        if "invisible" in player.statuses:
-            return distance <= 1.5
-        if distance <= 5:
-            return True
-        if distance <= 11 and self.has_line_of_sight(enemy.x, enemy.y, player.x, player.y):
-            return True
-        return "marked" in player.statuses and distance <= 14
+        return self.can_sense(enemy)
 
     def next_path_step(self, entity: Entity, goal_x: int, goal_y: int) -> tuple[int, int] | None:
         start = (entity.x, entity.y)
@@ -3025,7 +3191,7 @@ class GameEngine:
         neighbors = [(entity.x + 1, entity.y), (entity.x - 1, entity.y), (entity.x, entity.y + 1), (entity.x, entity.y - 1)]
         self.rng.shuffle(neighbors)
         best: tuple[int, int] | None = None
-        best_dist = self.distance(entity, self.state.player)
+        best_dist = math.hypot(entity.x - from_x, entity.y - from_y)
         for tx, ty in neighbors:
             if not self.can_occupy(tx, ty):
                 continue
