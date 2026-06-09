@@ -26,6 +26,8 @@ from .models import (
     SLICK_ICE,
     STAIRS_DOWN,
     STAIRS_UP,
+    TILE_NAMES,
+    TILE_TAGS,
     VINES,
     WALL,
     WATER,
@@ -195,6 +197,8 @@ class GameUI:
         self.llm_selection_focus: int | None = None
         self.dragging_llm_selection = False
 
+        self.inspect_tile: tuple[int, int] | None = None
+
         # Menu state
         self.menu_active = False
         self.menu_page: str = "main"       # "main" | "config" | "model"
@@ -295,6 +299,9 @@ class GameUI:
             return
 
         if event.key == pygame.K_ESCAPE:
+            if self.inspect_tile is not None:
+                self.inspect_tile = None
+                return
             if self.input_mode == "control":
                 self.input_mode = "spell"
                 self.input_active = True
@@ -346,7 +353,18 @@ class GameUI:
         self.provider_label = self.session.provider_label
 
     def handle_mouse(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 3:
+            mx, my = event.pos
+            if MAP_OFFSET_X <= mx < MAP_OFFSET_X + MAP_PIXEL_WIDTH and 0 <= my < MAP_PIXEL_HEIGHT:
+                tx = (mx - MAP_OFFSET_X) // TILE_SIZE
+                ty = my // TILE_SIZE
+                self.inspect_tile = None if self.inspect_tile == (tx, ty) else (tx, ty)
+            else:
+                self.inspect_tile = None
+            return
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            self.inspect_tile = None
             if self.llm_scrollbar_thumb_rect and self.llm_scrollbar_thumb_rect.collidepoint(event.pos):
                 self.llm_dragging_scrollbar = True
                 self.llm_drag_grab_dy = event.pos[1] - self.llm_scrollbar_thumb_rect.y
@@ -682,8 +700,125 @@ class GameUI:
         self.draw_llm_panel()
         self.draw_map()
         self.draw_panel()
+        if self.inspect_tile is not None:
+            self.draw_inspect_tooltip()
         if self.menu_active:
             self.draw_menu()
+
+    def draw_inspect_tooltip(self) -> None:
+        tx, ty = self.inspect_tile  # type: ignore[misc]
+        engine = self.engine
+        state = engine.state
+
+        if not engine.is_explored(tx, ty):
+            self.inspect_tile = None
+            return
+
+        lines: list[tuple[str, tuple[int, int, int]]] = []
+
+        # ── Tile ──────────────────────────────────────────────────────────────
+        tile = state.tiles[ty][tx]
+        tile_name = TILE_NAMES.get(tile, tile).title()
+        base_tags = sorted(TILE_TAGS.get(tile, set()))
+        dyn_tags = list(state.tile_tags.get(f"{tx},{ty}", []))
+        all_tags = base_tags + [t for t in dyn_tags if t not in set(base_tags)]
+        lines.append((f"[{tile}] {tile_name}", ACCENT))
+        if all_tags:
+            lines.append(("  " + ", ".join(all_tags), MUTED))
+
+        # ── Entities ──────────────────────────────────────────────────────────
+        visible = engine.is_visible(tx, ty)
+        for entity in sorted(state.entities.values(), key=lambda e: e.id):
+            if entity.x != tx or entity.y != ty:
+                continue
+            if not entity.alive and entity.kind not in {"item", "prop"}:
+                continue
+            if not visible and "revealed" not in entity.statuses and entity.id != state.player_id:
+                continue
+
+            lines.append(("", MUTED))
+
+            if entity.kind == "prop":
+                lines.append((f"[{entity.char}] {entity.name.title()}", GOLD))
+                if entity.description:
+                    for part in wrap_text(entity.description, 34):
+                        lines.append((f"  {part}", TEXT))
+                if entity.tags:
+                    lines.append(("  " + ", ".join(sorted(entity.tags)), MUTED))
+
+            elif entity.kind == "item":
+                lines.append((f"[{entity.char}] {entity.name.title()}", GOLD))
+                details = [p for p in [entity.item_type, entity.material] if p]
+                if details:
+                    lines.append(("  " + ", ".join(details), TEXT))
+                if entity.tags:
+                    lines.append(("  " + ", ".join(sorted(entity.tags)), MUTED))
+
+            elif entity.id == state.player_id:
+                lines.append((f"[{entity.char}] You", (246, 240, 200)))
+                lines.append((f"  HP {entity.hp}/{entity.max_hp}  MP {entity.mana}/{entity.max_mana}", TEXT))
+                if entity.statuses:
+                    status_str = ", ".join(
+                        entity.status_display.get(k, k) for k in sorted(entity.statuses)
+                    )
+                    for part in wrap_text(status_str, 34):
+                        lines.append((f"  {part}", MUTED))
+
+            elif entity.kind == "npc":
+                profile = state.npc_profiles.get(entity.id)
+                role_str = f" — {profile.role}" if profile and profile.role else ""
+                lines.append((f"[{entity.char}] {entity.name}{role_str}", ACCENT))
+                lines.append((f"  HP {entity.hp}/{entity.max_hp}  [{entity.faction}]", TEXT))
+
+            else:  # actor: enemy / ally / neutral
+                ent_color = (
+                    DANGER if entity.faction == "enemy"
+                    else ACCENT if entity.faction == "ally"
+                    else TEXT
+                )
+                lines.append((f"[{entity.char}] {entity.name}", ent_color))
+                lines.append((f"  HP {entity.hp}/{entity.max_hp}  [{entity.faction}]", TEXT))
+                if entity.statuses:
+                    status_str = ", ".join(
+                        entity.status_display.get(k, k) for k in sorted(entity.statuses)
+                    )
+                    for part in wrap_text(status_str, 34):
+                        lines.append((f"  {part}", MUTED))
+                if entity.tags:
+                    lines.append(("  " + ", ".join(sorted(entity.tags)), MUTED))
+
+        if not lines:
+            return
+
+        # ── Draw box ──────────────────────────────────────────────────────────
+        pad = 12
+        tooltip_w = 310
+        line_h = self.small_font.get_linesize() + 2
+        total_h = pad * 2 + sum(4 if t == "" else line_h for t, _ in lines)
+
+        tile_px = MAP_OFFSET_X + tx * TILE_SIZE
+        tile_py = ty * TILE_SIZE
+        bx = tile_px + TILE_SIZE + 4
+        by = tile_py
+
+        if bx + tooltip_w > WINDOW_WIDTH:
+            bx = tile_px - tooltip_w - 4
+        if by + total_h > WINDOW_HEIGHT:
+            by = WINDOW_HEIGHT - total_h
+        if by < 0:
+            by = 0
+
+        pygame.draw.rect(self.screen, (20, 22, 30), (bx, by, tooltip_w, total_h), border_radius=6)
+        pygame.draw.rect(self.screen, PANEL_EDGE, (bx, by, tooltip_w, total_h), 1, border_radius=6)
+
+        cy = by + pad
+        for text, color in lines:
+            if text == "":
+                cy += 4
+                continue
+            surf = self.small_font.render(text, True, color)
+            self.screen.blit(surf, (bx + pad, cy))
+            cy += line_h
 
     def draw_menu(self) -> None:
         overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)

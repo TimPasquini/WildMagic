@@ -203,10 +203,11 @@ class Entity:
     resistances: dict[str, int] = field(default_factory=dict)
     weaknesses: dict[str, int] = field(default_factory=dict)
     equipment: dict[str, str | None] = field(default_factory=lambda: {"weapon": None, "armor": None, "charm": None})
+    description: str | None = None
 
     @property
     def alive(self) -> bool:
-        return self.hp > 0 or self.kind == "item"
+        return self.hp > 0 or self.kind in {"item", "prop"}
 
     def to_public_dict(self) -> dict[str, Any]:
         data: dict[str, Any] = {
@@ -222,6 +223,8 @@ class Entity:
             "resistances": self.resistances,
             "weaknesses": self.weaknesses,
         }
+        if self.description:
+            data["description"] = self.description
         if self.status_display:
             data["status_display"] = self.status_display
         if self.kind != "item":

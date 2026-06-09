@@ -453,6 +453,12 @@ def describe_state(engine: GameEngine) -> list[str]:
         profile = engine.state.npc_profiles.get(npc.id)
         role = f" the {profile.role}" if profile and profile.role else ""
         npcs.append(f"{npc.name}{role} at {npc.x},{npc.y}")
+    props = []
+    for prop in sorted(
+        (e for e in engine.state.entities.values() if e.kind == "prop" and engine.is_visible(e.x, e.y)),
+        key=lambda entity: entity.id,
+    ):
+        props.append(f"{prop.name} at {prop.x},{prop.y} ({prop.description}) tags:{','.join(sorted(prop.tags))}")
     equipment = ", ".join(f"{slot}: {item}" for slot, item in sorted(player.equipment.items()) if item) or "none"
     resistances = ", ".join(f"{k}:{v}%" for k, v in sorted(player.resistances.items()) if v) or "none"
     weaknesses = ", ".join(f"{k}:{v}%" for k, v in sorted(player.weaknesses.items()) if v) or "none"
@@ -470,6 +476,7 @@ def describe_state(engine: GameEngine) -> list[str]:
         "Enemies: " + ("; ".join(enemies) if enemies else "none"),
         "Allies: " + ("; ".join(allies) if allies else "none"),
         "NPCs: " + ("; ".join(npcs) if npcs else "none"),
+        "Props: " + ("; ".join(props) if props else "none"),
     ]
     if player.resistances:
         lines.append(f"Resistances: {resistances}")

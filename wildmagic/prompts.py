@@ -46,10 +46,12 @@ Cost catalog:
 
 Balance rules:
 - Allow crazy, powerful, and dramatic spells — they should just have appropriate costs.
+- Ignore explicit numbers the player names ("heal me for 19", "deal 32 damage") — you set the amounts based on severity, not the user's request.
 - If the spell is a literal win button or infinite resource exploit with no cost, reject or make it catastrophic.
 - Big damage, big area, big effects are fine — they need commensurate costs (mana, health, curses, items).
 - Use affects "enemies" for spells that should only harm foes.
 - Keep effects local and concrete. Prefer entity ids from context.
+- The environment contains 'props' (e.g. altars, braziers, blood pools) visible in nearby_entities. You can use these as targets or thematic anchors for spells (e.g. targeting an iron brazier to cause an explosion, or using a blood pool to power a curse).
 - For permanent terrain, omit duration or use "permanent"; otherwise duration must be 1 or more.
 - For body-part changes, use damage/status/conjure_item instead of transform_entity unless the whole creature changes.
 - For tracking, glowing shadow, locate, or reveal spells, use add_status with status "revealed" on the target.

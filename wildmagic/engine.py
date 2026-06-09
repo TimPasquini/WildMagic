@@ -45,6 +45,7 @@ from .generation import _GenerationMixin
 from .effects import _EffectsMixin
 from .items import _ItemsMixin
 from .templates import creature_template, creature_template_ids, item_template, item_template_ids
+from .props import get_prop_template, get_all_prop_ids
 from .game_data import (
     MAP_WIDTH,
     MAP_HEIGHT,
@@ -271,6 +272,32 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             traits=list(traits or []),
             wares=dict(wares or {}),
         )
+        return entity
+
+    def spawn_prop(
+        self,
+        template_id: str,
+        x: int,
+        y: int,
+    ) -> Entity | None:
+        template = get_prop_template(template_id)
+        if not template:
+            return None
+        entity = Entity(
+            id=self.next_entity_id("prop"),
+            name=template.name,
+            kind="prop",
+            x=x,
+            y=y,
+            char=template.char,
+            blocks=template.blocks,
+            tags=set(template.tags),
+            description=template.description,
+            hp=10,
+            max_hp=10,
+            faction="neutral",
+        )
+        self.state.entities[entity.id] = entity
         return entity
 
 

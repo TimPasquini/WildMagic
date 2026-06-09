@@ -40,6 +40,66 @@ from .models import (
     ZoneSnapshot,
 )
 from .normalize import normalize_id
+from .props import PROP_CATEGORIES, get_all_prop_ids, get_nonblocking_prop_ids, get_prop_template
+
+
+# Each entry: (max_depth_inclusive, {category: weight}).
+# First matching threshold (depth <= max_depth) wins.
+_FLOOR_THEMES: list[tuple[int, dict[str, int]]] = [
+    (2,  {"ruined": 5, "infrastructure": 3, "natural": 2}),
+    (4,  {"macabre": 4, "ruined": 3, "natural": 2, "infrastructure": 1}),
+    (6,  {"arcane": 3, "macabre": 3, "alchemical": 2, "furniture": 1, "ruined": 1}),
+    (999, {"arcane": 4, "alchemical": 3, "religious": 2, "macabre": 2, "natural": 1}),
+]
+
+# Thematically paired prop IDs placed together as a 2-prop "scene".
+_PROP_SCENES: list[tuple[str, str]] = [
+    ("chalk_circle", "ritual_dagger"),
+    ("chalk_circle", "bone_circle"),
+    ("summoning_circle", "bone_circle"),
+    ("summoning_circle", "sigil_of_warding"),
+    ("arcane_mirror", "cracked_scrying_bowl"),
+    ("arcane_mirror", "obsidian_mirror"),
+    ("celestial_orrery", "astrolabe"),
+    ("leaking_mana_crystal", "crystal_monolith"),
+    ("arcane_focus_pedestal", "suspended_orb"),
+    ("alchemical_still", "bubbling_vat"),
+    ("alchemical_still", "distillation_coil"),
+    ("alchemical_still", "cracked_retort"),
+    ("reagent_cabinet", "mortar_and_pestle"),
+    ("specimen_jars", "failed_homunculus"),
+    ("electrostatic_coil", "alchemical_still"),
+    ("dissection_table", "embalming_station"),
+    ("dissection_table", "specimen_jars"),
+    ("dissection_table", "fresh_blood_pool"),
+    ("blood_stained_torture_rack", "iron_chains"),
+    ("blood_stained_torture_rack", "wall_manacles"),
+    ("torture_wheel", "blood_stained_torture_rack"),
+    ("hanging_cage", "noose"),
+    ("gibbet_chain", "hanging_cage"),
+    ("open_sarcophagus", "mummified_remains"),
+    ("pile_of_skulls", "bone_throne"),
+    ("ossuary_niche", "pile_of_skulls"),
+    ("funeral_pyre_remnants", "sealed_burial_urn"),
+    ("shattered_altar", "votive_candles"),
+    ("saint_statue", "offering_bowl"),
+    ("altar_of_thorns", "burned_effigy"),
+    ("altar_of_thorns", "sacrificial_pit"),
+    ("reliquary", "saint_statue"),
+    ("votive_candles", "prayer_beads"),
+    ("rotting_bookshelf", "writing_desk"),
+    ("rotting_bookshelf", "scroll_of_formulas"),
+    ("weapons_rack", "heavy_anvil"),
+    ("weapons_rack", "siege_ballista"),
+    ("iron_chains", "wall_manacles"),
+    ("old_well", "water_barrel"),
+    ("bioluminescent_mushroom", "giant_spider_web"),
+    ("giant_spider_web", "pulsing_pod"),
+    ("mushroom_ring", "bioluminescent_mushroom"),
+    ("crystal_formation", "underground_spring"),
+    ("ancient_root", "strangler_fig_roots"),
+    ("acid_seep", "bubbling_vat"),
+]
 
 
 class _GenerationMixin:
@@ -84,6 +144,18 @@ class _GenerationMixin:
             rooms.append(fallback)
 
         px, py = rooms[0].center
+        # Non-blocking themed prop in the starting room for immediate atmosphere.
+        _theme_weights = next(w for (d, w) in _FLOOR_THEMES if self.state.depth <= d)
+        _themed_ids = [pid for cat in _theme_weights for pid in PROP_CATEGORIES.get(cat, [])]
+        _nb_pool = [pid for pid in _themed_ids if not get_prop_template(pid).blocks]
+        if not _nb_pool:
+            _nb_pool = get_nonblocking_prop_ids()
+        for _ in range(20):
+            _sx, _sy = self._random_open_tile_in_room(rooms[0])
+            if (_sx, _sy) != (px, py):
+                self.spawn_prop(self.rng.choice(_nb_pool), _sx, _sy)
+                break
+
         if existing_player is None:
             player = Entity(
                 id="player",
@@ -153,6 +225,7 @@ class _GenerationMixin:
                 glyph = {"weapon": "/", "armor": "[", "charm": "*"}[EQUIPMENT_SPECS[gear_name]["slot"]]
                 x, y = self._random_open_tile_in_room(room)
                 self.spawn_item(gear_name, glyph, x, y, gear_name)
+            self._spawn_props_in_room(room, self.state.depth)
 
         down_x, down_y = rooms[-1].center
         state.tiles[down_y][down_x] = STAIRS_DOWN
@@ -1122,3 +1195,32 @@ class _GenerationMixin:
             if self.can_occupy(x, y):
                 return x, y
         return room.center
+
+    def _pick_themed_prop_id(self, depth: int) -> str:
+        weights = next(w for (d, w) in _FLOOR_THEMES if depth <= d)
+        total = sum(weights.values())
+        roll = self.rng.randint(1, total)
+        cumulative = 0
+        chosen_cat = next(iter(weights))
+        for cat, w in weights.items():
+            cumulative += w
+            if roll <= cumulative:
+                chosen_cat = cat
+                break
+        ids = PROP_CATEGORIES.get(chosen_cat, [])
+        return self.rng.choice(ids) if ids else self.rng.choice(get_all_prop_ids())
+
+    def _spawn_props_in_room(self, room: Room, depth: int, allow_scene: bool = True) -> None:
+        if allow_scene and self.rng.random() < 0.20:
+            scene = self.rng.choice(_PROP_SCENES)
+            for pid in scene:
+                template = get_prop_template(pid)
+                if template:
+                    x, y = self._random_open_tile_in_room(room)
+                    self.spawn_prop(pid, x, y)
+        else:
+            count = 1 + (1 if self.rng.random() < 0.40 else 0) + (1 if self.rng.random() < 0.15 else 0)
+            for _ in range(count):
+                prop_id = self._pick_themed_prop_id(depth)
+                x, y = self._random_open_tile_in_room(room)
+                self.spawn_prop(prop_id, x, y)

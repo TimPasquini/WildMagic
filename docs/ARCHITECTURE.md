@@ -195,6 +195,15 @@ Frozen dataclasses `ItemTemplate` and `CreatureTemplate` plus their catalogues
 `creature_template`, `item_template_ids`, `creature_template_ids`. Used by `_conjure_item`
 and `_conjure_creature` in `effects.py` and by `_spawn_from_template` in `generation.py`.
 
+### `wildmagic/props.py`
+Static environmental scenery that the LLM can target as spell anchors. Frozen dataclass
+`PropTemplate` (`id`, `char`, `name`, `description`, `blocks`, `tags`). `PROP_TEMPLATES`
+dict of 30 props across five thematic categories: Arcane & Ritual, Ruined & Abandoned,
+Macabre & Somber, Natural & Overgrown, Dungeon Infrastructure. Look-up functions
+`get_prop_template` and `get_all_prop_ids`. Props are spawned via `engine.spawn_prop()`,
+stored as `Entity(kind="prop")`, and appear in the LLM context's `nearby_entities` list
+with their description and tags once visible.
+
 ### `wildmagic/normalize.py`
 Pure functions for sanitising and coercing LLM output. No side effects, no imports outside
 `models.py`. Key exports: `clamp_int`, `normalize_id`, `normalize_faction`,
@@ -241,6 +250,7 @@ main.py / cli.py
 
 Shared leaves (imported by many, import nothing above them):
     models.py  ←  game_data.py  ←  templates.py
+                                ←  props.py
     geometry.py
     normalize.py
 ```
