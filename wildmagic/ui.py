@@ -350,6 +350,10 @@ class GameUI:
             self.session.execute_command("pickup")
         elif event.key == pygame.K_f:
             self.session.execute_command("spark")
+        elif event.key == pygame.K_q:
+            self.menu_active = True
+            self.menu_page = "quests"
+            self.menu_cursor = 0
         self.provider_label = self.session.provider_label
 
     def handle_mouse(self, event: pygame.event.Event) -> None:
@@ -479,6 +483,20 @@ class GameUI:
         return []
 
     def _handle_menu_key(self, event: pygame.event.Event) -> None:
+        if self.menu_page == "quests":
+            n = len(self.engine.state.quests)
+            if n == 0:
+                if event.key == pygame.K_ESCAPE:
+                    self._close_menu()
+                return
+            if event.key in (pygame.K_UP, pygame.K_k, pygame.K_KP8, pygame.K_w):
+                self.menu_cursor = (self.menu_cursor - 1) % n
+            elif event.key in (pygame.K_DOWN, pygame.K_j, pygame.K_KP2, pygame.K_s):
+                self.menu_cursor = (self.menu_cursor + 1) % n
+            elif event.key == pygame.K_ESCAPE:
+                self._close_menu()
+            return
+
         items = self._menu_items()
         n = len(items)
         if event.key in (pygame.K_UP, pygame.K_k, pygame.K_KP8):
@@ -825,6 +843,115 @@ class GameUI:
         overlay.fill((0, 0, 0, 170))
         self.screen.blit(overlay, (0, 0))
 
+        if self.menu_page == "quests":
+            # Draw Quest Log Layout
+            box_w = 640
+            box_h = 400
+            bx = (WINDOW_WIDTH - box_w) // 2
+            by = (WINDOW_HEIGHT - box_h) // 2
+            padding = 24
+
+            pygame.draw.rect(self.screen, (28, 30, 38), (bx, by, box_w, box_h), border_radius=6)
+            pygame.draw.rect(self.screen, PANEL_EDGE, (bx, by, box_w, box_h), 1, border_radius=6)
+
+            # Title
+            title_surf = self.ui_font.render("QUEST LOG", True, ACCENT)
+            self.screen.blit(title_surf, (bx + padding, by + padding))
+            pygame.draw.line(self.screen, PANEL_EDGE,
+                             (bx + padding, by + padding + 22),
+                             (bx + box_w - padding, by + padding + 22), 1)
+
+            # Left Pane: Quest list
+            left_w = 260
+            pane_y = by + padding + 36
+            list_h = box_h - (padding * 2 + 36 + 24)
+            row_h = 28
+            
+            quests = self.engine.state.quests
+            if not quests:
+                empty_surf = self.ui_font.render("No quests in log.", True, MUTED)
+                self.screen.blit(empty_surf, (bx + padding, pane_y))
+            else:
+                max_visible = list_h // row_h
+                start_idx = 0
+                if len(quests) > max_visible:
+                    if self.menu_cursor >= max_visible:
+                        start_idx = self.menu_cursor - max_visible + 1
+                
+                for idx in range(min(len(quests), max_visible)):
+                    q_idx = start_idx + idx
+                    if q_idx >= len(quests):
+                        break
+                    q = quests[q_idx]
+                    qy = pane_y + idx * row_h
+                    is_selected = q_idx == self.menu_cursor
+                    
+                    if is_selected:
+                        pygame.draw.rect(self.screen, (50, 55, 70),
+                                         (bx + padding - 4, qy - 2, left_w, row_h - 4), border_radius=4)
+                    
+                    status_prefix = "[x]" if q.status == "completed" else "[ ]"
+                    display_text = f"{status_prefix} {q.name}"
+                    if len(display_text) > 24:
+                        display_text = display_text[:21] + "..."
+                        
+                    color = GOLD if is_selected else (MUTED if q.status == "completed" else TEXT)
+                    q_surf = self.ui_font.render(display_text, True, color)
+                    self.screen.blit(q_surf, (bx + padding, qy))
+
+            # Vertical divider
+            pygame.draw.line(self.screen, PANEL_EDGE,
+                             (bx + padding + left_w + 10, pane_y),
+                             (bx + padding + left_w + 10, pane_y + list_h), 1)
+
+            # Right Pane: Details
+            if quests and self.menu_cursor < len(quests):
+                q = quests[self.menu_cursor]
+                rx = bx + padding + left_w + 24
+                ry = pane_y
+                
+                # Name
+                name_surf = self.ui_font.render(q.name, True, GOLD)
+                self.screen.blit(name_surf, (rx, ry))
+                ry += 28
+                
+                # Status
+                status_color = (0, 200, 100) if q.status == "completed" else (220, 180, 50)
+                status_surf = self.small_font.render(f"Status: {q.status.upper()}", True, status_color)
+                self.screen.blit(status_surf, (rx, ry))
+                ry += 20
+                
+                # Location
+                loc_surf = self.small_font.render(f"Location: {q.location}", True, TEXT)
+                self.screen.blit(loc_surf, (rx, ry))
+                ry += 20
+                
+                # Contact
+                contact_surf = self.small_font.render(f"Contact: {q.contact}", True, TEXT)
+                self.screen.blit(contact_surf, (rx, ry))
+                ry += 28
+                
+                # Underline
+                pygame.draw.line(self.screen, PANEL_EDGE, (rx, ry), (bx + box_w - padding, ry), 1)
+                ry += 12
+                
+                # Description
+                desc_lines = wrap_text(q.description, 36)
+                for line in desc_lines:
+                    line_surf = self.small_font.render(line, True, TEXT)
+                    self.screen.blit(line_surf, (rx, ry))
+                    ry += 16
+            else:
+                rx = bx + padding + left_w + 24
+                ry = pane_y
+                no_details_surf = self.small_font.render("Select a quest to see details.", True, MUTED)
+                self.screen.blit(no_details_surf, (rx, ry))
+
+            # Footer
+            hint_surf = self.small_font.render("▲▼/WS Select  •  Esc Close", True, MUTED)
+            self.screen.blit(hint_surf, (bx + padding, by + box_h - 22))
+            return
+
         items = self._menu_items()
         row_h = 32
         padding = 24
@@ -1112,16 +1239,17 @@ class GameUI:
         self.log_area = pygame.Rect(x, y, PANEL_WIDTH - 40, height)
         pygame.draw.line(self.screen, PANEL_EDGE, (x, y - 8), (WINDOW_WIDTH - 20, y - 8), 1)
         line_y = y
-        lines: list[tuple[str, bool]] = []
+        lines: list[tuple[str, bool, bool]] = []
         line_height = self.small_font.get_linesize() + 2
         max_lines = max(1, height // line_height)
         for message in self.engine.state.messages[-40:]:
             is_prompt = message.startswith(">") or message.startswith("*>")
-            lines.extend((line, is_prompt) for line in wrap_text(message, 45))
+            is_danger = is_player_damage_message(message)
+            lines.extend((line, is_prompt, is_danger) for line in wrap_text(message, 45))
         visible_lines = lines[-max_lines:]
         selected_indexes = self.selected_log_indexes(len(visible_lines))
-        for index, (line, is_prompt) in enumerate(visible_lines):
-            color = MUTED if is_prompt else TEXT
+        for index, (line, is_prompt, is_danger) in enumerate(visible_lines):
+            color = MUTED if is_prompt else (DANGER if is_danger else TEXT)
             rect = pygame.Rect(x - 4, line_y - 1, PANEL_WIDTH - 32, line_height)
             if index in selected_indexes:
                 pygame.draw.rect(self.screen, SELECTED, rect, border_radius=3)
@@ -1476,6 +1604,51 @@ def wrap_text(text: str, width: int) -> list[str]:
 
 def dim_color(color: tuple[int, int, int]) -> tuple[int, int, int]:
     return (max(20, color[0] // 3), max(20, color[1] // 3), max(24, color[2] // 3))
+
+
+def is_player_damage_message(message: str) -> bool:
+    if getattr(message, "is_danger", False):
+        return True
+
+    msg_lower = message.lower()
+    
+    # 1. Player is hit by someone/something (e.g. "cave spider hits You for 3.")
+    # Note: the player's name is "You" in these messages, so it matches "hits you" or "hit you".
+    if "hits you" in msg_lower or "hit you" in msg_lower:
+        return True
+        
+    # 2. Player takes damage, suffers, loses health, or dies
+    if "you suffer" in msg_lower or "you die" in msg_lower:
+        return True
+    if "you take" in msg_lower and "damage" in msg_lower:
+        return True
+    if "you lose" in msg_lower and any(w in msg_lower for w in {"health", "hp", "maximum health", "max health", "max hp"}):
+        return True
+        
+    # 3. Health/HP cost paid (e.g. "Cost: 3 health.")
+    if "cost:" in msg_lower and ("health" in msg_lower or "hp" in msg_lower):
+        return True
+        
+    # 4. Harmful status/damage applied to player ("You are poisoned!")
+    if "you are " in msg_lower:
+        harm_words = {
+            "poisoned", "webbed", "frozen", "stunned", "burning", "burned", 
+            "shocked", "damaged", "hurt", "wounded", "bleeding", "cursed", 
+            "slowed", "confused", "frightened", "knocked back", "held in place"
+        }
+        if any(w in msg_lower for w in harm_words):
+            if not any(pos in msg_lower for pos in {"extinguish", "cauterized", "heal", "recover"}):
+                return True
+                
+    # 5. Specific flavor alerts about player damage/danger
+    # e.g., "Your wound is bleeding!" or "Acid dissolves your ward!"
+    if "your " in msg_lower:
+        your_harm_words = {"wound", "flames", "acid dissolves your", "bleeding", "poisoned", "burning"}
+        if any(w in msg_lower for w in your_harm_words):
+            if not any(pos in msg_lower for pos in {"extinguish", "cauterized", "heal", "recover"}):
+                return True
+                
+    return False
 
 
 def run_game() -> None:

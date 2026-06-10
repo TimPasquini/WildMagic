@@ -212,6 +212,9 @@ Macabre & Somber, Natural & Overgrown, Dungeon Infrastructure. Look-up functions
 stored as `Entity(kind="prop")`, and appear in the LLM context's `nearby_entities` list
 with their description and tags once visible.
 
+### `wildmagic/npc_quests.py`
+Quest system logic and data. Defines the `QUEST_ITEMS` dictionary mapping special unique quest items to their visual/materials/tags specs. Handles the automatic quest assignment when talking to NPCs, the probability checks for quest item spawning when entering zones (`maybe_spawn_quest_item`), and procedural quest generation (`generate_npc_quest`) for generated NPCs.
+
 ### `wildmagic/normalize.py`
 Pure functions for sanitising and coercing LLM output. No side effects, no imports outside
 `models.py`. Key exports: `clamp_int`, `normalize_id`, `normalize_faction`,
@@ -265,6 +268,7 @@ main.py / cli.py
 Shared leaves (imported by many, import nothing above them):
     models.py  ←  game_data.py  ←  templates.py
                                 ←  props.py
+                                ←  npc_quests.py
     geometry.py
     determinism.py
     normalize.py

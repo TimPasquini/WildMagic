@@ -34,6 +34,7 @@ from .models import (
     Entity,
     GameStats,
     NPCProfile,
+    Quest,
     TILE_NAMES,
     TILE_ALIASES,
     TILE_TAGS,
@@ -91,6 +92,13 @@ from .normalize import (
 )
 
 
+class LogMessage(str):
+    def __new__(cls, content, is_danger=False):
+        obj = str.__new__(cls, content)
+        obj.is_danger = is_danger
+        return obj
+
+
 @dataclass
 class GameState:
     width: int = MAP_WIDTH
@@ -118,6 +126,9 @@ class GameState:
     npc_profiles: dict[str, NPCProfile] = field(default_factory=dict)
     pending_trade: dict[str, Any] | None = None
     flags: dict[str, Any] = field(default_factory=dict)
+    quests: list[Quest] = field(default_factory=list)
+    last_talked_npc_name: str | None = None
+    known_quest_items: set[str] = field(default_factory=set)
     tile_tags: dict[str, list[str]] = field(default_factory=dict)
     tile_durations: dict[str, int] = field(default_factory=dict)
     event_timers: list[dict[str, Any]] = field(default_factory=list)
@@ -134,13 +145,19 @@ class GameState:
     zone_y: int = 0
     zone_type: str = "frontier"
     zones: dict[tuple[int, int], ZoneSnapshot] = field(default_factory=dict)
+    dungeon_floors: dict[int, ZoneSnapshot] = field(default_factory=dict)
+    _player_taking_damage: bool = False
 
     @property
     def player(self) -> Entity:
         return self.entities[self.player_id]
 
-    def add_message(self, message: str) -> None:
-        self.messages.append(message)
+    def add_message(self, message: str, is_danger: bool = False) -> None:
+        if self._player_taking_damage:
+            msg_lower = message.lower()
+            if not any(pos in msg_lower for pos in {"cauterized", "heal", "recover", "collapses... but begins to stir"}):
+                is_danger = True
+        self.messages.append(LogMessage(message, is_danger))
         self.messages = self.messages[-80:]
         # Monotonic; unlike len(messages), it survives the cap above, so callers
         # (e.g. NPC perception) can tell exactly how many messages are new.
@@ -238,6 +255,11 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         attack: int = 2,
         defense: int = 0,
         faction: str = "neutral",
+        wanted_item: str | None = None,
+        wanted_qty: int = 0,
+        reward_gold: int = 0,
+        reward_item: str | None = None,
+        reward_qty: int = 0,
     ) -> Entity:
         """Spawn a talkable NPC: a physical Entity plus a parallel NPCProfile carrying
         persona/memory data (kept separate the same way Curse data lives off-Entity).
@@ -264,13 +286,25 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             tags=npc_tags,
         )
         self.state.entities[entity.id] = entity
+        npc_wares = dict(wares or {})
+        if reward_gold > 0:
+            npc_wares["gold"] = npc_wares.get("gold", 0) + reward_gold
+        if reward_item and reward_qty > 0:
+            reward_item_key = reward_item.strip().lower()
+            npc_wares[reward_item_key] = npc_wares.get(reward_item_key, 0) + reward_qty
+
         self.state.npc_profiles[entity.id] = NPCProfile(
             entity_id=entity.id,
             name=name,
             role=role,
             backstory=backstory,
             traits=list(traits or []),
-            wares=dict(wares or {}),
+            wares=npc_wares,
+            wanted_item=wanted_item,
+            wanted_qty=wanted_qty,
+            reward_gold=reward_gold,
+            reward_item=reward_item,
+            reward_qty=reward_qty,
         )
         return entity
 
@@ -464,7 +498,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         return [
             entity
             for entity in self.state.entities.values()
-            if entity.kind == "actor" and entity.faction == "enemy" and entity.hp > 0
+            if entity.kind in {"actor", "npc"} and entity.faction == "enemy" and entity.hp > 0
         ]
 
     def is_hostile_to(self, actor: Entity, other: Entity) -> bool:
@@ -668,6 +702,12 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         self.state.add_message(f'You say to {npc.name}: "{message}"')
         self.state.add_message(f'{npc.name} says: "{reply}"')
 
+        # Track last talked NPC and auto-register active quest item
+        self.state.last_talked_npc_name = npc.name
+        if profile.wanted_item and not profile.quest_completed:
+            from .npc_quests import register_heard_quest_item
+            register_heard_quest_item(self, npc.id)
+
         if trade_data is not None and trade_data.get("trade_proposed"):
             trade_error = self._validate_trade_payload(npc, trade_data)
             if trade_error:
@@ -741,6 +781,21 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         receive_text = ", ".join(received) or "nothing"
         give_text = ", ".join(given) or "nothing"
         self.state.add_message(f"Deal struck with {npc_name} -- you receive {receive_text}, and hand over {give_text}.")
+
+        # Check if this trade fulfills the NPC's quest/need
+        if profile.wanted_item and not profile.quest_completed:
+            for entry in trade.get("npc_wants", []):
+                item_name = str(entry.get("item") or "").strip().lower()
+                qty = int(entry.get("quantity") or 0)
+                if item_name == profile.wanted_item.lower() and qty >= profile.wanted_qty:
+                    profile.quest_completed = True
+                    self.state.add_message(f"Quest completed: You delivered {profile.wanted_item} to {profile.name}!")
+                    # Mark corresponding Quest object as completed
+                    for q in self.state.quests:
+                        if q.contact == profile.name and q.status == "active":
+                            q.status = "completed"
+                    break
+
         self.finish_player_turn()
 
 
@@ -773,9 +828,23 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             self.state.turn += 1
             self.state.add_message("You descend past the last stair and escape with your impossible magic intact.")
             return True
+        
+        # Save current floor before transitioning
+        is_surface = (self.state.depth == 1 and self.state.scenario != "dungeon")
+        if is_surface:
+            self._save_current_zone()
+        else:
+            self._save_dungeon_floor(self.state.depth)
+            
         self.state.depth += 1
         self.state.stats.deepest_floor = max(self.state.stats.deepest_floor, self.state.depth)
-        self._generate_dungeon_floor(preserve_player=True)
+        
+        # Load or generate the next dungeon floor
+        if self.state.depth in self.state.dungeon_floors:
+            self._load_dungeon_floor(self.state.depth, STAIRS_UP)
+        else:
+            self._generate_dungeon_floor(preserve_player=True)
+            
         self.state.turn += 1
         self.update_fov()
         self.state.add_message(f"You descend to dungeon floor {self.state.depth}.")
@@ -789,12 +858,44 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         if self.state.depth <= 1:
             self.state.add_message("The dungeon mouth is not that easy to find again.")
             return False
+            
+        # Save current dungeon floor
+        self._save_dungeon_floor(self.state.depth)
+        
         self.state.depth -= 1
-        self._generate_dungeon_floor(preserve_player=True)
-        self.state.turn += 1
-        self.update_fov()
-        self.state.add_message(f"You climb back to dungeon floor {self.state.depth}.")
-        return True
+        
+        # Are we returning to the surface?
+        is_surface = (self.state.depth == 1 and self.state.scenario != "dungeon")
+        if is_surface:
+            key = (self.state.zone_x, self.state.zone_y)
+            if key in self.state.zones:
+                snapshot = self.state.zones[key]
+                stairs_x, stairs_y = player.x, player.y
+                found = False
+                for y, row in enumerate(snapshot.tiles):
+                    for x, tile in enumerate(row):
+                        if tile == STAIRS_DOWN:
+                            stairs_x, stairs_y = x, y
+                            found = True
+                            break
+                    if found:
+                        break
+                self._load_or_generate_zone(self.state.zone_x, self.state.zone_y, stairs_x, stairs_y)
+            else:
+                self._load_or_generate_zone(self.state.zone_x, self.state.zone_y, player.x, player.y)
+            self.state.turn += 1
+            self.update_fov()
+            self.state.add_message("You climb back to the surface.")
+            return True
+        else:
+            if self.state.depth in self.state.dungeon_floors:
+                self._load_dungeon_floor(self.state.depth, STAIRS_DOWN)
+            else:
+                self._generate_dungeon_floor(preserve_player=True)
+            self.state.turn += 1
+            self.update_fov()
+            self.state.add_message(f"You climb back to dungeon floor {self.state.depth}.")
+            return True
 
     def cast_standard_bolt(self) -> bool:
         if self.state.game_over:
@@ -971,12 +1072,12 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 self.damage_entity(entity, 1, "fire")
                 if entity.hp > 0:
                     entity.statuses["burning"] = max(status_duration(entity.statuses.get("burning")), 2)
-                    self.state.add_message("You are scorched by wild fire." if is_player else f"{entity.name} is scorched by wild fire.")
+                    self.state.add_message("You are scorched by wild fire." if is_player else f"{entity.name} is scorched by wild fire.", is_danger=is_player)
             elif tile == POISON_CLOUD:
                 self.damage_entity(entity, 1, "poison")
                 if entity.hp > 0:
                     entity.statuses["poisoned"] = max(status_duration(entity.statuses.get("poisoned")), 2)
-                    self.state.add_message("You cough in poison vapors." if is_player else f"{entity.name} coughs in poison vapors.")
+                    self.state.add_message("You cough in poison vapors." if is_player else f"{entity.name} coughs in poison vapors.", is_danger=is_player)
             elif tile == WATER and "burning" in entity.statuses:
                 entity.statuses.pop("burning")
                 if is_player:
@@ -996,7 +1097,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 self.damage_entity(entity, 1, "fire")
                 if entity.hp > 0:
                     burn_name = entity.status_display.get("burning", "burning")
-                    self.state.add_message("You burn." if _is_player else f"{entity.name} burns ({burn_name}).")
+                    self.state.add_message("You burn." if _is_player else f"{entity.name} burns ({burn_name}).", is_danger=_is_player)
                 turns -= 1
                 if turns <= 0:
                     entity.statuses.pop("burning", None)
@@ -1009,7 +1110,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 self.damage_entity(entity, 1, "poison")
                 if entity.hp > 0:
                     poison_name = entity.status_display.get("poisoned", "poison")
-                    self.state.add_message("You weaken from poison." if _is_player else f"{entity.name} weakens ({poison_name}).")
+                    self.state.add_message("You weaken from poison." if _is_player else f"{entity.name} weakens ({poison_name}).", is_danger=_is_player)
                 turns -= 1
                 if turns <= 0:
                     entity.statuses.pop("poisoned", None)
@@ -1067,7 +1168,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             self.damage_entity(entity, spec["damage"], spec["damage_type"])
             if entity.alive:
                 entity.statuses[spec["status"]] = max(status_duration(entity.statuses.get(spec["status"])), spec["duration"])
-            self.state.add_message(spec["message"] if is_player else spec["message_other"].format(name=entity.name))
+            self.state.add_message(spec["message"] if is_player else spec["message_other"].format(name=entity.name), is_danger=is_player)
             self.set_tile(entity.x, entity.y, RUBBLE)
             self.state.tile_tags.pop(self.tile_key(entity.x, entity.y), None)
             tile = RUBBLE
@@ -1079,11 +1180,11 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         if tile == FIRE:
             self.damage_entity(entity, 1, "fire")
             entity.statuses["burning"] = max(status_duration(entity.statuses.get("burning")), 2)
-            self.state.add_message("You step into wild fire." if is_player else f"{entity.name} steps into wild fire.")
+            self.state.add_message("You step into wild fire." if is_player else f"{entity.name} steps into wild fire.", is_danger=is_player)
         elif tile == POISON_CLOUD:
             self.damage_entity(entity, 1, "poison")
             entity.statuses["poisoned"] = max(status_duration(entity.statuses.get("poisoned")), 2)
-            self.state.add_message("You inhale a poison cloud." if is_player else f"{entity.name} inhales a poison cloud.")
+            self.state.add_message("You inhale a poison cloud." if is_player else f"{entity.name} inhales a poison cloud.", is_danger=is_player)
         elif tile == SLICK_ICE:
             entity.statuses["slowed"] = max(status_duration(entity.statuses.get("slowed")), 1)
             self.state.add_message("You skid on slick ice." if is_player else f"{entity.name} skids on slick ice.")
@@ -1107,7 +1208,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             self.damage_entity(entity, 1, "blood")
             if entity.hp > 0:
                 bleed_name = entity.status_display.get("bleeding", "bleeding")
-                self.state.add_message("You bleed." if _sp else f"{entity.name} bleeds ({bleed_name}).")
+                self.state.add_message("You bleed." if _sp else f"{entity.name} bleeds ({bleed_name}).", is_danger=_sp)
             turns -= 1
             if turns <= 0:
                 entity.statuses.pop("bleeding", None)
@@ -1400,14 +1501,14 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
     def resolve_target_group(self, target_id: str | None) -> list[Entity]:
         target = normalize_id(str(target_id or ""))
         if target in {"all", "everyone", "all_entities", "all_nearby", "everything"}:
-            return [entity for entity in self.state.entities.values() if entity.kind == "actor" and entity.hp > 0]
+            return [entity for entity in self.state.entities.values() if entity.kind in {"actor", "npc"} and entity.hp > 0]
         if target in {"all_enemies", "enemies", "all_foes", "all_hostiles", "nearby_enemies", "every_enemy"}:
             return self.living_enemies()
         if target in {"allies", "all_allies", "friends", "friendlies"}:
             return [
                 entity
                 for entity in self.state.entities.values()
-                if entity.kind == "actor" and entity.hp > 0 and entity.faction in {"ally", "player"}
+                if entity.kind in {"actor", "npc"} and entity.hp > 0 and entity.faction in {"ally", "player"}
             ]
         singular = singular_target_tag(target)
         if not singular:
@@ -1415,7 +1516,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         return [
             entity
             for entity in self.state.entities.values()
-            if entity.kind == "actor"
+            if entity.kind in {"actor", "npc"}
             and entity.hp > 0
             and entity.id != self.state.player_id
             and (singular in entity.tags or singular in normalize_id(entity.name).split("_"))

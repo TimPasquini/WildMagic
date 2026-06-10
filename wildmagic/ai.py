@@ -209,7 +209,7 @@ class _AIMixin:
     def _ally_turns(self) -> None:
         allies = [
             e for e in self.state.entities.values()
-            if e.kind == "actor" and e.faction == "ally" and e.hp > 0
+            if e.kind in {"actor", "npc"} and e.faction == "ally" and e.hp > 0
         ]
         for ally in allies:
             if any(s in ally.statuses for s in ["stunned", "frozen"]):
@@ -282,7 +282,7 @@ class _AIMixin:
                 continue
             threats = [
                 e for e in self.state.entities.values()
-                if e.kind in {"actor", "player"} and e.hp > 0
+                if e.kind in {"actor", "player", "npc"} and e.hp > 0
                 and self.is_hostile_to(e, npc)
                 and self.distance(e, npc) <= 6
             ]
@@ -301,7 +301,7 @@ class _AIMixin:
         """Process per-turn behavior tags on all living actors."""
         player = self.state.player
         for entity in list(self.state.entities.values()):
-            if entity.kind not in {"actor", "player"} or entity.hp <= 0:
+            if entity.kind not in {"actor", "player", "npc"} or entity.hp <= 0:
                 continue
             for tag in list(entity.tags):
                 m = self._AURA_RE.match(tag)
@@ -311,7 +311,7 @@ class _AIMixin:
                 radius = int(m.group(2)) if m.group(2) else 2
                 nearby = [
                     e for e in self.entities_in_radius(entity.x, entity.y, radius)
-                    if e.kind in {"actor", "player"} and e.hp > 0 and e.id != entity.id
+                    if e.kind in {"actor", "player", "npc"} and e.hp > 0 and e.id != entity.id
                 ]
                 offensive_targets, beneficial_targets = self._behavior_targets(entity, nearby)
                 if aura_type in {"burn", "fire"}:

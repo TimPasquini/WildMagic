@@ -261,6 +261,24 @@ class Curse:
 
 
 @dataclass
+class Quest:
+    name: str
+    description: str
+    contact: str
+    location: str
+    status: str = "active"  # "active" | "completed"
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "name": self.name,
+            "description": self.description,
+            "contact": self.contact,
+            "location": self.location,
+            "status": self.status,
+        }
+
+
+@dataclass
 class NPCProfile:
     """Persona and perception data for a talkable NPC, kept separate from Entity
     (which only carries physical/combat state) the same way Curse is kept separate."""
@@ -273,6 +291,12 @@ class NPCProfile:
     memory: list[str] = field(default_factory=list)
     conversation: list[dict[str, str]] = field(default_factory=list)
     wares: dict[str, int] = field(default_factory=dict)
+    wanted_item: str | None = None
+    wanted_qty: int = 0
+    reward_gold: int = 0
+    reward_item: str | None = None
+    reward_qty: int = 0
+    quest_completed: bool = False
 
     def remember(self, text: str, limit: int = 12) -> None:
         self.memory.append(text)
@@ -293,6 +317,16 @@ class NPCProfile:
         }
         if self.wares:
             context["wares_for_sale"] = dict(sorted(self.wares.items()))
+        if self.wanted_item and not self.quest_completed:
+            context["my_current_need"] = {
+                "wants_item": self.wanted_item,
+                "quantity": self.wanted_qty,
+                "will_reward_gold": self.reward_gold,
+                "will_reward_item": self.reward_item,
+                "reward_item_quantity": self.reward_qty
+            }
+        elif self.quest_completed:
+            context["quest_status"] = "I have already received my requested item and rewarded the player."
         return context
 
 

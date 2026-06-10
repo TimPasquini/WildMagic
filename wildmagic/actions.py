@@ -242,6 +242,60 @@ class GameSession:
                     explicit_messages = ["Say what? Specify what you want to say, e.g. 'talk hello there'."]
                 else:
                     success, technical_failure, dialogue_record = self._talk(message)
+            elif verb == "quest":
+                action = "quest"
+                subverb = tokens[1].lower() if len(tokens) > 1 else ""
+                if subverb == "list":
+                    success = True
+                    explicit_messages = []
+                    if not self.engine.state.quests:
+                        explicit_messages.append("Quest Log is empty.")
+                    else:
+                        explicit_messages.append("Quest Log:")
+                        for idx, q in enumerate(self.engine.state.quests, 1):
+                            status_label = "[x]" if q.status == "completed" else "[ ]"
+                            explicit_messages.append(f"  {idx}. {status_label} {q.name} - {q.description} (Contact: {q.contact}, Location: {q.location})")
+                elif subverb == "add":
+                    name = tokens[2] if len(tokens) > 2 else "Unknown Quest"
+                    desc = tokens[3] if len(tokens) > 3 else ""
+                    contact = tokens[4] if len(tokens) > 4 else (self.engine.state.last_talked_npc_name or "None")
+                    if len(tokens) > 5:
+                        loc = tokens[5]
+                    else:
+                        state = self.engine.state
+                        if state.scenario == "frontier":
+                            loc = f"Zone ({state.zone_x},{state.zone_y}) — {state.zone_type}"
+                        else:
+                            loc = f"Depth {state.depth}/{state.max_depth}"
+                    from .models import Quest
+                    new_q = Quest(name=name, description=desc, contact=contact, location=loc, status="active")
+                    self.engine.state.quests.append(new_q)
+                    self.engine.state.add_message(f"Quest added: {name}")
+                    success = True
+                elif subverb == "complete":
+                    try:
+                        idx = int(tokens[2]) - 1
+                        if 0 <= idx < len(self.engine.state.quests):
+                            self.engine.state.quests[idx].status = "completed"
+                            self.engine.state.add_message(f"Quest marked completed: {self.engine.state.quests[idx].name}")
+                            success = True
+                        else:
+                            explicit_messages = ["Invalid quest index."]
+                    except (ValueError, IndexError):
+                        explicit_messages = ["Quest complete command requires a numeric index, e.g. 'quest complete 1'."]
+                elif subverb == "remove":
+                    try:
+                        idx = int(tokens[2]) - 1
+                        if 0 <= idx < len(self.engine.state.quests):
+                            removed = self.engine.state.quests.pop(idx)
+                            self.engine.state.add_message(f"Quest removed: {removed.name}")
+                            success = True
+                        else:
+                            explicit_messages = ["Invalid quest index."]
+                    except (ValueError, IndexError):
+                        explicit_messages = ["Quest remove command requires a numeric index, e.g. 'quest remove 1'."]
+                else:
+                    explicit_messages = ["Unknown quest subcommand. Use 'quest list', 'quest add', 'quest complete <index>', or 'quest remove <index>'."]
             else:
                 explicit_messages = [f"Unknown command: {verb}"]
 
@@ -439,7 +493,7 @@ def describe_state(engine: GameEngine) -> list[str]:
         enemies.append(f"{enemy.name}({enemy.hp}/{enemy.max_hp}) at {enemy.x},{enemy.y} [{enemy.faction}]{e_status_str}")
     allies = []
     for ally in sorted(
-        (e for e in engine.state.entities.values() if e.kind == "actor" and e.faction == "ally" and e.hp > 0),
+        (e for e in engine.state.entities.values() if e.kind in {"actor", "npc"} and e.faction == "ally" and e.hp > 0),
         key=lambda entity: entity.id,
     ):
         a_status_str = ""
@@ -554,6 +608,9 @@ def summarize_state(engine: GameEngine) -> dict[str, Any]:
             }
             for curse_id, curse in sorted(state.curses.items())
         },
+        "quests": [
+            quest.to_dict() for quest in state.quests
+        ],
         "living_enemies": [
             {
                 "id": enemy.id,

@@ -233,6 +233,10 @@ class _GenerationMixin:
         self._place_doors()
         self._place_locked_door(rooms)
 
+        from .npc_quests import maybe_spawn_quest_item
+        avoid = {(e.x, e.y) for e in state.entities.values()} | {(px, py)}
+        maybe_spawn_quest_item(self, avoid)
+
     def _generate_test_chamber(self) -> None:
         state = self.state
         state.tiles = [[WALL for _ in range(state.width)] for _ in range(state.height)]
@@ -427,6 +431,11 @@ class _GenerationMixin:
             ),
             traits=["gruff", "observant", "secretly soft-hearted"],
             tags={"human", "hollowmere_townsfolk"},
+            wanted_item="Glass Eye of Hollowmere",
+            wanted_qty=1,
+            reward_gold=15,
+            reward_item="mana crystal",
+            reward_qty=1,
         )
         self.state.npc_profiles[maren.id].remember(
             "Three Imperial scouts passed through at dawn, asking after a wild mage."
@@ -443,6 +452,11 @@ class _GenerationMixin:
             traits=["chatty", "shrewd", "easily distracted by anything shiny"],
             tags={"human", "hollowmere_townsfolk"},
             wares={"trinket": 3, "lockpick": 1, "smoke vial": 2, "gold": 25},
+            wanted_item="Imperial Campaign Map",
+            wanted_qty=1,
+            reward_gold=25,
+            reward_item="smoke vial",
+            reward_qty=1,
         )
         self.state.npc_profiles[quill.id].remember(
             "Lost a good knife to a cutpurse working the market stalls just yesterday."
@@ -458,6 +472,11 @@ class _GenerationMixin:
             ),
             traits=["serene", "watchful", "quietly stubborn"],
             tags={"human", "hollowmere_townsfolk"},
+            wanted_item="Amulet of the Old Saints",
+            wanted_qty=1,
+            reward_gold=10,
+            reward_item="grave salt",
+            reward_qty=1,
         )
         self.state.npc_profiles[wren.id].remember(
             "The candles in the undercroft keep guttering, as if something below is breathing."
@@ -476,6 +495,9 @@ class _GenerationMixin:
             traits=["wary", "blunt", "fiercely protective of the town"],
             tags={"human", "hollowmere_townsfolk", "soldier"},
             hp=20, attack=5, defense=2, faction="ally",
+            wanted_item="Stolen Silver Seal",
+            wanted_qty=1,
+            reward_gold=40,
         )
         self.state.npc_profiles[ressa.id].remember(
             "Something dragged a sheep carcass up from the dungeon stair last night and left it in the square."
@@ -839,6 +861,8 @@ class _GenerationMixin:
             occupied.add(spot)
             role = npc_spec.role.lower().strip()
             stats = _ROLE_STATS.get(role, _DEFAULT_NPC_STATS)
+            from .npc_quests import generate_npc_quest
+            quest_data = generate_npc_quest(self, zone_rng) or {}
             self.spawn_npc(
                 name=npc_spec.name,
                 char="@",
@@ -853,6 +877,11 @@ class _GenerationMixin:
                 attack=stats["attack"],
                 defense=stats["defense"],
                 faction="neutral",
+                wanted_item=quest_data.get("wanted_item"),
+                wanted_qty=quest_data.get("wanted_qty", 0),
+                reward_gold=quest_data.get("reward_gold", 0),
+                reward_item=quest_data.get("reward_item"),
+                reward_qty=quest_data.get("reward_qty", 0),
             )
 
         state.add_message(f"You arrive at {spec.town_name}.")
@@ -1033,6 +1062,9 @@ class _GenerationMixin:
                 state.zone_type = self._generate_llm_town(zx, zy, spec)
             else:
                 state.zone_type = self._generate_open_zone(zx, zy)
+            from .npc_quests import maybe_spawn_quest_item
+            avoid = {(e.x, e.y) for e in state.entities.values()} | {(entry_x, entry_y)}
+            maybe_spawn_quest_item(self, avoid)
         state.entities[player.id] = player
         player.x, player.y = self._find_entry_tile(entry_x, entry_y)
         state.visible.clear()
@@ -1225,3 +1257,43 @@ class _GenerationMixin:
                 prop_id = self._pick_themed_prop_id(depth)
                 x, y = self._random_open_tile_in_room(room)
                 self.spawn_prop(prop_id, x, y)
+
+    def _save_dungeon_floor(self, depth: int) -> None:
+        state = self.state
+        state.dungeon_floors[depth] = ZoneSnapshot(
+            tiles=[row[:] for row in state.tiles],
+            tile_tags={key: list(value) for key, value in state.tile_tags.items()},
+            tile_durations=dict(state.tile_durations),
+            entities={
+                entity_id: entity
+                for entity_id, entity in state.entities.items()
+                if entity_id != state.player_id
+            },
+            explored=set(state.explored),
+            zone_type="dungeon",
+        )
+
+    def _load_dungeon_floor(self, depth: int, entry_tile: str) -> None:
+        state = self.state
+        player = state.entities[state.player_id]
+        snapshot = state.dungeon_floors[depth]
+        state.tiles = [row[:] for row in snapshot.tiles]
+        state.tile_tags = {key: list(value) for key, value in snapshot.tile_tags.items()}
+        state.tile_durations = dict(snapshot.tile_durations)
+        state.explored = set(snapshot.explored)
+        state.entities = dict(snapshot.entities)
+        state.zone_type = snapshot.zone_type
+        
+        entry_x, entry_y = player.x, player.y
+        found = False
+        for y, row in enumerate(state.tiles):
+            for x, tile in enumerate(row):
+                if tile == entry_tile:
+                    entry_x, entry_y = x, y
+                    found = True
+                    break
+            if found:
+                break
+        
+        state.entities[player.id] = player
+        player.x, player.y = entry_x, entry_y

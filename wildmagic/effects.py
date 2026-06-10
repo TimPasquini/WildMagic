@@ -96,7 +96,6 @@ class _EffectsMixin:
             message = f"Wild magic failed during application: {exc}"
             self.state.add_message(message)
             return WildMagicOutcome(False, True, [message])
-
     def _apply_cost(self, cost: dict[str, Any]) -> str | None:
         if not isinstance(cost, dict):
             return None
@@ -108,8 +107,9 @@ class _EffectsMixin:
             return f"Cost: {amount} mana."
         if cost_type in {"health", "hp"}:
             amount = clamp_int(cost.get("amount"), 1, 99)
+            self.state.add_message(f"Cost: {amount} health.", is_danger=True)
             self.damage_entity(player, amount, "blood")
-            return f"Cost: {amount} health."
+            return None
         if cost_type == "max_health":
             amount = clamp_int(cost.get("amount"), 0, 10)
             player.max_hp = max(1, player.max_hp - amount)
@@ -177,7 +177,6 @@ class _EffectsMixin:
                 player.status_expiry_text[status] = expiry_text
             return f"Cost: you are {shown}."
         return None
-
     def _apply_effect(self, effect: dict[str, Any]) -> list[str]:
         if not isinstance(effect, dict):
             return []
@@ -189,8 +188,11 @@ class _EffectsMixin:
                 return ["The spell claws at empty air."]
             amount = clamp_int(effect.get("amount"), 1, 999) if effect.get("amount") is not None else 5
             damage_type = str(effect.get("damage_type") or "arcane")
-            actual = self.damage_entity(target, amount, damage_type, source=self.state.player)
-            return [f"{target.name} {self._verb(target, 'take', 'takes')} {actual} {damage_type} damage."]
+            actual = self.calculate_actual_damage(target, amount, damage_type)
+            is_player_dmg = (target.id == self.state.player_id and actual > 0)
+            self.state.add_message(f"{target.name} {self._verb(target, 'take', 'takes')} {actual} {damage_type} damage.", is_danger=is_player_dmg)
+            self.damage_entity(target, amount, damage_type, source=self.state.player)
+            return []
         if effect_type == "area_damage":
             x, y = self.effect_position(effect)
             radius = clamp_int(effect.get("radius"), 0, 99) if effect.get("radius") is not None else 3
@@ -199,6 +201,8 @@ class _EffectsMixin:
             include_player = bool(effect.get("include_player", False))
             affects = normalize_id(str(effect.get("affects") or "non_player"))
             hit: list[str] = []
+            actuals = []
+            is_player_dmg = False
             for entity in self.entities_in_radius(x, y, radius):
                 if entity.kind == "item" or entity.hp <= 0:
                     continue
@@ -206,11 +210,17 @@ class _EffectsMixin:
                     continue
                 if not area_damage_affects(entity, affects, self.state.player_id):
                     continue
-                actual = self.damage_entity(entity, amount, damage_type, source=self.state.player)
+                actual = self.calculate_actual_damage(entity, amount, damage_type)
                 hit.append(f"{entity.name} {self._verb(entity, 'take', 'takes')} {actual} {damage_type}")
+                actuals.append(entity)
+                if entity.id == self.state.player_id and actual > 0:
+                    is_player_dmg = True
             if not hit:
                 return ["The blast spends itself on empty stone."]
-            return [f"Area spell hits {len(hit)} target(s): {', '.join(hit)}."]
+            self.state.add_message(f"Area spell hits {len(hit)} target(s): {', '.join(hit)}.", is_danger=is_player_dmg)
+            for entity in actuals:
+                self.damage_entity(entity, amount, damage_type, source=self.state.player)
+            return []
         if effect_type == "area_status":
             x, y = self.effect_position(effect)
             radius = clamp_int(effect.get("radius"), 0, 99) if effect.get("radius") is not None else 15

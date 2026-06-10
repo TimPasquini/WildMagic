@@ -41,6 +41,49 @@ def main() -> None:
     assert descended.consumed_turn
     assert stair_session.engine.state.depth == 2
     assert stair_session.engine.tile_at(stair_session.engine.state.player.x, stair_session.engine.state.player.y) in {"<", ">"}
+    
+    # 1. Drop a unique item in dungeon floor 1 (depth 2)
+    stair_session.engine.spawn_item("blood moss", ",", stair_session.engine.state.player.x + 1, stair_session.engine.state.player.y, "blood moss")
+    assert any(item.name == "blood moss" for item in stair_session.engine.state.entities.values() if item.kind == "item")
+    
+    # 2. Descend to dungeon floor 2 (depth 3)
+    stairs_down_pos = None
+    for y, row in enumerate(stair_session.engine.state.tiles):
+        for x, tile in enumerate(row):
+            if tile == ">":
+                stairs_down_pos = (x, y)
+                break
+        if stairs_down_pos:
+            break
+    assert stairs_down_pos is not None
+    stair_session.engine.state.player.x, stair_session.engine.state.player.y = stairs_down_pos
+    descended2 = stair_session.execute_command("descend")
+    assert descended2.consumed_turn
+    assert stair_session.engine.state.depth == 3
+    
+    # 3. Ascend back to dungeon floor 1 (depth 2)
+    ascended = stair_session.execute_command("ascend")
+    assert ascended.consumed_turn
+    assert stair_session.engine.state.depth == 2
+    # Verify the dropped item is still present (dungeon level persistence)
+    assert any(item.name == "blood moss" for item in stair_session.engine.state.entities.values() if item.kind == "item")
+    
+    # 4. Ascend back to the surface (test chamber)
+    stairs_up_pos = None
+    for y, row in enumerate(stair_session.engine.state.tiles):
+        for x, tile in enumerate(row):
+            if tile == "<":
+                stairs_up_pos = (x, y)
+                break
+        if stairs_up_pos:
+            break
+    assert stairs_up_pos is not None
+    stair_session.engine.state.player.x, stair_session.engine.state.player.y = stairs_up_pos
+    ascended2 = stair_session.execute_command("ascend")
+    assert ascended2.consumed_turn
+    assert stair_session.engine.state.depth == 1
+    # Verify we are back in the original surface zone and the test goblin is still alive (surface zone persistence)
+    assert any(enemy.name == "test goblin" for enemy in stair_session.engine.living_enemies())
 
     path_session = GameSession(seed=7, scenario="test_chamber", provider=MockWildMagicProvider())
     path_session.execute_command("move east")
@@ -275,6 +318,43 @@ def main() -> None:
         save_replay(conjure_session, replay_path)
         replay_result = run_replay(replay_path)
         assert replay_result.matched
+
+    # Test player damage flag and UI coloring logic
+    from .ui import is_player_damage_message
+    from .engine import LogMessage
+    
+    # 1. Test LogMessage attribute check
+    msg_danger = LogMessage("You take some damage.", is_danger=True)
+    msg_safe = LogMessage("You take the key.", is_danger=False)
+    assert is_player_damage_message(msg_danger) is True
+    assert is_player_damage_message(msg_safe) is False
+    
+    # 2. Test refined substring checks (fallback behavior)
+    assert is_player_damage_message("You take 5 physical damage.") is True
+    assert is_player_damage_message("You take the golden key.") is False
+    assert is_player_damage_message("You lose 3 health.") is True
+    assert is_player_damage_message("You lose your lockpick.") is False
+    assert is_player_damage_message("Cost: 3 health.") is True
+    assert is_player_damage_message("Cost: 3 mana.") is False
+    assert is_player_damage_message("You suffer 4 fire damage.") is True
+    assert is_player_damage_message("You die.") is True
+    
+    # 3. Test that real combat damage log applies correct flags
+    combat_session = GameSession(seed=7, scenario="test_chamber", provider=MockWildMagicProvider())
+    p = combat_session.engine.state.player
+    g = next(enemy for enemy in combat_session.engine.living_enemies() if enemy.name == "test goblin")
+    
+    # Player hits goblin - should not be danger
+    combat_session.engine.attack(p, g)
+    hit_msg = combat_session.engine.state.messages[-1]
+    assert "You hit test goblin" in hit_msg
+    assert getattr(hit_msg, "is_danger", False) is False
+    
+    # Goblin hits player - should be danger
+    combat_session.engine.attack(g, p)
+    hit_msg2 = combat_session.engine.state.messages[-1]
+    assert "test goblin hits You" in hit_msg2
+    assert getattr(hit_msg2, "is_danger", False) is True
 
     print(f"moved={moved.success}")
     print(f"turn={session.engine.state.turn}")

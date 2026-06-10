@@ -28,15 +28,37 @@ class _CombatMixin:
     def effective_defense(self, entity: Entity) -> int:
         return entity.defense + self.equipment_bonus(entity, "defense")
 
+    def calculate_actual_damage(self, entity: Entity, amount: int, damage_type: str) -> int:
+        if entity.kind == "item" or entity.hp <= 0:
+            return 0
+        damage_type = normalize_id(damage_type)
+        if "marked" in entity.statuses and damage_type not in {"blood"}:
+            amount = amount + 2
+        if "cursed" in entity.statuses and damage_type not in {"blood"}:
+            amount = amount + 1
+        if "warded" in entity.statuses and damage_type not in {"blood"} and self._is_canonical(entity, "warded"):
+            amount = max(0, amount - 2)
+        return self._modified_damage(entity, amount, damage_type)
+
     def attack(self, attacker: Entity, defender: Entity) -> None:
         base = max(1, self.effective_attack(attacker) - self.effective_defense(defender) + self.rng.randint(0, 2))
         bonus = 2 if ("berserk" in attacker.statuses or "empowered" in attacker.statuses) else 0
         amount = base + bonus
-        actual = self.damage_entity(defender, amount, "physical", source=attacker)
+        actual = self.calculate_actual_damage(defender, amount, "physical")
+        
+        # Log combat message only if player is involved or either entity is visible
+        if (attacker.id == self.state.player_id or defender.id == self.state.player_id or 
+                self.is_visible(attacker.x, attacker.y) or self.is_visible(defender.x, defender.y)):
+            is_player_dmg = (defender.id == self.state.player_id and actual > 0)
+            self.state.add_message(
+                f"{attacker.name} {self._verb(attacker, 'hit', 'hits')} {defender.name} for {actual}.",
+                is_danger=is_player_dmg
+            )
+            
+        self.damage_entity(defender, amount, "physical", source=attacker)
         if "berserk" in attacker.statuses:
             self.damage_entity(attacker, 1, "blood", source=attacker)
         if defender.hp > 0:
-            self.state.add_message(f"{attacker.name} {self._verb(attacker, 'hit', 'hits')} {defender.name} for {actual}.")
             # Spider webs on hit
             if "spider" in attacker.tags and "webbed" not in defender.statuses and self.rng.random() < 0.5:
                 defender.statuses["webbed"] = 2
@@ -64,123 +86,125 @@ class _CombatMixin:
     def damage_entity(self, entity: Entity, amount: int, damage_type: str, source: Entity | None = None) -> int:
         if entity.kind == "item" or entity.hp <= 0:
             return 0
-        damage_type = normalize_id(damage_type)
-        if "marked" in entity.statuses and damage_type not in {"blood"}:
-            amount = amount + 2
-        if "cursed" in entity.statuses and damage_type not in {"blood"}:
-            amount = amount + 1
-        if "warded" in entity.statuses and damage_type not in {"blood"} and self._is_canonical(entity, "warded"):
-            amount = max(0, amount - 2)
-        actual = self._modified_damage(entity, amount, damage_type)
-        hp_before = entity.hp
-        entity.hp -= actual
-        if entity.id == self.state.player_id:
-            self.state.stats.damage_taken += actual
-        elif entity.kind == "actor":
-            self.state.stats.damage_dealt += actual
-        if actual > 0:
-            self._fire_damage_triggers(entity, source, actual, damage_type)
-        if entity.hp <= 0:
-            # Undead entities have a 30% chance to reform at 1 HP rather than dying.
-            if ("undead" in entity.tags and entity.kind == "actor" and entity.id != self.state.player_id
-                    and "slain" not in entity.tags and self.rng.random() < 0.3):
-                entity.hp = 1
-                entity.tags.add("slain")
-                self.state.add_message(f"{entity.name} collapses... but begins to stir again!")
-                return 0
-            entity.hp = 0
-            entity.blocks = False
-            entity.char = "%"
-            entity.ai = None
-            entity.statuses.clear()
+        is_player = (entity.id == self.state.player_id)
+        was_taking_damage = self.state._player_taking_damage
+        if is_player:
+            self.state._player_taking_damage = True
+        try:
+            actual = self.calculate_actual_damage(entity, amount, damage_type)
+            hp_before = entity.hp
+            entity.hp -= actual
             if entity.id == self.state.player_id:
-                self.state.game_over = True
-                self.state.victory = False
-                self.state.add_message("You die. The dungeon keeps your echo.")
-            elif entity.kind == "npc":
-                # NPCs have no kill stat, loot table, or victory check of their own --
-                # this is the one piece of feedback the whole "you can lose them, and
-                # it matters" premise depends on, so it gets a message of its own.
-                if source is not None:
-                    self.state.add_message(f"{entity.name} falls before {source.name}!")
+                self.state.stats.damage_taken += actual
+            elif entity.kind == "actor":
+                self.state.stats.damage_dealt += actual
+            if actual > 0:
+                self._fire_damage_triggers(entity, source, actual, damage_type)
+            if entity.hp <= 0:
+                # Undead entities have a 30% chance to reform at 1 HP rather than dying.
+                if ("undead" in entity.tags and entity.kind == "actor" and entity.id != self.state.player_id
+                        and "slain" not in entity.tags and self.rng.random() < 0.3):
+                    entity.hp = 1
+                    entity.tags.add("slain")
+                    self.state.add_message(f"{entity.name} collapses... but begins to stir again!")
+                    return 0
+                entity.hp = 0
+                entity.blocks = False
+                entity.char = "%"
+                entity.ai = None
+                entity.statuses.clear()
+                if entity.id == self.state.player_id:
+                    self.state.game_over = True
+                    self.state.victory = False
+                    self.state.add_message("You die. The dungeon keeps your echo.")
+                elif entity.kind == "npc":
+                    # NPCs have no kill stat, loot table, or victory check of their own --
+                    # this is the one piece of feedback the whole "you can lose them, and
+                    # it matters" premise depends on, so it gets a message of its own.
+                    if source is not None:
+                        self.state.add_message(f"{entity.name} falls before {source.name}!")
+                    else:
+                        self.state.add_message(f"{entity.name} falls.")
+                    self._fire_death_triggers(entity, source, hp_before, damage_type)
                 else:
-                    self.state.add_message(f"{entity.name} falls.")
-                self._fire_death_triggers(entity, source, hp_before, damage_type)
-            else:
-                self.state.stats.enemies_killed += 1
-                self._drop_loot(entity)
-                # Slime splits into two smaller ones.
-                if "slime" in entity.tags and "split" not in entity.tags and entity.max_hp > 2:
-                    self._split_slime(entity)
-                if not self.living_enemies():
-                    self.state.victory = True
-                    self.state.add_message("For a breath, the floor is yours.")
-                # Death-effect tags.
-                self._on_entity_death(entity)
-                self._fire_death_triggers(entity, source, hp_before, damage_type)
-        elif damage_type == "fire":
-            if "bleeding" in entity.statuses and self._is_canonical(entity, "bleeding"):
-                entity.statuses.pop("bleeding")
-                entity.hp -= 1
-                wound_subj = "Your wound is" if entity.id == self.state.player_id else f"{entity.name}'s wound is"
-                self.state.add_message(f"{wound_subj} cauterized - brutal but effective.")
-            else:
-                entity.statuses["burning"] = max(status_duration(entity.statuses.get("burning")), 3)
-            if self.tile_at(entity.x, entity.y) == SLICK_ICE:
-                self.set_tile(entity.x, entity.y, WATER, duration=4)
-                self.state.add_message("The ice melts to water beneath you." if entity.id == self.state.player_id else f"The ice melts away beneath {entity.name}.")
-        elif damage_type == "frost":
-            if self.tile_at(entity.x, entity.y) == WATER:
-                entity.statuses["frozen"] = max(status_duration(entity.statuses.get("frozen")), 2)
-                self.state.add_message(f"{'You are' if entity.id == self.state.player_id else entity.name + ' is'} frozen solid in the water!")
-                self.set_tile(entity.x, entity.y, SLICK_ICE, duration=5)
-            else:
-                entity.statuses["slowed"] = max(status_duration(entity.statuses.get("slowed")), 2)
-        elif damage_type == "lightning":
-            if self.tile_at(entity.x, entity.y) == WATER:
-                entity.statuses["stunned"] = max(status_duration(entity.statuses.get("stunned")), 2)
-                self.state.add_message(f"Lightning courses through the water!")
-                if not self._conducting_lightning:
-                    self._conducting_lightning = True
-                    try:
-                        self._conduct_lightning_through_water(entity)
-                    finally:
-                        self._conducting_lightning = False
-        elif damage_type == "poison" and "poisoned" in entity.statuses and self._is_canonical(entity, "poisoned"):
-            entity.statuses["poisoned"] = min(99, status_duration(entity.statuses.get("poisoned", 0)) + 2)
-        elif damage_type == "acid":
-            if "warded" in entity.statuses and self._is_canonical(entity, "warded"):
-                entity.statuses.pop("warded")
-                name_str = "your" if entity.id == self.state.player_id else f"{entity.name}'s"
-                self.state.add_message(f"Acid dissolves {name_str} ward!")
-            elif "stone" in entity.tags or "metal" in entity.tags or "construct" in entity.tags:
-                pass # Extra damage handled in _modified_damage
-            elif self.rng.random() < 0.5:
-                entity.statuses["bleeding"] = max(status_duration(entity.statuses.get("bleeding")), 3)
-            for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
-                nx, ny = entity.x + dx, entity.y + dy
-                if self.in_bounds(nx, ny) and self.tile_at(nx, ny) == WALL and self.rng.random() < 0.15:
-                    self.set_tile(nx, ny, RUBBLE)
-                    self.state.add_message("Acid hisses against the stone, eating through the wall.")
-                    break
-        elif damage_type == "radiant":
-            entity.statuses["revealed"] = max(status_duration(entity.statuses.get("revealed")), 4)
-        elif damage_type == "shadow":
-            if "burning" in entity.statuses and self._is_canonical(entity, "burning"):
-                entity.statuses.pop("burning")
-                name_str = "your" if entity.id == self.state.player_id else f"{entity.name}'s"
-                self.state.add_message(f"Shadows snuff out {name_str} flames.")
-            if self.tile_at(entity.x, entity.y) == FIRE:
-                self.set_tile(entity.x, entity.y, FLOOR)
-                self.state.add_message("The shadows smother the flames around you." if entity.id == self.state.player_id else f"The shadows smother the flames around {entity.name}.")
-        elif damage_type == "force" and source and source.id != entity.id:
-            dx = sign(entity.x - source.x)
-            dy = sign(entity.y - source.y)
-            if dx or dy:
-                moved = self.push_entity(entity, dx, dy, 1)
-                if moved:
-                    self.state.add_message(f"{entity.name} {self._verb(entity, 'are', 'is')} knocked back!")
-        return actual
+                    self.state.add_message(f"{entity.name} dies.")
+                    self.state.stats.enemies_killed += 1
+                    self._drop_loot(entity)
+                    # Slime splits into two smaller ones.
+                    if "slime" in entity.tags and "split" not in entity.tags and entity.max_hp > 2:
+                        self._split_slime(entity)
+                    if not self.living_enemies():
+                        self.state.victory = True
+                        self.state.add_message("For a breath, the floor is yours.")
+                    # Death-effect tags.
+                    self._on_entity_death(entity)
+                    self._fire_death_triggers(entity, source, hp_before, damage_type)
+            elif damage_type == "fire":
+                if "bleeding" in entity.statuses and self._is_canonical(entity, "bleeding"):
+                    entity.statuses.pop("bleeding")
+                    entity.hp -= 1
+                    wound_subj = "Your wound is" if entity.id == self.state.player_id else f"{entity.name}'s wound is"
+                    self.state.add_message(f"{wound_subj} cauterized - brutal but effective.")
+                else:
+                    entity.statuses["burning"] = max(status_duration(entity.statuses.get("burning")), 3)
+                if self.tile_at(entity.x, entity.y) == SLICK_ICE:
+                    self.set_tile(entity.x, entity.y, WATER, duration=4)
+                    self.state.add_message("The ice melts to water beneath you." if entity.id == self.state.player_id else f"The ice melts away beneath {entity.name}.")
+            elif damage_type == "frost":
+                if self.tile_at(entity.x, entity.y) == WATER:
+                    entity.statuses["frozen"] = max(status_duration(entity.statuses.get("frozen")), 2)
+                    self.state.add_message(f"{'You are' if entity.id == self.state.player_id else entity.name + ' is'} frozen solid in the water!")
+                    self.set_tile(entity.x, entity.y, SLICK_ICE, duration=5)
+                else:
+                    entity.statuses["slowed"] = max(status_duration(entity.statuses.get("slowed")), 2)
+            elif damage_type == "lightning":
+                if self.tile_at(entity.x, entity.y) == WATER:
+                    entity.statuses["stunned"] = max(status_duration(entity.statuses.get("stunned")), 2)
+                    self.state.add_message(f"Lightning courses through the water!")
+                    if not self._conducting_lightning:
+                        self._conducting_lightning = True
+                        try:
+                            self._conduct_lightning_through_water(entity)
+                        finally:
+                            self._conducting_lightning = False
+            elif damage_type == "poison" and "poisoned" in entity.statuses and self._is_canonical(entity, "poisoned"):
+                entity.statuses["poisoned"] = min(99, status_duration(entity.statuses.get("poisoned", 0)) + 2)
+            elif damage_type == "acid":
+                if "warded" in entity.statuses and self._is_canonical(entity, "warded"):
+                    entity.statuses.pop("warded")
+                    name_str = "your" if entity.id == self.state.player_id else f"{entity.name}'s"
+                    self.state.add_message(f"Acid dissolves {name_str} ward!")
+                elif "stone" in entity.tags or "metal" in entity.tags or "construct" in entity.tags:
+                    pass # Extra damage handled in _modified_damage
+                elif self.rng.random() < 0.5:
+                    entity.statuses["bleeding"] = max(status_duration(entity.statuses.get("bleeding")), 3)
+                for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+                    nx, ny = entity.x + dx, entity.y + dy
+                    if self.in_bounds(nx, ny) and self.tile_at(nx, ny) == WALL and self.rng.random() < 0.15:
+                        self.set_tile(nx, ny, RUBBLE)
+                        self.state.add_message("Acid hisses against the stone, eating through the wall.")
+                        break
+            elif damage_type == "radiant":
+                entity.statuses["revealed"] = max(status_duration(entity.statuses.get("revealed")), 4)
+            elif damage_type == "shadow":
+                if "burning" in entity.statuses and self._is_canonical(entity, "burning"):
+                    entity.statuses.pop("burning")
+                    name_str = "your" if entity.id == self.state.player_id else f"{entity.name}'s"
+                    self.state.add_message(f"Shadows snuff out {name_str} flames.")
+                if self.tile_at(entity.x, entity.y) == FIRE:
+                    self.set_tile(entity.x, entity.y, FLOOR)
+                    self.state.add_message("The shadows smother the flames around you." if entity.id == self.state.player_id else f"The shadows smother the flames around {entity.name}.")
+            elif damage_type == "force" and source and source.id != entity.id:
+                dx = sign(entity.x - source.x)
+                dy = sign(entity.y - source.y)
+                if dx or dy:
+                    moved = self.push_entity(entity, dx, dy, 1)
+                    if moved:
+                        self.state.add_message(f"{entity.name} {self._verb(entity, 'are', 'is')} knocked back!")
+            return actual
+        finally:
+            if is_player:
+                self.state._player_taking_damage = was_taking_damage
 
     def _conduct_lightning_through_water(self, origin: Entity) -> None:
         start = (origin.x, origin.y)
@@ -198,10 +222,11 @@ class _CombatMixin:
                 if self.tile_at(nx, ny) == WATER:
                     queue.append((nx, ny))
         for other in list(self.state.entities.values()):
-            if other.id == origin.id or other.kind != "actor" or other.hp <= 0:
+            if other.id == origin.id or other.kind not in {"actor", "npc"} or other.hp <= 0:
                 continue
             if (other.x, other.y) in water_tiles:
-                self.state.add_message(f"The current carries the shock to {other.name}!")
+                is_player_dmg = (other.id == self.state.player_id and self.calculate_actual_damage(other, 2, "lightning") > 0)
+                self.state.add_message(f"The current carries the shock to {other.name}!", is_danger=is_player_dmg)
                 self.damage_entity(other, 2, "lightning", source=origin)
 
     def _modified_damage(self, entity: Entity, amount: int, damage_type: str) -> int:
@@ -276,17 +301,23 @@ class _CombatMixin:
         """Fire death-effect tags when an entity dies."""
         if "explode_on_death" in entity.tags or "bomb" in entity.tags:
             radius = 3
+            is_player_dmg = False
             for t in self.entities_in_radius(entity.x, entity.y, radius):
                 if t.hp > 0 and t.id != entity.id:
+                    if t.id == self.state.player_id and self.calculate_actual_damage(t, 5, "fire") > 0:
+                        is_player_dmg = True
                     self.damage_entity(t, 5, "fire")
             for tx, ty in self.points_in_radius(entity.x, entity.y, radius):
                 self.set_tile(tx, ty, FIRE, duration=3)
-            self.state.add_message(f"{entity.name} explodes in a gout of flame!")
+            self.state.add_message(f"{entity.name} explodes in a gout of flame!", is_danger=is_player_dmg)
         if "shatter_on_death" in entity.tags or "glass" in entity.tags and "fragile" in entity.tags:
+            is_player_dmg = False
             for t in self.entities_in_radius(entity.x, entity.y, 2):
                 if t.hp > 0 and t.id != entity.id:
+                    if t.id == self.state.player_id and self.calculate_actual_damage(t, 3, "physical") > 0:
+                        is_player_dmg = True
                     self.damage_entity(t, 3, "physical")
-            self.state.add_message(f"{entity.name} shatters in a shower of shards!")
+            self.state.add_message(f"{entity.name} shatters in a shower of shards!", is_danger=is_player_dmg)
         if "poison_cloud_on_death" in entity.tags or "plague_on_death" in entity.tags:
             for tx, ty in self.points_in_radius(entity.x, entity.y, 3):
                 self.set_tile(tx, ty, POISON_CLOUD, duration=6)

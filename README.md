@@ -1,6 +1,6 @@
 # Wild Magic
 
-A tiny graphical ASCII roguelike prototype where normal actions are deterministic and wild spells are resolved through a structured local-LLM JSON contract.
+A graphical ASCII roguelike where normal actions are deterministic and wild spells are resolved through a structured local-LLM JSON contract.
 
 ## Setup & Run
 
