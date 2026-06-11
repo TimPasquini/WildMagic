@@ -287,6 +287,70 @@ class Quest:
 
 
 @dataclass
+class LoreClaim:
+    """A remembered claim from dialogue. Claims are attributed story material,
+    not engine facts, until later systems verify, contradict, or redeem them."""
+
+    id: str
+    kind: str
+    subject: str
+    text: str
+    source_npc: str
+    source_turn: int
+    location: str
+    status: str = "unverified"
+    confidence: float = 0.5
+    salience: int = 2
+    tags: list[str] = field(default_factory=list)
+    source_message: str = ""
+    source_reply: str = ""
+    zone_x: int | None = None
+    zone_y: int | None = None
+    redeemed_in: str | None = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "kind": self.kind,
+            "subject": self.subject,
+            "text": self.text,
+            "source_npc": self.source_npc,
+            "source_turn": self.source_turn,
+            "location": self.location,
+            "status": self.status,
+            "confidence": self.confidence,
+            "salience": self.salience,
+            "tags": list(self.tags),
+            "source_message": self.source_message,
+            "source_reply": self.source_reply,
+            "zone_x": self.zone_x,
+            "zone_y": self.zone_y,
+            "redeemed_in": self.redeemed_in,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "LoreClaim":
+        return cls(
+            id=str(data.get("id") or ""),
+            kind=str(data.get("kind") or "rumor"),
+            subject=str(data.get("subject") or "unknown"),
+            text=str(data.get("text") or ""),
+            source_npc=str(data.get("source_npc") or "unknown"),
+            source_turn=int(data.get("source_turn") or 0),
+            location=str(data.get("location") or "unknown"),
+            status=str(data.get("status") or "unverified"),
+            confidence=float(data.get("confidence") or 0.5),
+            salience=int(data.get("salience") or 2),
+            tags=[str(tag) for tag in data.get("tags") or [] if str(tag).strip()],
+            source_message=str(data.get("source_message") or ""),
+            source_reply=str(data.get("source_reply") or ""),
+            zone_x=int(data["zone_x"]) if data.get("zone_x") is not None else None,
+            zone_y=int(data["zone_y"]) if data.get("zone_y") is not None else None,
+            redeemed_in=str(data.get("redeemed_in") or "") or None,
+        )
+
+
+@dataclass
 class NPCProfile:
     """Persona and perception data for a talkable NPC, kept separate from Entity
     (which only carries physical/combat state) the same way Curse is kept separate."""

@@ -14,12 +14,14 @@ MODEL_KEYS = (
     "WILDMAGIC_DIALOGUE_MODEL",
     "WILDMAGIC_TRADE_MODEL",
     "WILDMAGIC_TOWN_MODEL",
+    "WILDMAGIC_LORE_MODEL",
 )
 PROVIDER_KEYS = (
     "WILDMAGIC_PROVIDER",
     "WILDMAGIC_DIALOGUE_PROVIDER",
     "WILDMAGIC_TRADE_PROVIDER",
     "WILDMAGIC_TOWN_PROVIDER",
+    "WILDMAGIC_LORE_PROVIDER",
 )
 OLLAMA_ROUTE_KEYS = (
     "OLLAMA_HOST",
@@ -30,9 +32,11 @@ OLLAMA_ROUTE_KEYS = (
     "WILDMAGIC_DIALOGUE_OLLAMA_HOST",
     "WILDMAGIC_TRADE_OLLAMA_HOST",
     "WILDMAGIC_TOWN_OLLAMA_HOST",
+    "WILDMAGIC_LORE_OLLAMA_HOST",
     "WILDMAGIC_OLLAMA_NUM_GPU",
     "WILDMAGIC_BACKGROUND_OLLAMA_NUM_GPU",
     "WILDMAGIC_TOWN_OLLAMA_NUM_GPU",
+    "WILDMAGIC_LORE_OLLAMA_NUM_GPU",
 )
 
 
@@ -55,12 +59,14 @@ def test_model_fallback_chains(monkeypatch) -> None:
     assert config.get_dialogue_model() == config.DEFAULT_MODEL
     assert config.get_trade_model() == config.DEFAULT_MODEL
     assert config.get_town_model() == config.DEFAULT_MODEL
+    assert config.get_lore_model() == config.DEFAULT_LORE_MODEL
 
     monkeypatch.setenv("WILDMAGIC_MODEL", "shared-model")
     assert config.get_wild_magic_model() == "shared-model"
     assert config.get_dialogue_model() == "shared-model"
     assert config.get_trade_model() == "shared-model"
     assert config.get_town_model() == "shared-model"
+    assert config.get_lore_model() == config.DEFAULT_LORE_MODEL
 
     monkeypatch.setenv("WILDMAGIC_WILD_MODEL", "wild-model")
     assert config.get_wild_magic_model() == "wild-model"
@@ -74,8 +80,10 @@ def test_model_fallback_chains(monkeypatch) -> None:
 
     monkeypatch.setenv("WILDMAGIC_TRADE_MODEL", "trade-model")
     monkeypatch.setenv("WILDMAGIC_TOWN_MODEL", "town-model")
+    monkeypatch.setenv("WILDMAGIC_LORE_MODEL", "lore-model")
     assert config.get_trade_model() == "trade-model"
     assert config.get_town_model() == "town-model"
+    assert config.get_lore_model() == "lore-model"
 
 
 def test_provider_fallback_chains(monkeypatch) -> None:
@@ -86,16 +94,19 @@ def test_provider_fallback_chains(monkeypatch) -> None:
     assert config.get_dialogue_provider() == config.DEFAULT_PROVIDER
     assert config.get_trade_provider() == config.DEFAULT_PROVIDER
     assert config.get_town_provider() == config.DEFAULT_PROVIDER
+    assert config.get_lore_provider() == config.DEFAULT_PROVIDER
 
     monkeypatch.setenv("WILDMAGIC_PROVIDER", "mock")
     assert config.get_dialogue_provider() == "mock"
     assert config.get_trade_provider() == "mock"
     assert config.get_town_provider() == "mock"
+    assert config.get_lore_provider() == "mock"
 
     monkeypatch.setenv("WILDMAGIC_DIALOGUE_PROVIDER", "auto")
     assert config.get_dialogue_provider() == "auto"
     assert config.get_trade_provider() == "auto"
     assert config.get_town_provider() == "mock"
+    assert config.get_lore_provider() == "mock"
 
 
 def test_typed_values_use_defaults_and_bounds(monkeypatch) -> None:
@@ -127,18 +138,28 @@ def test_scoped_ollama_routing_precedence(monkeypatch) -> None:
     assert config.ollama_host("dialogue") == "http://127.0.0.1:11432"
     assert config.ollama_host("trade") == "http://127.0.0.1:11432"
     assert config.ollama_host("town") == "http://127.0.0.1:11433"
+    assert config.ollama_host("lore") == "http://127.0.0.1:11433"
     assert config.ollama_host(None) == "http://127.0.0.1:11431"
 
     monkeypatch.setenv("WILDMAGIC_WILD_OLLAMA_HOST", "127.0.0.1:11434")
     monkeypatch.setenv("WILDMAGIC_TOWN_OLLAMA_HOST", "127.0.0.1:11435")
+    monkeypatch.setenv("WILDMAGIC_LORE_OLLAMA_HOST", "127.0.0.1:11436")
     assert config.ollama_host("wild") == "http://127.0.0.1:11434"
     assert config.ollama_host("town") == "http://127.0.0.1:11435"
+    assert config.ollama_host("lore") == "http://127.0.0.1:11436"
 
     monkeypatch.setenv("WILDMAGIC_OLLAMA_NUM_GPU", "999")
     monkeypatch.setenv("WILDMAGIC_BACKGROUND_OLLAMA_NUM_GPU", "0")
     monkeypatch.setenv("WILDMAGIC_TOWN_OLLAMA_NUM_GPU", "2")
+    monkeypatch.setenv("WILDMAGIC_LORE_OLLAMA_NUM_GPU", "3")
     assert config.ollama_num_gpu("wild") == 999
     assert config.ollama_num_gpu("town") == 2
+    assert config.ollama_num_gpu("lore") == 3
+
+    monkeypatch.delenv("WILDMAGIC_LORE_OLLAMA_NUM_GPU", raising=False)
+    monkeypatch.delenv("WILDMAGIC_BACKGROUND_OLLAMA_NUM_GPU", raising=False)
+    monkeypatch.delenv("WILDMAGIC_OLLAMA_NUM_GPU", raising=False)
+    assert config.ollama_num_gpu("lore") == 0
 
 
 def test_scoped_ollama_settings_follow_purpose_and_route_precedence(monkeypatch) -> None:
@@ -150,6 +171,7 @@ def test_scoped_ollama_settings_follow_purpose_and_route_precedence(monkeypatch)
     assert config.ollama_timeout_seconds("dialogue") == 200.0
     assert config.ollama_timeout_seconds("wild") == 300.0
     assert config.ollama_num_gpu("town") == 0
+    assert config.ollama_num_gpu("lore") == 0
 
 
 def test_set_config_value_updates_process_and_dotenv(monkeypatch, tmp_path: Path) -> None:

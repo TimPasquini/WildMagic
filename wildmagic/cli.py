@@ -20,52 +20,55 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     session = GameSession(seed=args.seed, scenario=args.scenario, provider_name=args.provider)
-    commands = load_commands(args)
-    interactive = not commands and sys.stdin.isatty()
+    try:
+        commands = load_commands(args)
+        interactive = not commands and sys.stdin.isatty()
 
-    if interactive and not args.no_render:
-        print(render_screen(session))
+        if interactive and not args.no_render:
+            print(render_screen(session))
 
-    if commands:
-        for command in commands:
-            if not command.strip() or command.lstrip().startswith("#"):
-                continue
-            result = session.execute_command(command)
-            print(f"> {command}")
-            for message in result.messages:
-                print(message)
-            if not args.no_render:
-                print(render_screen(session))
-            if result.should_quit:
-                break
-    elif interactive:
-        while True:
-            try:
-                command = input("wildmagic> ")
-            except EOFError:
-                break
-            result = session.execute_command(command)
-            for message in result.messages:
-                print(message)
-            if not args.no_render:
-                print(render_screen(session))
-            if result.should_quit:
-                break
-    else:
-        for command in sys.stdin:
-            command = command.strip()
-            if not command or command.startswith("#"):
-                continue
-            result = session.execute_command(command)
-            print(f"> {command}")
-            for message in result.messages:
-                print(message)
-            if result.should_quit:
-                break
+        if commands:
+            for command in commands:
+                if not command.strip() or command.lstrip().startswith("#"):
+                    continue
+                result = session.execute_command(command)
+                print(f"> {command}")
+                for message in result.messages:
+                    print(message)
+                if not args.no_render:
+                    print(render_screen(session))
+                if result.should_quit:
+                    break
+        elif interactive:
+            while True:
+                try:
+                    command = input("wildmagic> ")
+                except EOFError:
+                    break
+                result = session.execute_command(command)
+                for message in result.messages:
+                    print(message)
+                if not args.no_render:
+                    print(render_screen(session))
+                if result.should_quit:
+                    break
+        else:
+            for command in sys.stdin:
+                command = command.strip()
+                if not command or command.startswith("#"):
+                    continue
+                result = session.execute_command(command)
+                print(f"> {command}")
+                for message in result.messages:
+                    print(message)
+                if result.should_quit:
+                    break
 
-    if args.record is not None:
-        save_replay(session, args.record)
-        print(f"Replay saved to {args.record}")
+        if args.record is not None:
+            save_replay(session, args.record)
+            print(f"Replay saved to {args.record}")
+    finally:
+        session.close()
     return 0
 
 

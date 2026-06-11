@@ -33,6 +33,7 @@ from .models import (
     Curse,
     Entity,
     GameStats,
+    LoreClaim,
     NPCProfile,
     Quest,
     TILE_NAMES,
@@ -153,6 +154,7 @@ _PROP_TAG_AFFORDANCES: dict[str, list[str]] = {
 
 
 _PROP_GENERIC_AFFORDANCES = ["use as a spell center", "flavor the outcome", "anchor a summon or terrain change"]
+_LORE_LEDGER_LIMIT = 200
 
 
 @dataclass
@@ -205,6 +207,7 @@ class GameState:
     zones: dict[tuple[int, int], ZoneSnapshot] = field(default_factory=dict)
     dungeon_floors: dict[int, ZoneSnapshot] = field(default_factory=dict)
     _player_taking_damage: bool = False
+    lore_claims: list[LoreClaim] = field(default_factory=list)
 
     @property
     def player(self) -> Entity:
@@ -220,6 +223,13 @@ class GameState:
         # Monotonic; unlike len(messages), it survives the cap above, so callers
         # (e.g. NPC perception) can tell exactly how many messages are new.
         self.message_count += 1
+
+    def location_label(self) -> str:
+        if self.scenario == "frontier":
+            return f"Zone ({self.zone_x},{self.zone_y}) - {self.zone_type}"
+        if self.scenario == "town":
+            return "Hollowmere"
+        return f"Depth {self.depth}"
 
 
 class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _EffectsMixin):
@@ -682,6 +692,133 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             return None
         return min(candidates, key=lambda entity: entity.id)
 
+    def add_lore_claims(self, claims: list[LoreClaim]) -> list[LoreClaim]:
+        added: list[LoreClaim] = []
+        significant_change = False
+        for claim in claims:
+            if not claim.text.strip():
+                continue
+            duplicate = self._matching_lore_claim(claim)
+            if duplicate is not None:
+                self._merge_lore_claim(duplicate, claim)
+                significant_change = significant_change or duplicate.salience >= 4
+                continue
+            self.state.lore_claims.append(claim)
+            added.append(claim)
+            significant_change = significant_change or claim.salience >= 4
+        self.state.lore_claims.sort(key=lambda claim: (claim.source_turn, claim.id))
+        self._trim_lore_claims()
+        if significant_change:
+            self._invalidate_pending_town_generation()
+        return added
+
+    def _matching_lore_claim(self, claim: LoreClaim) -> LoreClaim | None:
+        claim_subject = normalize_id(claim.subject)
+        claim_tags = {normalize_id(tag) for tag in claim.tags if tag}
+        claim_text = claim.text.strip().lower()
+        for existing in self.state.lore_claims:
+            if existing.id == claim.id:
+                return existing
+            if existing.text.strip().lower() == claim_text:
+                return existing
+            existing_subject = normalize_id(existing.subject)
+            if not claim_subject or claim_subject != existing_subject:
+                continue
+            existing_tags = {normalize_id(tag) for tag in existing.tags if tag}
+            if not claim_tags or not existing_tags or claim_tags & existing_tags:
+                return existing
+        return None
+
+    def _merge_lore_claim(self, existing: LoreClaim, incoming: LoreClaim) -> None:
+        existing.salience = min(5, max(existing.salience, incoming.salience) + 1)
+        existing.confidence = max(existing.confidence, incoming.confidence)
+        for tag in incoming.tags:
+            tag_id = normalize_id(tag)
+            if tag_id and tag_id not in existing.tags:
+                existing.tags.append(tag_id)
+        if existing.status not in {"verified", "false", "redeemed"} and incoming.status not in {"false"}:
+            existing.status = "corroborated"
+
+    def _trim_lore_claims(self) -> None:
+        if len(self.state.lore_claims) <= _LORE_LEDGER_LIMIT:
+            return
+        ranked = sorted(
+            self.state.lore_claims,
+            key=lambda claim: (
+                claim.status == "redeemed",
+                claim.salience,
+                claim.confidence,
+                claim.source_turn,
+                claim.id,
+            ),
+        )
+        keep = set(claim.id for claim in ranked[-_LORE_LEDGER_LIMIT:])
+        self.state.lore_claims = [claim for claim in self.state.lore_claims if claim.id in keep]
+
+    def _invalidate_pending_town_generation(self) -> None:
+        if not self._pending_towns:
+            return
+        for future in self._pending_towns.values():
+            future.cancel()
+        self._pending_towns.clear()
+        self._pending_town_contexts.clear()
+        self._pending_town_start_times.clear()
+
+    def lore_claims_for_context(
+        self,
+        *,
+        subject: str | None = None,
+        tags: set[str] | None = None,
+        include_redeemed: bool = False,
+        limit: int = 8,
+        text_limit: int = 240,
+    ) -> list[dict[str, Any]]:
+        from .lore import lore_context_for_prompt
+
+        wanted_terms = {normalize_id(part) for part in re.findall(r"[A-Za-z0-9_'-]+", subject or "") if len(part) >= 3}
+        wanted_tags = {normalize_id(tag) for tag in (tags or set()) if tag}
+        ranked: list[tuple[int, LoreClaim]] = []
+        for claim in self.state.lore_claims:
+            if claim.status == "redeemed" and not include_redeemed:
+                continue
+            claim_terms = set(normalize_id(claim.subject).split("_"))
+            claim_terms.update(normalize_id(tag) for tag in claim.tags)
+            score = claim.salience * 10 + int(claim.confidence * 5)
+            if claim.zone_x == self.state.zone_x and claim.zone_y == self.state.zone_y:
+                score += 12
+            if wanted_terms & claim_terms:
+                score += 18
+            if wanted_tags & claim_terms:
+                score += 10
+            if claim.location == self.state.location_label():
+                score += 6
+            ranked.append((score, claim))
+        ranked.sort(key=lambda item: (-item[0], -item[1].source_turn, item[1].subject.lower()))
+        return lore_context_for_prompt([claim for _, claim in ranked[:limit]], limit=limit, text_limit=text_limit)
+
+    def lore_extraction_context(self, npc: Entity, message: str, reply: str) -> dict[str, Any]:
+        return {
+            "npc": npc.name,
+            "turn": self.state.turn,
+            "location": self.state.location_label(),
+            "zone": {"x": self.state.zone_x, "y": self.state.zone_y, "type": self.state.zone_type},
+            "message": message,
+            "reply": reply,
+            "npc_profile": self.state.npc_profiles[npc.id].to_dialogue_context(),
+            "existing_lore": self.lore_claims_for_context(subject=npc.name, tags=npc.tags, limit=5, text_limit=160),
+        }
+
+    def mark_lore_redeemed(self, claim_ids: list[str], redeemed_in: str) -> list[LoreClaim]:
+        redeemed: list[LoreClaim] = []
+        wanted = set(claim_ids)
+        for claim in self.state.lore_claims:
+            if claim.id not in wanted or claim.status == "redeemed":
+                continue
+            claim.status = "redeemed"
+            claim.redeemed_in = redeemed_in
+            redeemed.append(claim)
+        return redeemed
+
     def dialogue_context_for_llm(self, npc: Entity, message: str) -> dict[str, Any]:
         profile = self.state.npc_profiles[npc.id]
         player = self.state.player
@@ -696,6 +833,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             },
             "scene": {"turn": self.state.turn, "depth": self.state.depth, "scenario": self.state.scenario,
                       "region": self.region.name},
+            "relevant_lore": self.lore_claims_for_context(subject=npc.name, tags=npc.tags, limit=5, text_limit=160),
             "message": message,
         }
 

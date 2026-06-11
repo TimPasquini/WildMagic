@@ -2081,9 +2081,19 @@ class MockTownProvider:
     def generate(self, zx: int, zy: int, context: dict[str, Any]) -> TownSpec:
         names = ["Ashford Crossing", "Saltmarket", "Cinder Vale", "The Waypost", "Brackenmere"]
         idx = abs(hash((zx, zy))) % len(names)
+        lore_hooks = context.get("lore_hooks") if isinstance(context, dict) else None
+        hook = lore_hooks[0] if isinstance(lore_hooks, list) and lore_hooks and isinstance(lore_hooks[0], dict) else None
+        description = "A rough cluster of buildings where the road bends. Travelers stop here to rest; most keep moving."
+        britta_backstory = "Has lived here longer than the buildings. Knows every plant in a day's walk."
+        if hook:
+            hook_text = str(hook.get("text") or "").strip()
+            hook_subject = str(hook.get("subject") or "an old rumor").strip()
+            if hook_text:
+                description = f"A rough cluster of buildings where the road bends. Locals keep repeating this: {hook_text}"
+            britta_backstory = f"Has lived here longer than the buildings. Keeps watch over local talk about {hook_subject}."
         return TownSpec(
             town_name=names[idx],
-            description="A rough cluster of buildings where the road bends. Travelers stop here to rest; most keep moving.",
+            description=description,
             buildings=[
                 BuildingSpec(type="tavern", name="The Hollow Cup"),
                 BuildingSpec(type="market", name=None),
@@ -2109,7 +2119,7 @@ class MockTownProvider:
                 NpcSpec(
                     name="Old Britta",
                     role="herbalist",
-                    backstory="Has lived here longer than the buildings. Knows every plant in a day's walk.",
+                    backstory=britta_backstory,
                     traits=["quiet", "observant"],
                     building="home",
                     wares={"blood moss": 2, "grave salt": 1, "gold": 10},

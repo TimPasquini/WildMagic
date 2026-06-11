@@ -832,7 +832,7 @@ class _GenerationMixin:
         if self.in_bounds(cx, cy) and state.tiles[cy][cx] != WALL:
             state.tiles[cy][cx] = ROAD
 
-    def _generate_llm_town(self, zx: int, zy: int, spec: Any) -> str:
+    def _generate_llm_town(self, zx: int, zy: int, spec: Any, generation_context: dict[str, Any] | None = None) -> str:
         """Generate an open-zone town from an LLM-produced TownSpec."""
         state = self.state
         state.tiles = [[FLOOR for _ in range(state.width)] for _ in range(state.height)]
@@ -914,6 +914,13 @@ class _GenerationMixin:
         state.add_message(f"You arrive at {spec.town_name}.")
         if spec.description:
             state.add_message(spec.description)
+        lore_hooks = (generation_context or {}).get("lore_hooks") or []
+        top_hook = lore_hooks[0] if lore_hooks and isinstance(lore_hooks[0], dict) else None
+        hook_id = str(top_hook.get("id")) if top_hook and top_hook.get("id") else ""
+        if hook_id:
+            redeemed = self.mark_lore_redeemed([hook_id], f"{spec.town_name} ({zx},{zy})")
+            if redeemed:
+                state.add_message(f"An old rumor finds a place in {spec.town_name}.")
         return f"town: {spec.town_name}"
 
     def _cross_zone_edge(self, target_x: int, target_y: int) -> bool:
@@ -1024,7 +1031,7 @@ class _GenerationMixin:
         defining_trait = rng.choice(_TOWN_DEFINING_TRAITS)
         current_situation = rng.choice(_TOWN_SITUATIONS)
         stype, npc_min, npc_max = rng.choice(_TOWN_SETTLEMENT_TYPES)
-        return {
+        context = {
             "zone": {"x": zx, "y": zy},
             "world_seed": self.state.rng_seed,
             "npc_count_range": [npc_min, npc_max],
@@ -1033,6 +1040,10 @@ class _GenerationMixin:
             "current_situation": current_situation,
             "settlement_type": stype,
         }
+        lore_hooks = self.lore_claims_for_context(include_redeemed=False, limit=3)
+        if lore_hooks:
+            context["lore_hooks"] = lore_hooks
+        return context
 
     def _maybe_pregenerate_adjacent_towns(self) -> None:
         """Submit background LLM generation for any adjacent unvisited town zones."""
@@ -1054,7 +1065,7 @@ class _GenerationMixin:
                 self.town_provider.generate, nx, ny, ctx
             )
 
-    def _get_town_spec(self, zx: int, zy: int) -> Any:
+    def _get_town_spec(self, zx: int, zy: int) -> tuple[Any, dict[str, Any]]:
         """Return TownSpec for (zx, zy) — from pending future or generate now. Never blocks >_TOWN_GEN_TIMEOUT."""
         from .wild_magic import MockTownProvider
         key = (zx, zy)
@@ -1067,13 +1078,14 @@ class _GenerationMixin:
             self._pending_towns[key] = self._town_executor.submit(
                 self.town_provider.generate, zx, zy, ctx
             )
+        ctx = self._pending_town_contexts.get(key, {})
         future = self._pending_towns.pop(key)
         self._pending_town_contexts.pop(key, None)
         self._pending_town_start_times.pop(key, None)
         try:
-            return future.result(timeout=_TOWN_GEN_TIMEOUT)
+            return future.result(timeout=_TOWN_GEN_TIMEOUT), ctx
         except Exception:
-            return MockTownProvider().generate(zx, zy, {})
+            return MockTownProvider().generate(zx, zy, ctx), ctx
 
     def _load_or_generate_zone(self, zx: int, zy: int, entry_x: int, entry_y: int) -> None:
         state = self.state
@@ -1091,8 +1103,8 @@ class _GenerationMixin:
         else:
             state.explored = set()
             if self._zone_should_be_town(zx, zy):
-                spec = self._get_town_spec(zx, zy)
-                state.zone_type = self._generate_llm_town(zx, zy, spec)
+                spec, town_context = self._get_town_spec(zx, zy)
+                state.zone_type = self._generate_llm_town(zx, zy, spec, town_context)
             else:
                 state.zone_type = self._generate_open_zone(zx, zy)
             from .npc_quests import maybe_spawn_quest_item

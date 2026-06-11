@@ -9,6 +9,7 @@ from dotenv import load_dotenv, set_key
 
 ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 DEFAULT_MODEL = "qwen3.5:9b-q4_K_M"
+DEFAULT_LORE_MODEL = "qwen3:1.7b"
 DEFAULT_PROVIDER = "ollama"
 DEFAULT_OLLAMA_HOST = "http://localhost:11434"
 
@@ -84,6 +85,7 @@ def _purpose_key(purpose: str | None) -> str | None:
         "NPC_DIALOGUE": "DIALOGUE",
         "BACKGROUND_TOWN": "TOWN",
         "TOWN_GENERATION": "TOWN",
+        "LORE_EXTRACTION": "LORE",
     }
     return aliases.get(normalized, normalized)
 
@@ -92,7 +94,7 @@ def _route_key(purpose: str | None) -> str | None:
     key = _purpose_key(purpose)
     if key in {"WILD", "DIALOGUE", "TRADE"}:
         return "URGENT"
-    if key == "TOWN":
+    if key in {"TOWN", "LORE"}:
         return "BACKGROUND"
     return None
 
@@ -164,6 +166,10 @@ def get_town_model() -> str:
     return get_config_value("WILDMAGIC_TOWN_MODEL") or _shared_model()
 
 
+def get_lore_model() -> str:
+    return get_config_value("WILDMAGIC_LORE_MODEL") or DEFAULT_LORE_MODEL
+
+
 def get_wild_magic_provider() -> str:
     return (get_config_value("WILDMAGIC_PROVIDER", DEFAULT_PROVIDER) or DEFAULT_PROVIDER).lower()
 
@@ -178,6 +184,10 @@ def get_trade_provider() -> str:
 
 def get_town_provider() -> str:
     return (get_config_value("WILDMAGIC_TOWN_PROVIDER") or get_wild_magic_provider()).lower()
+
+
+def get_lore_provider() -> str:
+    return (get_config_value("WILDMAGIC_LORE_PROVIDER") or get_wild_magic_provider()).lower()
 
 
 def ollama_host(purpose: str | None = None) -> str:
@@ -239,8 +249,13 @@ def ollama_town_num_predict() -> int:
     return _int_value("WILDMAGIC_TOWN_NUM_PREDICT", 2000, 256, 8192)
 
 
+def ollama_lore_num_predict() -> int:
+    return _int_value("WILDMAGIC_LORE_NUM_PREDICT", 700, 64, 2048)
+
+
 def ollama_num_gpu(purpose: str | None = None) -> int:
-    return _scoped_int(purpose, "OLLAMA_NUM_GPU", 999, 0, 999)
+    default = 0 if _purpose_key(purpose) == "LORE" else 999
+    return _scoped_int(purpose, "OLLAMA_NUM_GPU", default, 0, 999)
 
 
 def ollama_keep_alive(purpose: str | None = None) -> str:
@@ -261,6 +276,10 @@ def fallbacks_enabled() -> bool:
 
 def audit_log_enabled() -> bool:
     return _bool_value("WILDMAGIC_AUDIT_LOG", True)
+
+
+def lore_enabled() -> bool:
+    return _bool_value("WILDMAGIC_LORE_ENABLED", True)
 
 
 def audit_dir() -> Path:

@@ -28,8 +28,11 @@ drives `GameSession` in a readline loop, and optionally saves a replay JSON at e
 ### `wildmagic/actions.py`
 `GameSession` — the single object callers interact with. Wraps `GameEngine` and the LLM
 providers. Exposes `process_command(text)` which routes movement, wait, open/close, stairs,
-cast, talk, trade, and inventory commands. Returns an `ActionResult`. Also holds `summarize_state()`
-(used by the replay system) and `to_replay()` / `from_replay()` serialization.
+cast, talk, trade, and inventory commands. Returns an `ActionResult`. Also owns the background
+lore-extraction executor used after dialogue; completed claims are added to `GameState` and
+recorded into replay data. `close()` cancels pending lore work and shuts down the executor.
+Also holds `summarize_state()` (used by the replay system) and `to_replay()` / `from_replay()`
+serialization.
 
 ### `wildmagic/replay.py`
 Save/load/run replay JSON files. `run_replay(path)` re-feeds a recorded session's commands back
@@ -53,7 +56,7 @@ split into mixins, leaving engine.py with the infrastructure that everything els
 - Spawning: `spawn_actor`, `spawn_npc`, `next_entity_id`
 - Player actions: `attempt_player_move`, `wait_turn`, `open_door`, `open_adjacent_door`, `descend_stairs`, `ascend_stairs`, `teleport_entity`, `_move_to_nearest_open_tile`
 - Standard spells (deterministic, no LLM): `cast_standard_bolt`, `cast_standard_frost`, `cast_standard_heal`, `cast_standard_ward`, `cast_standard_reveal`
-- NPC dialogue/trade: `find_talk_target`, `dialogue_context_for_llm`, `apply_dialogue_exchange`, `resolve_pending_trade`, `should_consider_trade`, `trade_context_for_llm`
+- NPC dialogue/trade/lore: `find_talk_target`, `dialogue_context_for_llm`, `lore_extraction_context`, `lore_claims_for_context`, `add_lore_claims`, `mark_lore_redeemed`, `apply_dialogue_exchange`, `resolve_pending_trade`, `should_consider_trade`, `trade_context_for_llm`
 - LLM context building: `context_for_llm`, `nearby_spell_anchors`, `nearby_map_strings`, `nearby_tile_details`
 - Turn bookkeeping: `finish_player_turn`, `_regenerate_player`, `resolve_target`, `resolve_target_group`, `nearest_enemy`, `_verb`
 - Environment tick: `_tick_environment`, `_tick_fire_spread`, `_tick_poison_spread`, `_apply_tile_entry`, `_ambient_sounds`, `_tick_simple_statuses`, `_tick_tile_durations`, `_tick_event_timers`
@@ -98,7 +101,9 @@ All map and world generation (41 methods):
   `_wall_room_perimeter`, `_populate_zone`, `_spawn_from_template`, `_random_open_ground_tile`,
   `_find_entry_tile`
 - **LLM towns** — `_generate_llm_town`, `_draw_road_through_zone`, `_build_town_context`,
-  `_get_town_spec`, `_maybe_pregenerate_adjacent_towns`
+  `_get_town_spec`, `_maybe_pregenerate_adjacent_towns`. Town context includes high-salience
+  unredeemed `LoreClaim` entries as `lore_hooks`; generated towns can redeem those claims
+  into description/NPC/building content and mark them `redeemed`.
 - **Zone navigation** — `_cross_zone_edge`, `_save_current_zone`, `_load_or_generate_zone`
 - **Road network** — `_road_anchor`, `_zone_is_road`, `_road_edges`, `_zone_should_be_town`
 
@@ -126,7 +131,7 @@ Wild magic resolution and every effect/cost handler:
 ## LLM layer
 
 ### `wildmagic/wild_magic.py`
-The LLM provider layer. Defines Protocol classes and concrete implementations for three
+The LLM provider layer. Defines Protocol classes and concrete implementations for four
 provider kinds, each returning a typed resolution object:
 
 - `WildMagicProvider` / `OllamaWildMagicProvider` / `MockWildMagicProvider` → `MagicResolution`
@@ -144,6 +149,14 @@ Also contains `resolve_spell`, `resolve_dialogue`, `resolve_trade_proposal`,
 Spell operation constants, status flavor aliases, structural validation, and the
 JSON Schema used for constrained spell decoding live in `spell_contract.py`.
 
+### `wildmagic/lore.py`
+Dialogue-derived lore extraction. Defines `LoreExtractionProvider` plus Ollama/mock/auto
+providers, `LoreExtractionResolution`, JSON parsing/normalization into `LoreClaim`, and
+`write_lore_audit_log`. The Ollama provider uses purpose `lore`, which routes through the
+background Ollama settings by default; lore `num_gpu` defaults to `0` unless overridden.
+`lore_context_for_prompt()` converts stored claims into compact context for dialogue and
+generated-town hooks.
+
 ### `wildmagic/llm_client.py`
 Raw Ollama HTTP transport, completely decoupled from game logic:
 `_post_ollama_chat`, `parse_ollama_error_body`, `strip_thinking`, `extract_thinking`,
@@ -158,7 +171,9 @@ persists in-game configuration changes back to `.env`, and owns purpose-scoped O
 routing precedence for `WILDMAGIC_WILD_OLLAMA_HOST`, `WILDMAGIC_URGENT_OLLAMA_HOST`,
 `WILDMAGIC_BACKGROUND_OLLAMA_HOST`, and matching scoped request options such as
 `OLLAMA_NUM_CTX`, `OLLAMA_TIMEOUT`, `OLLAMA_NUM_GPU`, `OLLAMA_THINK`,
-`OLLAMA_FORMAT`, and `OLLAMA_KEEP_ALIVE`.
+`OLLAMA_FORMAT`, and `OLLAMA_KEEP_ALIVE`. Lore has first-class config via
+`WILDMAGIC_LORE_ENABLED`, `WILDMAGIC_LORE_PROVIDER`, `WILDMAGIC_LORE_MODEL`,
+`WILDMAGIC_LORE_NUM_PREDICT`, and purpose-scoped Ollama overrides.
 
 ### `wildmagic/llm_resolver.py`
 Shared retry and audit utilities:
@@ -172,8 +187,8 @@ Wild-magic contract data that is shared by resolver and engine code:
 
 ### `wildmagic/prompts.py`
 System prompt strings only — `SYSTEM_PROMPT`, `DIALOGUE_SYSTEM_PROMPT`,
-`TRADE_SYSTEM_PROMPT`, `TOWN_SYSTEM_PROMPT`. No logic; imported by `wild_magic.py`
-and re-exported for display in `ui.py`.
+`TRADE_SYSTEM_PROMPT`, `TOWN_SYSTEM_PROMPT`, `LORE_EXTRACTION_SYSTEM_PROMPT`.
+No logic; imported by `wild_magic.py`, `lore.py`, and re-exported for display in `ui.py`.
 
 ### `wildmagic/fallbacks.py`
 Pure-Python regex spell parser used when the LLM is unavailable or returns garbage.
@@ -192,7 +207,11 @@ All shared data types and tile constants. No game logic.
   `WATER`, `FIRE`, `SLICK_ICE`, `ICE_WALL`, `POISON_CLOUD`, `VINES`, `RUBBLE`, `MIST`, `ROAD`
 - Derived tile sets: `BLOCKING_TILES`, `DAMAGING_TILES`, `TILE_NAMES`, `TILE_TAGS`, `TILE_ALIASES`
 - Status/damage type catalogues: `MECHANICAL_STATUSES`, `DAMAGE_TYPES`
-- Dataclasses: `Entity`, `Curse`, `NPCProfile`, `GameStats`, `WildMagicOutcome`, `Room`, `ZoneSnapshot`
+- Dataclasses: `Entity`, `Curse`, `Quest`, `LoreClaim`, `NPCProfile`, `GameStats`, `WildMagicOutcome`, `Room`, `ZoneSnapshot`
+
+`GameState.lore_claims` is capped to 200 entries. Repeated subject/tag-overlap claims merge
+into the existing entry, bump salience/confidence, and can mark it `corroborated`; old
+low-salience claims are evicted first.
 
 ### `wildmagic/game_data.py`
 All hand-authored game content and tunable constants:
@@ -275,6 +294,11 @@ Hollowmere NPC prompts through the real Ollama dialogue provider path, scores si
 failure/genericness/grounding heuristics, prints a comparison table, and writes a JSON
 report under `logs/dialogue_eval/`.
 
+### `wildmagic/lore_eval.py`
+Lore-extraction eval harness (`python -m wildmagic.lore_eval`): reads saved dialogue eval
+reports, runs each NPC reply through the lore extractor provider, and writes the extracted
+claims plus technical failures under `logs/lore_eval/`.
+
 ### `wildmagic/smoke_test.py`
 Headless integration test. Creates a `test_chamber` session with `MockWildMagicProvider`,
 fires a movement, a well-formed spell, a malformed response, and a rejection scenario,
@@ -298,12 +322,16 @@ main.py / cli.py
             │       ├── ai.py       (_AIMixin)
             │       ├── generation.py (_GenerationMixin)
             │       └── effects.py  (_EffectsMixin)
-            └── wild_magic.py (providers + resolution)
-                    ├── llm_client.py   (Ollama HTTP)
-                    ├── llm_resolver.py (audit + retry)
-                    ├── prompts.py      (system prompts)
-                    ├── spell_contract.py (spell schema + validation)
-                    └── fallbacks.py    (regex fallback)
+            ├── wild_magic.py (spell/dialogue/trade/town providers + resolution)
+            │       ├── llm_client.py   (Ollama HTTP)
+            │       ├── llm_resolver.py (audit + retry)
+            │       ├── prompts.py      (system prompts)
+            │       ├── spell_contract.py (spell schema + validation)
+            │       └── fallbacks.py    (regex fallback)
+            └── lore.py (dialogue claim extraction + lore prompt context)
+                    ├── llm_client.py
+                    ├── llm_resolver.py
+                    └── prompts.py
 
 Shared leaves (imported by many, import nothing above them):
     models.py  ←  game_data.py  ←  templates.py

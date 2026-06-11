@@ -8,6 +8,7 @@ A graphical ASCII roguelike where normal actions are deterministic and wild spel
 First, install [Ollama](https://ollama.com/) on your machine. Then, pull the recommended default model:
 ```powershell
 ollama pull qwen3.5:9b-q4_K_M
+ollama pull qwen3:1.7b
 ```
 
 ### 2. Configure Environment Variables
@@ -87,7 +88,7 @@ You can route urgent calls and background calls separately:
 
 ```powershell
 $env:WILDMAGIC_URGENT_OLLAMA_HOST='http://127.0.0.1:11434'      # wild magic, dialogue, trade
-$env:WILDMAGIC_BACKGROUND_OLLAMA_HOST='http://127.0.0.1:11435'  # background town generation
+$env:WILDMAGIC_BACKGROUND_OLLAMA_HOST='http://127.0.0.1:11435'  # background town generation and lore extraction
 $env:WILDMAGIC_BACKGROUND_OLLAMA_NUM_GPU='0'                    # force CPU for background requests
 ```
 
@@ -98,9 +99,10 @@ $env:WILDMAGIC_WILD_OLLAMA_HOST='http://127.0.0.1:11434'
 $env:WILDMAGIC_DIALOGUE_OLLAMA_HOST='http://127.0.0.1:11434'
 $env:WILDMAGIC_TRADE_OLLAMA_HOST='http://127.0.0.1:11434'
 $env:WILDMAGIC_TOWN_OLLAMA_HOST='http://127.0.0.1:11435'
+$env:WILDMAGIC_LORE_OLLAMA_HOST='http://127.0.0.1:11435'
 ```
 
-The same scope pattern works for request options such as `OLLAMA_NUM_CTX`, `OLLAMA_TIMEOUT`, `OLLAMA_NUM_GPU`, `OLLAMA_THINK`, `OLLAMA_FORMAT`, and `OLLAMA_KEEP_ALIVE`. For example, `WILDMAGIC_TOWN_OLLAMA_NUM_CTX` overrides town generation only, while `WILDMAGIC_BACKGROUND_OLLAMA_NUM_CTX` applies to every background route.
+The same scope pattern works for request options such as `OLLAMA_NUM_CTX`, `OLLAMA_TIMEOUT`, `OLLAMA_NUM_GPU`, `OLLAMA_THINK`, `OLLAMA_FORMAT`, and `OLLAMA_KEEP_ALIVE`. For example, `WILDMAGIC_TOWN_OLLAMA_NUM_CTX` overrides town generation only, while `WILDMAGIC_BACKGROUND_OLLAMA_NUM_CTX` applies to every background route. Lore extraction also has `WILDMAGIC_LORE_NUM_PREDICT` for its JSON response size.
 
 To run two local servers manually, start them in separate terminals:
 
@@ -141,6 +143,35 @@ $env:WILDMAGIC_DIALOGUE_MODEL='qwen3:8b'
 If unset, `WILDMAGIC_DIALOGUE_PROVIDER` falls back to `WILDMAGIC_PROVIDER`, and `WILDMAGIC_DIALOGUE_MODEL` falls back to `WILDMAGIC_MODEL`, so a single `ollama`/`qwen3:8b` setup covers both spell resolution and dialogue. `WILDMAGIC_DIALOGUE_TEMPERATURE` (default `0.7`) and `WILDMAGIC_DIALOGUE_NUM_PREDICT` (default `320`) tune reply style and length.
 
 Every dialogue exchange writes a JSONL audit record to `logs/dialogue_audit.jsonl`, alongside the wild-magic log, controlled by the same `WILDMAGIC_AUDIT_DIR`/`WILDMAGIC_AUDIT_LOG` settings.
+
+## Organic Lore
+
+Dialogue can now leave persistent story claims behind. After an NPC reply is shown, a background lore extractor reads the exchange and may append 0-3 attributed claims to the world ledger. These claims are not engine facts by default; they start as `unverified`, `rumored`, `verified`, `contested`, or `false` according to the extractor's judgment, and future systems can later redeem or contradict them.
+
+Repeated matching claims merge into the existing entry, raising salience and marking it `corroborated`; the ledger keeps the strongest ~200 claims and evicts old low-salience color first.
+
+Lore extraction is enabled by default and uses its own configurable model:
+
+```powershell
+$env:WILDMAGIC_LORE_ENABLED='1'
+$env:WILDMAGIC_LORE_PROVIDER='ollama'
+$env:WILDMAGIC_LORE_MODEL='qwen3:1.7b'
+```
+
+Lore is routed as a background purpose, and `ollama_num_gpu("lore")` defaults to `0`, so lore extraction is CPU-oriented even if no lore-specific GPU setting is present. `WILDMAGIC_BACKGROUND_OLLAMA_HOST` and `WILDMAGIC_BACKGROUND_OLLAMA_NUM_GPU=0` are the usual way to send it to a separate CPU Ollama server. Use `WILDMAGIC_LORE_OLLAMA_HOST` or `WILDMAGIC_LORE_OLLAMA_NUM_GPU` for lore-only overrides.
+
+Current uses:
+
+- relevant claims are included in later NPC dialogue context
+- high-salience unredeemed claims become `lore_hooks` for future generated towns
+- when a generated town consumes hooks, those claims are marked `redeemed`
+
+Lore extraction writes audit records to `logs/lore_audit.jsonl`. You can test extraction offline against saved dialogue evals:
+
+```powershell
+python -m wildmagic.lore_eval --input logs/dialogue_eval/requested_models.json --provider mock --output logs/lore_eval/mock_report.json
+python -m wildmagic.lore_eval --input logs/dialogue_eval/requested_models.json --provider ollama --model qwen3:1.7b
+```
 
 ## Intel Arc GPU Notes
 

@@ -36,12 +36,19 @@ def run_replay(path: Path) -> ReplayResult:
         dialogue_provider_name="mock",
     )
     actions = data.get("actions", [])
-    for action in actions:
-        session.execute_command(
-            str(action.get("command") or ""),
-            replay_wild_magic=action.get("wild_magic"),
-        )
-    final_summary = summarize_state(session.engine)
+    try:
+        for action in actions:
+            # Lore claims are replayed at the dialogue action that recorded them. A live
+            # town generated before a late lore drain could therefore differ until town
+            # specs themselves are recorded in replay data.
+            session.execute_command(
+                str(action.get("command") or ""),
+                replay_wild_magic=action.get("wild_magic"),
+                replay_dialogue=action.get("dialogue"),
+            )
+        final_summary = summarize_state(session.engine)
+    finally:
+        session.close()
     expected_summary = data.get("final_summary")
     matched = expected_summary is None or final_summary == expected_summary
     return ReplayResult(path, len(actions), matched, final_summary, expected_summary)

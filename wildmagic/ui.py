@@ -248,6 +248,7 @@ class GameUI:
             self.draw()
             pygame.display.flip()
             self.clock.tick(30)
+        self.session.close()
         pygame.quit()
 
     def handle_key(self, event: pygame.event.Event) -> None:
@@ -638,6 +639,7 @@ class GameUI:
     # ------------------------------------------------------------------
 
     def restart_run(self) -> None:
+        self.session.close()
         self.session = GameSession(scenario="town")
         self.engine = self.session.engine
         self.input_text = ""

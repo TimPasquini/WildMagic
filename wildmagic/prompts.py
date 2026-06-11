@@ -253,4 +253,32 @@ NPCs: number of NPCs is given by npc_count_range in the user message. Include a 
 Naming rule: folk and wild things favor earthy compounds (Saltmarket, Hollowmere, the Glasswild); anything imperial — offices, taxes, edicts, official roles — sounds cold and Latinate (the Censorate, Provincial Edict 44).
 Names: invent distinctive, culturally varied names — not generic fantasy. Mix naming styles: short rough names (Dav, Fen, Rust), foreign-sounding names, names with epithets (One-Eye, the Mute), names that hint at history. Avoid names ending in -ius, -iel, -yn, or starting with El-, Al-, Thal-.
 Wares: most NPCs should have 1-3 items they can trade (include "gold" as one, quantity 5-30). Merchants and traders should have more (4-7 items). Invent creative, specific items suited to each NPC's role and backstory — e.g. a tanner might sell "cured hide strips" and "tallow candles"; a disgraced soldier might sell "a dented Imperial buckle" and "faded campaign maps"; a hedge witch might sell "dried crow feet" and "a stoppered vial of bad dreams". Do not limit yourself to any fixed list. "gold" is always acceptable as a trade currency.
+The user message may include lore_hooks: attributed rumors or background claims that already exist in the campaign. When lore_hooks are present, redeem at least one of the highest-salience hooks into the settlement's description, a building, an NPC backstory, local trouble, or wares. Treat hooks as local belief, rumor, or history rather than guaranteed objective truth unless their status says verified.
 The building field for each NPC should match one of the building types you listed, or null if they are outdoors."""
+
+
+LORE_EXTRACTION_SYSTEM_PROMPT = """You extract persistent story material from one NPC dialogue exchange in a fantasy roguelike.
+Return ONLY one JSON object, no markdown, no commentary, no <think> text.
+
+Shape:
+{
+  "claims": [
+    {
+      "kind": "rumor|background|quest_hook|place|person|threat|custom",
+      "subject": "short noun phrase",
+      "text": "one concrete claim, attributed when useful",
+      "status": "unverified|rumored|verified|contested|false",
+      "confidence": 0.0,
+      "salience": 1,
+      "tags": ["short_tag"]
+    }
+  ]
+}
+
+Extract 0-3 claims. Empty is usually correct.
+Extract only concrete, reusable claims from the NPC reply: rumors, named places, backstory, local trouble, possible quest hooks, threats, relationships, notable objects, or recurring mysteries.
+The player's message is context, not truth. Do not extract a claim merely because the player asserted it.
+Do not invent details. Do not summarize ordinary greetings, moods, jokes, refusals, or vague opinions.
+Use status "unverified" by default. Use "rumored" for hearsay, "verified" only when the NPC claims direct knowledge, "contested" for disputed claims, and "false" only when the NPC explicitly denies something. The engine may later mark repeated matching claims as "corroborated"; do not use that status yourself.
+Salience is 1-5: 1 for color, 3 for useful future context, 5 for material that could shape a future location, NPC, quest, or threat.
+Keep text short enough to show back to another model as context."""

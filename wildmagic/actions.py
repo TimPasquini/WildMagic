@@ -1,10 +1,19 @@
 from __future__ import annotations
 
+import concurrent.futures
 from dataclasses import dataclass, field
 import shlex
 from typing import Any
 
+from .config import lore_enabled
 from .engine import GameEngine
+from .lore import (
+    LoreExtractionProvider,
+    LoreExtractionResolution,
+    make_lore_provider,
+    resolve_lore_extraction,
+)
+from .models import LoreClaim
 from .normalize import normalize_id
 from .wild_magic import (
     DialogueProvider,
@@ -103,6 +112,8 @@ class GameSession:
         dialogue_provider_name: str | None = None,
         trade_provider: TradeProvider | None = None,
         trade_provider_name: str | None = None,
+        lore_provider: LoreExtractionProvider | None = None,
+        lore_provider_name: str | None = None,
     ) -> None:
         self.seed = seed
         self.scenario = scenario
@@ -113,14 +124,23 @@ class GameSession:
         self.dialogue_provider_label = getattr(self.dialogue_provider, "name", "unknown")
         self.trade_provider = trade_provider or make_trade_provider(trade_provider_name)
         self.trade_provider_label = getattr(self.trade_provider, "name", "unknown")
+        resolved_lore_provider_name = lore_provider_name
+        if resolved_lore_provider_name is None and provider_name in {"mock", "ollama", "auto"}:
+            resolved_lore_provider_name = provider_name
+        self.lore_provider = lore_provider or make_lore_provider(resolved_lore_provider_name)
+        self.lore_provider_label = getattr(self.lore_provider, "name", "unknown")
+        self._lore_executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self._pending_lore: list[tuple[concurrent.futures.Future[LoreExtractionResolution], dict[str, Any]]] = []
         self.records: list[dict[str, Any]] = []
 
     def execute_command(
         self,
         command: str,
         replay_wild_magic: dict[str, Any] | None = None,
+        replay_dialogue: dict[str, Any] | None = None,
         record: bool = True,
     ) -> ActionResult:
+        self.drain_lore(block=False)
         original_command = command.strip()
         turn_before = self.engine.state.turn
         message_count_before = len(self.engine.state.messages)
@@ -241,7 +261,7 @@ class GameSession:
                 elif not message:
                     explicit_messages = ["Say what? Specify what you want to say, e.g. 'talk hello there'."]
                 else:
-                    success, technical_failure, dialogue_record = self._talk(message)
+                    success, technical_failure, dialogue_record = self._talk(message, replay_dialogue)
             elif verb == "quest":
                 action = "quest"
                 subverb = tokens[1].lower() if len(tokens) > 1 else ""
@@ -318,6 +338,7 @@ class GameSession:
         )
         if record:
             self.records.append(result.to_record())
+        self.drain_lore(block=False)
         return result
 
     def cast_wild(self, spell: str, record: bool = True) -> ActionResult:
@@ -380,33 +401,48 @@ class GameSession:
             wild_magic_record["error"] = "; ".join(outcome.messages)
         return outcome.consumed_turn, outcome.technical_failure, wild_magic_record, context
 
-    def _talk(self, message: str) -> tuple[bool, bool, dict[str, Any] | None]:
+    def _talk(self, message: str, replay_dialogue: dict[str, Any] | None = None) -> tuple[bool, bool, dict[str, Any] | None]:
         message = message.strip()
         npc = self.engine.find_talk_target()
         if npc is None:
             self.engine.state.add_message("There's no one nearby to talk to.")
             return False, False, None
 
-        context = self.engine.dialogue_context_for_llm(npc, message)
-        resolution = resolve_dialogue(self.dialogue_provider, npc.name, message, context)
-        self.dialogue_provider_label = resolution.provider_name
-        dialogue_record = {
-            "npc": npc.name,
-            "message": message,
-            "provider": resolution.provider_name,
-            "technical_failure": resolution.technical_failure,
-            "error": resolution.error,
-            "reply": resolution.reply,
-            "raw_response": resolution.raw_response,
-            "audit_path": resolution.audit_path,
-        }
+        if replay_dialogue is not None:
+            resolution = DialogueResolution(
+                reply=replay_dialogue.get("reply"),
+                technical_failure=bool(replay_dialogue.get("technical_failure")),
+                error=replay_dialogue.get("error"),
+                provider_name=str(replay_dialogue.get("provider") or "replay"),
+                raw_response=replay_dialogue.get("raw_response"),
+                audit_path=replay_dialogue.get("audit_path"),
+            )
+            dialogue_record = dict(replay_dialogue)
+        else:
+            context = self.engine.dialogue_context_for_llm(npc, message)
+            resolution = resolve_dialogue(self.dialogue_provider, npc.name, message, context)
+            self.dialogue_provider_label = resolution.provider_name
+            dialogue_record = {
+                "npc": npc.name,
+                "message": message,
+                "provider": resolution.provider_name,
+                "technical_failure": resolution.technical_failure,
+                "error": resolution.error,
+                "reply": resolution.reply,
+                "raw_response": resolution.raw_response,
+                "audit_path": resolution.audit_path,
+            }
         if resolution.technical_failure or resolution.reply is None:
             self.engine.state.add_message(f"{npc.name} doesn't seem to hear you. ({resolution.error})")
             return False, True, dialogue_record
 
         reply = resolution.reply
         trade_data: dict[str, Any] | None = None
-        if self.engine.should_consider_trade(npc, message, reply):
+        if replay_dialogue is not None:
+            trade = replay_dialogue.get("trade")
+            if isinstance(trade, dict) and not trade.get("technical_failure"):
+                trade_data = trade.get("data")
+        elif self.engine.should_consider_trade(npc, message, reply):
             trade_context = self.engine.trade_context_for_llm(npc, message, reply)
             trade_resolution = resolve_trade_proposal(self.trade_provider, npc.name, trade_context)
             self.trade_provider_label = trade_resolution.provider_name
@@ -422,7 +458,72 @@ class GameSession:
                 trade_data = trade_resolution.data
 
         self.engine.apply_dialogue_exchange(npc, message, reply, trade_data)
+        if replay_dialogue is not None:
+            self._apply_replay_lore(dialogue_record)
+        else:
+            lore_context = self.engine.lore_extraction_context(npc, message, reply)
+            self._enqueue_lore_extraction(lore_context, dialogue_record)
         return True, False, dialogue_record
+
+    def _enqueue_lore_extraction(self, context: dict[str, Any], dialogue_record: dict[str, Any]) -> None:
+        if not lore_enabled():
+            dialogue_record["lore"] = {"enabled": False, "claims": []}
+            return
+        dialogue_record["lore"] = {
+            "enabled": True,
+            "pending": True,
+            "provider": self.lore_provider_label,
+            "technical_failure": False,
+            "error": None,
+            "claims": [],
+        }
+        if self._lore_executor is None:
+            self._lore_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        future = self._lore_executor.submit(resolve_lore_extraction, self.lore_provider, context)
+        self._pending_lore.append((future, dialogue_record))
+
+    def drain_lore(self, block: bool = False) -> None:
+        remaining: list[tuple[concurrent.futures.Future[LoreExtractionResolution], dict[str, Any]]] = []
+        for future, dialogue_record in self._pending_lore:
+            if not block and not future.done():
+                remaining.append((future, dialogue_record))
+                continue
+            try:
+                resolution = future.result()
+            except Exception as exc:
+                resolution = LoreExtractionResolution([], True, str(exc), self.lore_provider_label)
+            self.lore_provider_label = resolution.provider_name
+            added = self.engine.add_lore_claims(resolution.claims)
+            lore_record = dialogue_record.setdefault("lore", {})
+            lore_record.update(
+                {
+                    "enabled": True,
+                    "pending": False,
+                    "provider": resolution.provider_name,
+                    "technical_failure": resolution.technical_failure,
+                    "error": resolution.error,
+                    "raw_response": resolution.raw_response,
+                    "audit_path": resolution.audit_path,
+                    "claims": [claim.to_dict() for claim in added],
+                }
+            )
+        self._pending_lore = remaining
+
+    def close(self) -> None:
+        for future, _dialogue_record in self._pending_lore:
+            future.cancel()
+        self._pending_lore.clear()
+        if self._lore_executor is not None:
+            self._lore_executor.shutdown(wait=False, cancel_futures=True)
+            self._lore_executor = None
+
+    def _apply_replay_lore(self, dialogue_record: dict[str, Any]) -> None:
+        lore_record = dialogue_record.get("lore")
+        if not isinstance(lore_record, dict):
+            return
+        raw_claims = lore_record.get("claims") or []
+        claims = [LoreClaim.from_dict(raw) for raw in raw_claims if isinstance(raw, dict)]
+        self.engine.add_lore_claims(claims)
 
     def _browse_wares(self) -> list[str]:
         npc = self.engine.find_talk_target()
@@ -435,6 +536,7 @@ class GameSession:
         return [f"{npc.name} has for trade: {wares_text}"]
 
     def to_replay(self) -> dict[str, Any]:
+        self.drain_lore(block=True)
         return {
             "version": 1,
             "seed": self.seed,
@@ -442,6 +544,7 @@ class GameSession:
             "provider": self.provider_label,
             "dialogue_provider": self.dialogue_provider_label,
             "trade_provider": self.trade_provider_label,
+            "lore_provider": self.lore_provider_label,
             "actions": self.records,
             "final_summary": summarize_state(self.engine),
         }
@@ -610,6 +713,10 @@ def summarize_state(engine: GameEngine) -> dict[str, Any]:
         },
         "quests": [
             quest.to_dict() for quest in state.quests
+        ],
+        "lore_claims": [
+            claim.to_dict()
+            for claim in sorted(state.lore_claims, key=lambda claim: claim.id)
         ],
         "living_enemies": [
             {
