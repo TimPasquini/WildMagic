@@ -141,6 +141,17 @@ def test_scoped_ollama_routing_precedence(monkeypatch) -> None:
     assert config.ollama_num_gpu("town") == 2
 
 
+def test_scoped_ollama_settings_follow_purpose_and_route_precedence(monkeypatch) -> None:
+    monkeypatch.setenv("WILDMAGIC_OLLAMA_TIMEOUT", "100")
+    monkeypatch.setenv("WILDMAGIC_URGENT_OLLAMA_TIMEOUT", "200")
+    monkeypatch.setenv("WILDMAGIC_WILD_OLLAMA_TIMEOUT", "300")
+    monkeypatch.setenv("WILDMAGIC_BACKGROUND_OLLAMA_NUM_GPU", "0")
+
+    assert config.ollama_timeout_seconds("dialogue") == 200.0
+    assert config.ollama_timeout_seconds("wild") == 300.0
+    assert config.ollama_num_gpu("town") == 0
+
+
 def test_set_config_value_updates_process_and_dotenv(monkeypatch, tmp_path: Path) -> None:
     env_path = tmp_path / ".env"
     monkeypatch.setattr(config, "ENV_PATH", env_path)

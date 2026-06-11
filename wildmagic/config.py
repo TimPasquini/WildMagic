@@ -117,7 +117,7 @@ def _first_config_value(keys: list[str], default: str) -> str:
     return default
 
 
-def _scoped_int_value(purpose: str | None, suffix: str, default: int, minimum: int, maximum: int) -> int:
+def _scoped_int(purpose: str | None, suffix: str, default: int, minimum: int, maximum: int) -> int:
     value = _first_config_value(_scoped_keys(purpose, suffix), str(default))
     try:
         parsed = int(value)
@@ -126,7 +126,7 @@ def _scoped_int_value(purpose: str | None, suffix: str, default: int, minimum: i
     return max(minimum, min(maximum, parsed))
 
 
-def _scoped_float_value(purpose: str | None, suffix: str, default: float, minimum: float, maximum: float) -> float:
+def _scoped_float(purpose: str | None, suffix: str, default: float, minimum: float, maximum: float) -> float:
     value = _first_config_value(_scoped_keys(purpose, suffix), str(default))
     try:
         parsed = float(value)
@@ -135,7 +135,7 @@ def _scoped_float_value(purpose: str | None, suffix: str, default: float, minimu
     return max(minimum, min(maximum, parsed))
 
 
-def _scoped_bool_value(purpose: str | None, suffix: str, default: bool) -> bool:
+def _scoped_bool(purpose: str | None, suffix: str, default: bool) -> bool:
     value = _first_config_value(_scoped_keys(purpose, suffix), "1" if default else "0").lower().strip()
     if value in _TRUE_VALUES or value == "json":
         return True
@@ -181,12 +181,7 @@ def get_town_provider() -> str:
 
 
 def ollama_host(purpose: str | None = None) -> str:
-    """Return the Ollama endpoint for a provider purpose.
-
-    For a town request, precedence is:
-    WILDMAGIC_TOWN_OLLAMA_HOST -> WILDMAGIC_BACKGROUND_OLLAMA_HOST ->
-    WILDMAGIC_OLLAMA_HOST -> OLLAMA_HOST -> localhost:11434.
-    """
+    """Return the Ollama endpoint for a provider purpose."""
     keys = _scoped_keys(purpose, "OLLAMA_HOST") + ["OLLAMA_HOST"]
     return _normalize_ollama_url(_first_config_value(keys, DEFAULT_OLLAMA_HOST))
 
@@ -196,7 +191,7 @@ def get_ollama_host() -> str:
 
 
 def ollama_timeout_seconds(purpose: str | None = None) -> float:
-    return _scoped_float_value(purpose, "OLLAMA_TIMEOUT", 180.0, 5.0, 1800.0)
+    return _scoped_float(purpose, "OLLAMA_TIMEOUT", 180.0, 5.0, 1800.0)
 
 
 def ollama_num_predict() -> int:
@@ -204,14 +199,8 @@ def ollama_num_predict() -> int:
 
 
 def ollama_num_ctx(purpose: str | None = None) -> int:
-    """Context window size (prompt + response, in tokens).
-
-    Ollama defaults to 2048 when a model's Modelfile doesn't set num_ctx, and
-    qwen3:8b doesn't. The wild-magic prompt is large enough that 2048 can
-    silently truncate the instructions, so the shared default is intentionally
-    higher while still allowing per-purpose overrides.
-    """
-    return _scoped_int_value(purpose, "OLLAMA_NUM_CTX", 16384, 2048, 32768)
+    """Context window size (prompt + response, in tokens)."""
+    return _scoped_int(purpose, "OLLAMA_NUM_CTX", 16384, 2048, 32768)
 
 
 def ollama_temperature() -> float:
@@ -239,11 +228,11 @@ def ollama_trade_num_predict() -> int:
 
 
 def ollama_thinking_enabled(purpose: str | None = None) -> bool:
-    return _scoped_bool_value(purpose, "OLLAMA_THINK", False)
+    return _scoped_bool(purpose, "OLLAMA_THINK", False)
 
 
 def ollama_json_format_enabled(purpose: str | None = None) -> bool:
-    return _scoped_bool_value(purpose, "OLLAMA_FORMAT", True)
+    return _scoped_bool(purpose, "OLLAMA_FORMAT", True)
 
 
 def ollama_town_num_predict() -> int:
@@ -251,19 +240,19 @@ def ollama_town_num_predict() -> int:
 
 
 def ollama_num_gpu(purpose: str | None = None) -> int:
-    return _scoped_int_value(purpose, "OLLAMA_NUM_GPU", 999, 0, 999)
+    return _scoped_int(purpose, "OLLAMA_NUM_GPU", 999, 0, 999)
 
 
 def ollama_keep_alive(purpose: str | None = None) -> str:
     return _first_config_value(_scoped_keys(purpose, "OLLAMA_KEEP_ALIVE"), "10m")
 
 
-def ollama_resolution_attempts() -> int:
-    return _int_value("WILDMAGIC_OLLAMA_RESOLUTION_ATTEMPTS", 2, 1, 4)
-
-
 def ollama_autostart_enabled() -> bool:
     return _bool_value("WILDMAGIC_OLLAMA_AUTOSTART", True)
+
+
+def ollama_resolution_attempts() -> int:
+    return _int_value("WILDMAGIC_OLLAMA_RESOLUTION_ATTEMPTS", 2, 1, 4)
 
 
 def fallbacks_enabled() -> bool:

@@ -41,8 +41,8 @@ expectation. Used for regression testing.
 ## Game engine
 
 ### `wildmagic/engine.py`
-`GameState` dataclass and the `GameEngine` class declaration. After the Phase 4–5 refactor,
-engine.py contains only the infrastructure that everything else depends on:
+`GameState` dataclass and the `GameEngine` class declaration. Gameplay concerns are
+split into mixins, leaving engine.py with the infrastructure that everything else depends on:
 
 - `GameState` — the serialisable game world (tiles, entities, inventory, turn counter, flags, etc.)
 - `GameEngine.__init__` — seeds RNG, builds initial state, dispatches to scenario generators

@@ -15,7 +15,7 @@ Copy the example environment configuration to create a `.env` file:
 ```powershell
 cp .env.example .env
 ```
-The `.env` file is the persisted local configuration. The in-game configuration menu writes changes back to it, and existing shell environment variables override `.env` values when the process starts.
+The `.env` file is the canonical persisted configuration. The in-game configuration menu writes changes back to it, and existing shell environment variables override `.env` values when the process starts.
 
 ### 3. Run with uv
 We use [uv](https://github.com/astral-sh/uv) to manage dependencies and virtual environments. Sync dependencies and run the game:
@@ -138,7 +138,7 @@ $env:WILDMAGIC_DIALOGUE_PROVIDER='ollama'
 $env:WILDMAGIC_DIALOGUE_MODEL='qwen3:8b'
 ```
 
-If unset, `WILDMAGIC_DIALOGUE_PROVIDER` falls back to `WILDMAGIC_PROVIDER`, and `WILDMAGIC_DIALOGUE_MODEL` falls back to `WILDMAGIC_MODEL`, so a single `ollama`/`qwen3:8b` setup covers both spell resolution and dialogue. `WILDMAGIC_DIALOGUE_TEMPERATURE` (default `0.7`) and `WILDMAGIC_DIALOGUE_NUM_PREDICT` (default `200`) tune reply style and length.
+If unset, `WILDMAGIC_DIALOGUE_PROVIDER` falls back to `WILDMAGIC_PROVIDER`, and `WILDMAGIC_DIALOGUE_MODEL` falls back to `WILDMAGIC_MODEL`, so a single `ollama`/`qwen3:8b` setup covers both spell resolution and dialogue. `WILDMAGIC_DIALOGUE_TEMPERATURE` (default `0.7`) and `WILDMAGIC_DIALOGUE_NUM_PREDICT` (default `320`) tune reply style and length.
 
 Every dialogue exchange writes a JSONL audit record to `logs/dialogue_audit.jsonl`, alongside the wild-magic log, controlled by the same `WILDMAGIC_AUDIT_DIR`/`WILDMAGIC_AUDIT_LOG` settings.
 

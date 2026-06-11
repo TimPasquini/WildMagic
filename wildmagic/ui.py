@@ -76,7 +76,7 @@ _MOVE_KEY_MAP: dict[int, str] = {
 CONTROLS_HINT_WRAP = 48
 
 # ---------------------------------------------------------------------------
-# Config menu spec — each entry drives the menu display and env-var mutation
+# Config menu spec — each entry drives the menu display and .env update
 # ---------------------------------------------------------------------------
 _CONFIG_SPEC: list[dict] = [
     {

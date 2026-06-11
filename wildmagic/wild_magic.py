@@ -8,7 +8,6 @@ import urllib.error
 from typing import Any, Protocol
 
 from .config import (
-    DEFAULT_MODEL,
     audit_dir,
     get_dialogue_model,
     get_dialogue_provider,
@@ -94,13 +93,14 @@ class OllamaWildMagicProvider:
         base_url: str | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
+        self._model_override = model
         self.model = model or get_wild_magic_model()
         self.base_url = normalize_ollama_url(base_url) if base_url else ollama_host(self.purpose)
         self.timeout_seconds = timeout_seconds if timeout_seconds is not None else ollama_timeout_seconds(self.purpose)
 
     def resolve(self, spell: str, context: dict[str, Any]) -> str:
         payload = {
-            "model": self.model,
+            "model": self._model_override or get_wild_magic_model(),
             "stream": False,
             "think": ollama_thinking_enabled(self.purpose),
             "messages": _wild_prompt_messages(context),
@@ -573,13 +573,14 @@ class OllamaDialogueProvider:
         base_url: str | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
+        self._model_override = model
         self.model = model or get_dialogue_model()
         self.base_url = normalize_ollama_url(base_url) if base_url else ollama_host(self.purpose)
         self.timeout_seconds = timeout_seconds if timeout_seconds is not None else ollama_timeout_seconds(self.purpose)
 
     def reply(self, message: str, context: dict[str, Any]) -> str:
         payload = {
-            "model": self.model,
+            "model": self._model_override or get_dialogue_model(),
             "stream": False,
             "think": ollama_thinking_enabled(self.purpose),
             "messages": [
@@ -826,13 +827,14 @@ class OllamaTradeProvider:
         base_url: str | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
+        self._model_override = model
         self.model = model or get_trade_model()
         self.base_url = normalize_ollama_url(base_url) if base_url else ollama_host(self.purpose)
         self.timeout_seconds = timeout_seconds if timeout_seconds is not None else ollama_timeout_seconds(self.purpose)
 
     def propose(self, context: dict[str, Any]) -> str:
         payload = {
-            "model": self.model,
+            "model": self._model_override or get_trade_model(),
             "stream": False,
             "think": ollama_thinking_enabled(self.purpose),
             "messages": [
@@ -2034,13 +2036,14 @@ class OllamaTownProvider:
         base_url: str | None = None,
         timeout_seconds: float | None = None,
     ) -> None:
+        self._model_override = model
         self.model = model or get_town_model()
         self.base_url = normalize_ollama_url(base_url) if base_url else ollama_host(self.purpose)
         self.timeout_seconds = timeout_seconds if timeout_seconds is not None else ollama_timeout_seconds(self.purpose)
 
     def generate(self, zx: int, zy: int, context: dict[str, Any]) -> TownSpec:
         payload = {
-            "model": self.model,
+            "model": self._model_override or get_town_model(),
             "stream": False,
             "think": ollama_thinking_enabled(self.purpose),
             "messages": [
