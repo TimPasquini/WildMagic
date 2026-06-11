@@ -19,6 +19,19 @@ Wild Magic should handle arbitrary inputs gracefully by growing general systems:
 - Keep the deterministic engine in charge of legality, bounds, turn cost, state validation, and logging.
 - Make every feature playable through the headless CLI so agents can test it without manual UI work.
 
+## Design Principles
+
+- Stable world, unstable magic: persist consequences, relationships, and world facts without making future spell outcomes deterministic.
+- The engine owns truth. LLM output is an untrusted proposal until it is normalized, validated, and applied transactionally.
+- Prefer one authoritative representation for each concern. Configuration, schemas, mechanics, and persistent state should not have competing sources of truth.
+- Keep configuration user-controlled. Load local defaults from `.env`, preserve explicit shell-environment overrides, and route all consumers through one shared configuration API.
+- Separate durable world memory from magical generation. Retrieval may supply lore, history, reputation, and NPC knowledge, but must not recycle previous spell resolutions as templates.
+- Favor explicit data flow and observable boundaries over hidden global state, duplicated defaults, dynamic dispatch, or silent fallback behavior.
+- Add tests at architectural boundaries. Tests should enforce contracts such as turn consumption, transaction rollback, configuration precedence, replayability, and provider consistency.
+- Use `pyproject.toml` as the authoritative Python project and dependency metadata file, following the applicable Python packaging standards. Keep it current when dependencies, supported Python versions, build configuration, or development tooling change.
+- `uv` is a supported dependency-management and execution workflow for this repository. Keep `uv.lock` current when using it, while avoiding parallel dependency manifests or undocumented installation paths.
+- Inspect impact, coupling, affected execution paths, and test coverage before and after architectural changes. Use available structural-analysis tools as evidence to verify against source, not as infallible truth.
+
 Examples of good general work:
 
 - Add a `display_name` to statuses so "petrified", "crystallized", and "time-locked" can all use `frozen` mechanics.
@@ -143,6 +156,14 @@ Keep changes scoped and testable:
 - Make costs visible after casting, not before, except for severe warning behavior explicitly supported by the design.
 - Do not let technical LLM failures consume a turn.
 - Do not let rejected overpowered spells avoid turn cost.
+
+Keep durable repository language independent of temporary planning context:
+
+- Do not mention local working notes, temporary planning documents, deleted roadmaps, or private agent context in code comments, tests, commit messages, pull-request titles/descriptions, changelogs, or durable documentation.
+- Do not identify work as "Phase N", "Step N", "PR N", or similar unless that identifier belongs to a permanent, published project structure that will remain available to future contributors.
+- Name branches, commits, tests, modules, and documentation after the technical problem or behavior they address.
+- Explain decisions using durable architectural reasons, constraints, and behavior. Future readers must be able to understand the text using only the repository and its retained history.
+- Before committing or publishing, search changed durable files for temporary planning terminology and rewrite it in problem-domain language.
 
 Keep `docs/ARCHITECTURE.md` current. Update it whenever you add a new module, move code between files, rename a significant class, or introduce a new subsystem. The blurb for each file should reflect what actually lives there after your change, not what used to live there.
 
