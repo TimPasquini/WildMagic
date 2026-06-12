@@ -111,3 +111,13 @@ def test_model_default_is_not_owned_by_provider_or_ui_modules() -> None:
         "The model fallback/default must be owned by wildmagic.config, not provider or UI modules: "
         + ", ".join(findings)
     )
+
+
+def test_mock_session_uses_mock_town_provider(monkeypatch) -> None:
+    from wildmagic.actions import GameSession
+
+    monkeypatch.setenv("WILDMAGIC_TOWN_PROVIDER", "ollama")
+
+    session = GameSession(seed=7, scenario="frontier", provider_name="mock")
+
+    assert session.engine.town_provider.name == "mock"

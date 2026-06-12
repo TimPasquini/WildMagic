@@ -128,7 +128,11 @@ class GameSession:
     ) -> None:
         self.seed = seed
         self.scenario = scenario
-        self.engine = GameEngine(seed=seed, scenario=scenario)
+        self.engine = GameEngine(
+            seed=seed,
+            scenario=scenario,
+            provider_name=provider_name,
+        )
         self.provider = provider or make_provider(provider_name)
         self.provider_label = getattr(self.provider, "name", "unknown")
         self.dialogue_provider = dialogue_provider or make_dialogue_provider(dialogue_provider_name)
