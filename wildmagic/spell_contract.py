@@ -32,6 +32,7 @@ SUPPORTED_EFFECTS = {
     "set_flag",
     "schedule_event",
     "create_trigger",
+    "create_promise",
     "add_curse",
     "message",
 }

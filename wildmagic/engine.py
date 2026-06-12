@@ -33,9 +33,7 @@ from .models import (
     Curse,
     Entity,
     GameStats,
-    LoreClaim,
     NPCProfile,
-    Quest,
     TILE_NAMES,
     TILE_ALIASES,
     TILE_TAGS,
@@ -49,6 +47,19 @@ from .items import _ItemsMixin
 from .templates import creature_template, creature_template_ids, item_template, item_template_ids
 from .props import get_prop_template, get_all_prop_ids
 from .regions import Region, get_region
+from .promises import (
+    PROMISE_LEDGER_LIMIT,
+    PROMISE_RESERVATION_LIMIT,
+    PromiseReservation,
+    Objective,
+    QuestLogEntry,
+    Reward,
+    WorldPromise,
+    bind_promise,
+    journal_entry,
+    normalize_flesh,
+    promise_context_for_prompt,
+)
 from .game_data import (
     MAP_WIDTH,
     MAP_HEIGHT,
@@ -154,9 +165,6 @@ _PROP_TAG_AFFORDANCES: dict[str, list[str]] = {
 
 
 _PROP_GENERIC_AFFORDANCES = ["use as a spell center", "flavor the outcome", "anchor a summon or terrain change"]
-_LORE_LEDGER_LIMIT = 200
-
-
 @dataclass
 class GameState:
     width: int = MAP_WIDTH
@@ -184,9 +192,7 @@ class GameState:
     npc_profiles: dict[str, NPCProfile] = field(default_factory=dict)
     pending_trade: dict[str, Any] | None = None
     flags: dict[str, Any] = field(default_factory=dict)
-    quests: list[Quest] = field(default_factory=list)
     last_talked_npc_name: str | None = None
-    known_quest_items: set[str] = field(default_factory=set)
     tile_tags: dict[str, list[str]] = field(default_factory=dict)
     tile_durations: dict[str, int] = field(default_factory=dict)
     event_timers: list[dict[str, Any]] = field(default_factory=list)
@@ -207,7 +213,8 @@ class GameState:
     zones: dict[tuple[int, int], ZoneSnapshot] = field(default_factory=dict)
     dungeon_floors: dict[int, ZoneSnapshot] = field(default_factory=dict)
     _player_taking_damage: bool = False
-    lore_claims: list[LoreClaim] = field(default_factory=list)
+    promises: list[WorldPromise] = field(default_factory=list)
+    promise_reservations: dict[tuple[int, int], list[PromiseReservation]] = field(default_factory=dict)
 
     @property
     def player(self) -> Entity:
@@ -692,46 +699,169 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             return None
         return min(candidates, key=lambda entity: entity.id)
 
-    def add_lore_claims(self, claims: list[LoreClaim]) -> list[LoreClaim]:
-        added: list[LoreClaim] = []
-        significant_change = False
-        for claim in claims:
-            if not claim.text.strip():
+    def add_promises(self, promises: list[WorldPromise]) -> list[WorldPromise]:
+        added: list[WorldPromise] = []
+        reserved_zones: set[tuple[int, int]] = set()
+        for promise in promises:
+            if not promise.text.strip():
                 continue
-            duplicate = self._matching_lore_claim(claim)
+            duplicate = self._matching_promise(promise)
             if duplicate is not None:
-                self._merge_lore_claim(duplicate, claim)
-                significant_change = significant_change or duplicate.salience >= 4
+                self._merge_promise(duplicate, promise)
+                reservation = self._bind_and_reserve_promise(duplicate)
+                if reservation is not None:
+                    reserved_zones.add(reservation.zone)
                 continue
-            self.state.lore_claims.append(claim)
-            added.append(claim)
-            significant_change = significant_change or claim.salience >= 4
-        self.state.lore_claims.sort(key=lambda claim: (claim.source_turn, claim.id))
-        self._trim_lore_claims()
-        if significant_change:
-            self._invalidate_pending_town_generation()
+            self.state.promises.append(promise)
+            added.append(promise)
+            reservation = self._bind_and_reserve_promise(promise)
+            if reservation is not None:
+                reserved_zones.add(reservation.zone)
+        self.state.promises.sort(key=lambda promise: (promise.source_turn, promise.id))
+        self._trim_promises()
+        for zone in reserved_zones:
+            self._invalidate_pending_town_generation(zone)
         return added
 
-    def _matching_lore_claim(self, claim: LoreClaim) -> LoreClaim | None:
-        claim_subject = normalize_id(claim.subject)
-        claim_tags = {normalize_id(tag) for tag in claim.tags if tag}
-        claim_text = claim.text.strip().lower()
-        for existing in self.state.lore_claims:
-            if existing.id == claim.id:
+    def journal_entries(self) -> list[dict[str, Any]]:
+        """Everything the world has told the player, except quests (those have the
+        quest log). Open entries newest-first; settled history sinks to the bottom."""
+        open_entries: list[dict[str, Any]] = []
+        closed_entries: list[dict[str, Any]] = []
+        for promise in self.state.promises:
+            if promise.kind == "quest":
+                continue
+            entry = journal_entry(promise)
+            if entry["status"] in {"settled", "proved false"}:
+                closed_entries.append(entry)
+            else:
+                open_entries.append(entry)
+        open_entries.sort(key=lambda entry: (-entry["turn"], entry["id"]))
+        closed_entries.sort(key=lambda entry: (-entry["turn"], entry["id"]))
+        return open_entries + closed_entries
+
+    def fulfill_promise(self, promise_id: str, realized_in: str | None = None) -> WorldPromise | None:
+        for promise in self.state.promises:
+            if promise.id == promise_id:
+                promise.status = "fulfilled"
+                if realized_in:
+                    promise.realized_in = realized_in
+                return promise
+        return None
+
+    def apply_promise_flesh(self, promise_id: str, flesh: dict[str, Any] | None) -> WorldPromise | None:
+        """Attach background-model decoration to a promise. Decoration only: this never
+        creates, moves, unbinds, or realizes anything."""
+        normalized = normalize_flesh(flesh)
+        if normalized is None:
+            return None
+        for promise in self.state.promises:
+            if promise.id == promise_id:
+                promise.flesh = normalized
+                return promise
+        return None
+
+    def add_quest_promise(
+        self,
+        *,
+        name: str,
+        description: str,
+        contact: str,
+        location: str,
+        objective: Objective | None = None,
+        reward: Reward | None = None,
+        source: str | None = None,
+        tags: list[str] | None = None,
+    ) -> WorldPromise:
+        promise_id = f"quest_{normalize_id(contact)}_{normalize_id(name)}"
+        existing = next((promise for promise in self.state.promises if promise.id == promise_id), None)
+        if existing is not None:
+            return existing
+        promise = WorldPromise(
+            id=promise_id,
+            kind="quest",
+            subject=name,
+            text=description,
+            tags=list(tags or ["quest"]),
+            source=source or f"quest:{contact}",
+            source_turn=self.state.turn,
+            origin_zone=(self.state.zone_x, self.state.zone_y),
+            salience=5,
+            confidence=1.0,
+            objective=objective,
+            reward=reward,
+            giver_npc=contact,
+            status="unverified",
+            location=location,
+        )
+        self.add_promises([promise])
+        return promise
+
+    def quest_log_entries(self) -> list[QuestLogEntry]:
+        entries: list[QuestLogEntry] = []
+        for promise in sorted(self.state.promises, key=lambda item: (item.status == "fulfilled", item.source_turn, item.subject.lower())):
+            if promise.kind != "quest":
+                continue
+            entries.append(
+                QuestLogEntry(
+                    id=promise.id,
+                    name=promise.subject,
+                    description=promise.text,
+                    contact=promise.giver_npc or promise.source,
+                    location=promise.realized_in or promise.location or "unknown",
+                    status="completed" if promise.status == "fulfilled" else "active",
+                )
+            )
+        return entries
+
+    def complete_quest_by_index(self, index: int) -> QuestLogEntry | None:
+        entries = self.quest_log_entries()
+        if index < 0 or index >= len(entries):
+            return None
+        entry = entries[index]
+        promise = next((item for item in self.state.promises if item.id == entry.id), None)
+        if promise is None:
+            return None
+        promise.status = "fulfilled"
+        return QuestLogEntry(entry.id, entry.name, entry.description, entry.contact, entry.location, "completed")
+
+    def remove_quest_by_index(self, index: int) -> QuestLogEntry | None:
+        entries = self.quest_log_entries()
+        if index < 0 or index >= len(entries):
+            return None
+        entry = entries[index]
+        self.state.promises = [promise for promise in self.state.promises if promise.id != entry.id]
+        self.state.promise_reservations = {
+            zone: [reservation for reservation in reservations if reservation.promise_id != entry.id]
+            for zone, reservations in self.state.promise_reservations.items()
+        }
+        self.state.promise_reservations = {
+            zone: reservations for zone, reservations in self.state.promise_reservations.items() if reservations
+        }
+        return entry
+
+    def _matching_promise(self, promise: WorldPromise) -> WorldPromise | None:
+        promise_subject = normalize_id(promise.subject)
+        promise_tags = {normalize_id(tag) for tag in promise.tags if tag}
+        promise_text = promise.text.strip().lower()
+        for existing in self.state.promises:
+            if existing.id == promise.id:
                 return existing
-            if existing.text.strip().lower() == claim_text:
+            if existing.text.strip().lower() == promise_text:
                 return existing
             existing_subject = normalize_id(existing.subject)
-            if not claim_subject or claim_subject != existing_subject:
+            if not promise_subject or promise_subject != existing_subject:
                 continue
             existing_tags = {normalize_id(tag) for tag in existing.tags if tag}
-            if not claim_tags or not existing_tags or claim_tags & existing_tags:
+            if not promise_tags or not existing_tags or promise_tags & existing_tags:
                 return existing
         return None
 
-    def _merge_lore_claim(self, existing: LoreClaim, incoming: LoreClaim) -> None:
+    def _merge_promise(self, existing: WorldPromise, incoming: WorldPromise) -> None:
         existing.salience = min(5, max(existing.salience, incoming.salience) + 1)
         existing.confidence = max(existing.confidence, incoming.confidence)
+        if not existing.what and incoming.what:
+            existing.what = incoming.what
         for tag in incoming.tags:
             tag_id = normalize_id(tag)
             if tag_id and tag_id not in existing.tags:
@@ -739,24 +869,74 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         if existing.status not in {"verified", "false", "redeemed"} and incoming.status not in {"false"}:
             existing.status = "corroborated"
 
-    def _trim_lore_claims(self) -> None:
-        if len(self.state.lore_claims) <= _LORE_LEDGER_LIMIT:
+    def _bind_and_reserve_promise(self, promise: WorldPromise) -> PromiseReservation | None:
+        reservation = bind_promise(
+            promise,
+            explored_zones=set(self.state.zones) | {(self.state.zone_x, self.state.zone_y)},
+            reserved_counts=self._promise_reservation_counts(),
+        )
+        if reservation is None:
+            return None
+        return self._reserve_promise(reservation)
+
+    def _promise_reservation_counts(self) -> dict[tuple[int, int], int]:
+        return {
+            zone: sum(reservation.capacity_cost for reservation in reservations)
+            for zone, reservations in self.state.promise_reservations.items()
+        }
+
+    def _reserve_promise(self, reservation: PromiseReservation) -> PromiseReservation | None:
+        existing = self.state.promise_reservations.setdefault(reservation.zone, [])
+        if any(item.promise_id == reservation.promise_id for item in existing):
+            return None
+        existing.append(reservation)
+        self._trim_promise_reservations()
+        return reservation
+
+    def _trim_promise_reservations(self) -> None:
+        all_reservations = [
+            reservation
+            for reservations in self.state.promise_reservations.values()
+            for reservation in reservations
+        ]
+        if len(all_reservations) <= PROMISE_RESERVATION_LIMIT:
+            return
+        keep_ids = {reservation.promise_id for reservation in all_reservations[-PROMISE_RESERVATION_LIMIT:]}
+        self.state.promise_reservations = {
+            zone: [reservation for reservation in reservations if reservation.promise_id in keep_ids]
+            for zone, reservations in self.state.promise_reservations.items()
+        }
+        self.state.promise_reservations = {
+            zone: reservations
+            for zone, reservations in self.state.promise_reservations.items()
+            if reservations
+        }
+
+    def _trim_promises(self) -> None:
+        if len(self.state.promises) <= PROMISE_LEDGER_LIMIT:
             return
         ranked = sorted(
-            self.state.lore_claims,
-            key=lambda claim: (
-                claim.status == "redeemed",
-                claim.salience,
-                claim.confidence,
-                claim.source_turn,
-                claim.id,
+            self.state.promises,
+            key=lambda promise: (
+                promise.status in {"realized", "fulfilled", "redeemed"},
+                promise.salience,
+                promise.confidence,
+                promise.source_turn,
+                promise.id,
             ),
         )
-        keep = set(claim.id for claim in ranked[-_LORE_LEDGER_LIMIT:])
-        self.state.lore_claims = [claim for claim in self.state.lore_claims if claim.id in keep]
+        keep = set(promise.id for promise in ranked[-PROMISE_LEDGER_LIMIT:])
+        self.state.promises = [promise for promise in self.state.promises if promise.id in keep]
 
-    def _invalidate_pending_town_generation(self) -> None:
+    def _invalidate_pending_town_generation(self, zone: tuple[int, int] | None = None) -> None:
         if not self._pending_towns:
+            return
+        if zone is not None:
+            future = self._pending_towns.pop(zone, None)
+            self._pending_town_contexts.pop(zone, None)
+            self._pending_town_start_times.pop(zone, None)
+            if future is not None:
+                future.cancel()
             return
         for future in self._pending_towns.values():
             future.cancel()
@@ -764,37 +944,49 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         self._pending_town_contexts.clear()
         self._pending_town_start_times.clear()
 
-    def lore_claims_for_context(
+    def promises_for_context(
         self,
         *,
         subject: str | None = None,
         tags: set[str] | None = None,
-        include_redeemed: bool = False,
+        include_realized: bool = False,
         limit: int = 8,
         text_limit: int = 240,
     ) -> list[dict[str, Any]]:
-        from .lore import lore_context_for_prompt
-
         wanted_terms = {normalize_id(part) for part in re.findall(r"[A-Za-z0-9_'-]+", subject or "") if len(part) >= 3}
         wanted_tags = {normalize_id(tag) for tag in (tags or set()) if tag}
-        ranked: list[tuple[int, LoreClaim]] = []
-        for claim in self.state.lore_claims:
-            if claim.status == "redeemed" and not include_redeemed:
+        ranked: list[tuple[int, WorldPromise]] = []
+        for promise in self.state.promises:
+            if promise.status in {"realized", "fulfilled", "redeemed"} and not include_realized:
                 continue
-            claim_terms = set(normalize_id(claim.subject).split("_"))
-            claim_terms.update(normalize_id(tag) for tag in claim.tags)
-            score = claim.salience * 10 + int(claim.confidence * 5)
-            if claim.zone_x == self.state.zone_x and claim.zone_y == self.state.zone_y:
+            promise_terms = set(normalize_id(promise.subject).split("_"))
+            promise_terms.update(normalize_id(tag) for tag in promise.tags)
+            score = promise.salience * 10 + int(promise.confidence * 5)
+            if promise.origin_zone == (self.state.zone_x, self.state.zone_y):
                 score += 12
-            if wanted_terms & claim_terms:
+            if wanted_terms & promise_terms:
                 score += 18
-            if wanted_tags & claim_terms:
+            if wanted_tags & promise_terms:
                 score += 10
-            if claim.location == self.state.location_label():
+            if promise.location == self.state.location_label():
                 score += 6
-            ranked.append((score, claim))
+            ranked.append((score, promise))
         ranked.sort(key=lambda item: (-item[0], -item[1].source_turn, item[1].subject.lower()))
-        return lore_context_for_prompt([claim for _, claim in ranked[:limit]], limit=limit, text_limit=text_limit)
+        return promise_context_for_prompt([promise for _, promise in ranked[:limit]], limit=limit, text_limit=text_limit)
+
+    def promise_hooks_for_zone(self, zone: tuple[int, int], *, limit: int = 3, text_limit: int = 240) -> list[dict[str, Any]]:
+        reservations = self.state.promise_reservations.get(zone, [])[:limit]
+        by_id = {promise.id: promise for promise in self.state.promises}
+        hooks: list[dict[str, Any]] = []
+        for reservation in reservations:
+            promise = by_id.get(reservation.promise_id)
+            if promise is None or promise.status in {"realized", "fulfilled", "redeemed"}:
+                continue
+            hook = promise_context_for_prompt([promise], limit=1, text_limit=text_limit)[0]
+            hook["blueprint"] = reservation.blueprint
+            hook["bound_zone"] = list(reservation.zone)
+            hooks.append(hook)
+        return hooks
 
     def lore_extraction_context(self, npc: Entity, message: str, reply: str) -> dict[str, Any]:
         return {
@@ -805,19 +997,8 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             "message": message,
             "reply": reply,
             "npc_profile": self.state.npc_profiles[npc.id].to_dialogue_context(),
-            "existing_lore": self.lore_claims_for_context(subject=npc.name, tags=npc.tags, limit=5, text_limit=160),
+            "existing_lore": self.promises_for_context(subject=npc.name, tags=npc.tags, limit=5, text_limit=160),
         }
-
-    def mark_lore_redeemed(self, claim_ids: list[str], redeemed_in: str) -> list[LoreClaim]:
-        redeemed: list[LoreClaim] = []
-        wanted = set(claim_ids)
-        for claim in self.state.lore_claims:
-            if claim.id not in wanted or claim.status == "redeemed":
-                continue
-            claim.status = "redeemed"
-            claim.redeemed_in = redeemed_in
-            redeemed.append(claim)
-        return redeemed
 
     def dialogue_context_for_llm(self, npc: Entity, message: str) -> dict[str, Any]:
         profile = self.state.npc_profiles[npc.id]
@@ -833,9 +1014,31 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             },
             "scene": {"turn": self.state.turn, "depth": self.state.depth, "scenario": self.state.scenario,
                       "region": self.region.name},
-            "relevant_lore": self.lore_claims_for_context(subject=npc.name, tags=npc.tags, limit=5, text_limit=160),
+            "nearby_objects": self._npc_nearby_objects(npc),
+            "relevant_lore": self.promises_for_context(subject=npc.name, tags=npc.tags, limit=5, text_limit=160),
             "message": message,
         }
+
+    def _npc_nearby_objects(self, npc: Entity, radius: int = NPC_PERCEPTION_RADIUS, limit: int = 8) -> list[dict[str, Any]]:
+        """Props and loose items within the NPC's perception, nearest first, so the NPC
+        can talk about the objects in the room around them."""
+        nearby: list[tuple[int, str, Entity]] = []
+        for entity in self.state.entities.values():
+            if entity.kind not in {"prop", "item"} or entity.id == npc.id:
+                continue
+            distance = max(abs(entity.x - npc.x), abs(entity.y - npc.y))
+            if distance <= radius:
+                nearby.append((distance, entity.id, entity))
+        nearby.sort()
+        return [
+            {
+                "name": entity.name,
+                "what": "object" if entity.kind == "prop" else "loose item",
+                "description": entity.description,
+                "tags": sorted(entity.tags),
+            }
+            for _, _, entity in nearby[:limit]
+        ]
 
     def should_consider_trade(self, npc: Entity, message: str, reply: str) -> bool:
         """Stages 1+2 of the trigger funnel that gates the expensive structuring
@@ -992,10 +1195,9 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 if item_name == profile.wanted_item.lower() and qty >= profile.wanted_qty:
                     profile.quest_completed = True
                     self.state.add_message(f"Quest completed: You delivered {profile.wanted_item} to {profile.name}!")
-                    # Mark corresponding Quest object as completed
-                    for q in self.state.quests:
-                        if q.contact == profile.name and q.status == "active":
-                            q.status = "completed"
+                    for promise in self.state.promises:
+                        if promise.kind == "quest" and promise.giver_npc == profile.name and promise.status != "fulfilled":
+                            promise.status = "fulfilled"
                     break
 
         self.finish_player_turn()
@@ -1506,6 +1708,12 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
 
     def _trigger_event(self, event: dict[str, Any]) -> None:
         event_type = str(event.get("event_type") or event.get("type") or "message").lower()
+        # Timers are the temporal executor of the Promise Ledger, the way zone
+        # generation is its spatial one: a timer carrying a promise_id settles
+        # that promise when it fires (e.g. the debt collector arriving).
+        promise_id = str(event.get("promise_id") or "")
+        if promise_id:
+            self.fulfill_promise(promise_id, realized_in=f"turn {self.state.turn}")
         if event_type == "message":
             text = str(event.get("text") or event.get("message") or "Something promised arrives late.")
             self.state.add_message(text)

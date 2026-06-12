@@ -29,8 +29,8 @@ Catastrophic spell: dangerous effects, severe permanent costs, or rejection.
 
 Effect catalog:
 - damage: target, amount, damage_type.
-- area_damage: target (center entity or "player"), radius 0-4, amount, damage_type, include_player boolean, affects "enemies|non_player|allies|all".
-- area_status: target (center), radius 0-4, status, duration, affects "enemies|non_player|allies|all". Use for "slow all enemies in sight", "confuse everything nearby", etc.
+- area_damage: target (center entity), radius 0-4, amount, damage_type, include_player boolean, affects "enemies|non_player|allies|all". Center the blast where the spell aims: the named enemy's id or "nearest_enemy" for thrown/hurled/aimed blasts, "player" only for novas and auras bursting outward from the caster.
+- area_status: target (center, same aiming rule as area_damage), radius 0-4, status, duration, affects "enemies|non_player|allies|all". Use for "slow all enemies in sight", "confuse everything nearby", etc.
 - heal or restore_mana: target, amount.
 - teleport: target, x, y.
 - push or pull: target, origin or dx/dy, distance.
@@ -40,7 +40,7 @@ Effect catalog:
 - spawn_item: name, item_type, x, y, char, material, quantity, tags.
 - conjure_item: template, name, material, tags, target, placement, count.
 - conjure_creature: template, name, faction ("ally" or "enemy"), tags, placement, count. Always include faction.
-- modify_inventory, transform_entity, change_faction, add_tag, remove_tag, add_resistance (fields: target, damage_type, amount), add_weakness (fields: target, damage_type, amount), set_flag, schedule_event, create_trigger, message.
+- modify_inventory, transform_entity, change_faction, add_tag, remove_tag, add_resistance (fields: target, damage_type, amount), add_weakness (fields: target, damage_type, amount), set_flag, schedule_event, create_trigger, create_promise, message.
 
 Valid target strings: "player", "nearest_enemy", or a specific entity id from context. For add_status, you may also use "all_enemies" or "enemies" to affect all enemies, or "all" for everyone.
 
@@ -56,6 +56,7 @@ Balance rules:
 - If the spell is a literal win button or infinite resource exploit with no cost, reject or make it catastrophic.
 - Big damage, big area, big effects are fine — they need commensurate costs (mana, health, curses, items).
 - Use affects "enemies" for spells that should only harm foes.
+- When the spell names or aims at a foe (a fireball thrown at the goblin, "engulf the cultist in flame"), center area effects on that foe — its entity id or "nearest_enemy" — never on "player". A player-centered blast with a small radius misses distant enemies entirely.
 - Keep effects local and concrete. Prefer entity ids from context.
 - The user JSON includes spell_anchors: visible environmental props sorted toward relevance. When the spell mentions surroundings, materials, objects, altars, braziers, mirrors, water, blood, bone, machinery, notices, cages, plants, webs, crystals, lights, books, bells, shrines, or other scenery, scan spell_anchors before choosing a generic resolution.
 - Use actual prop ids from spell_anchors as target/center/origin/placement anchors for create_tiles, area_damage, area_status, summon, conjure_item, conjure_creature, create_trigger, push, or pull. Use a prop's tags/affordances to flavor the mechanics.
@@ -67,6 +68,7 @@ Balance rules:
 - For tracking, glowing shadow, locate, or reveal spells, use add_status with status "revealed" on the target.
 - For spells promising a delayed payoff or future consequence, use schedule_event to create the payoff. schedule_event fields: turns (number), event_type (summon|message|damage|heal|status|flood|curse|conjure), plus event-specific fields (name, hp, attack, faction, amount, tile, status, etc.).
 - For "next time X happens, Y happens" spells, use create_trigger. Fields: trigger ("on_next_spell|on_player_hit|on_player_damaged|on_player_move|on_enemy_hit|on_enemy_damaged|on_enemy_death"), target ("player|nearest_enemy|all_enemies|any"), charges, duration, name, effects. Trigger effects may use target:"trigger_target" or target:"trigger_source".
+- For prophecy spells - speaking a place, person, danger, or treasure into existence somewhere beyond this map ("somewhere north a chapel waits", "I prophesy a blade with my name on it") - use create_promise. Fields: kind ("prophecy|threat|place|person"), subject, text (the prophecy in the caster's words), what (the concrete thing: chapel, camp, witch, cache, tomb...), where (direction words if spoken: "north", "east of here"), item (ONLY if the prophecy promises a specific object the player will claim), quantity, salience (1-5, how strongly fate is bent). The world will genuinely build what binds. The engine adds steep costs on top of yours - prophesied treasure always incurs Wild Debt. Use this only when the spell speaks about the wider world; effects on this map use normal effects.
 - For physically impossible global requests (reverse gravity for everything, turn all walls into X), reject with a creative reason or give a local creative interpretation using available effects.
 
 Useful tiles: floor, wall, door, open_door, stairs_down, stairs_up, water, fire, slick_ice, ice_wall, poison_cloud, vines, rubble, mist. Also accepted: lava/magma→fire, caltrops/thorns/web/net→vines, spikes/debris/bones→rubble, smoke/fog→mist, acid→poison_cloud, iron_bars/barrier→ice_wall.
@@ -108,6 +110,7 @@ Good examples:
 {"accepted": true, "severity": "moderate", "outcome_text": "The goblin spits out a brittle little treasure.", "effects": [{"type": "damage", "target": "nearest_enemy", "amount": 3, "damage_type": "physical"}, {"type": "add_status", "target": "nearest_enemy", "status": "bleeding", "duration": 3}, {"type": "conjure_item", "template": "body_part", "name": "glass teeth", "material": "glass", "tags": ["fragile", "tooth"], "target": "nearest_enemy", "placement": "target_tile"}], "costs": [{"type": "mana", "amount": 3}], "rejected_reason": null}
 {"accepted": true, "severity": "minor", "outcome_text": "Blue webbing pins the target in place.", "effects": [{"type": "add_status", "target": "nearest_enemy", "status": "webbed", "duration": 3}, {"type": "conjure_item", "template": "generic_object", "name": "sticky blue webbing", "material": "silk", "target": "nearest_enemy", "placement": "target_tile"}], "costs": [{"type": "item", "item": "chalk", "amount": 1}], "rejected_reason": null}
 {"accepted": true, "severity": "moderate", "outcome_text": "Time thickens around your enemies.", "effects": [{"type": "area_status", "target": "player", "radius": 4, "status": "slowed", "duration": 4, "affects": "enemies"}], "costs": [{"type": "mana", "amount": 4}], "rejected_reason": null}
+{"accepted": true, "severity": "moderate", "outcome_text": "The orb bursts against your foe in a rose of flame, petals of fire licking outward.", "effects": [{"type": "area_damage", "target": "nearest_enemy", "radius": 2, "amount": 5, "damage_type": "fire", "include_player": false, "affects": "enemies"}], "costs": [{"type": "mana", "amount": 5}], "rejected_reason": null}
 {"accepted": true, "severity": "moderate", "outcome_text": "Two wolves pour out of the spell like spilled ink, tongues lolling, delighted.", "effects": [{"type": "conjure_creature", "template": "small_beast", "name": "shadow wolf", "count": 2, "faction": "ally", "tags": ["wolf", "predator"], "placement": "near_player"}], "costs": [{"type": "mana", "amount": 5}, {"type": "curse", "id": "wild_debt", "name": "Wild Debt", "description": "The wild expects repayment."}], "rejected_reason": null}
 {"accepted": true, "severity": "major", "outcome_text": "Wounds close. In five turns, something hostile will arrive to collect.", "effects": [{"type": "heal", "target": "player", "amount": 8}, {"type": "schedule_event", "turns": 5, "event_type": "summon", "name": "wrath echo", "char": "W", "hp": 10, "attack": 4, "faction": "enemy"}], "costs": [{"type": "mana", "amount": 3}], "rejected_reason": null}
 {"accepted": true, "severity": "moderate", "outcome_text": "Your bones remember fire.", "effects": [{"type": "add_resistance", "target": "player", "damage_type": "fire", "amount": 50}], "costs": [{"type": "mana", "amount": 6}, {"type": "curse", "id": "fire_debt", "name": "Fire Debt", "description": "Something hot is owed."}], "rejected_reason": null}
@@ -119,6 +122,7 @@ Good examples:
 {"accepted": true, "severity": "moderate", "outcome_text": "Fire leaps up around you in a bright, eager ring.", "effects": [{"type": "create_tiles", "tile": "fire", "target": "player", "radius": 3, "hollow": true, "duration": 5}], "costs": [{"type": "mana", "amount": 5}], "rejected_reason": null}
 {"accepted": true, "severity": "minor", "outcome_text": "Ice unrolls toward your enemy like a silver carpet.", "effects": [{"type": "create_tiles", "shape": "line", "origin": "player", "target": "nearest_enemy", "tile": "slick_ice", "duration": 4}], "costs": [{"type": "mana", "amount": 3}], "rejected_reason": null}
 {"accepted": true, "severity": "moderate", "outcome_text": "Your wound learns to answer.", "effects": [{"type": "create_trigger", "name": "thorn-blood answer", "trigger": "on_player_hit", "target": "player", "charges": 1, "duration": 6, "effects": [{"type": "damage", "target": "trigger_source", "amount": 5, "damage_type": "physical"}, {"type": "add_status", "target": "trigger_source", "status": "bleeding", "duration": 3}]}], "costs": [{"type": "mana", "amount": 4}], "rejected_reason": null}
+{"accepted": true, "severity": "major", "outcome_text": "You speak the blade into the world's debt-book. Somewhere north, steel begins to wait.", "effects": [{"type": "create_promise", "kind": "prophecy", "subject": "a blade that knows my name", "text": "Somewhere north of here, a blade waits with my name on it.", "what": "cache", "where": "north", "item": "named blade", "salience": 4}], "costs": [{"type": "mana", "amount": 6}], "rejected_reason": null}
 {"accepted": false, "severity": "catastrophic", "outcome_text": "", "effects": [], "costs": [], "rejected_reason": "Reality refuses to become that convenient."}
 """.replace("{supported_statuses}", SUPPORTED_STATUS_TEXT)
 
@@ -173,9 +177,18 @@ Guidelines:
 - Use "things_i_have_noticed" and "recent_conversation" so you sound aware of the world and
   consistent with what you've already said. Reference them naturally when relevant - don't
   recite them like a list.
+- "nearby_objects" lists the furniture, props, and loose items around you, nearest first.
+  You live with these things - if the player asks about something in the room, answer from
+  its description like someone who sees it every day, with your own history or opinion of
+  it. Don't inventory them unprompted, but it's natural to glance at or gesture toward one
+  when it fits the conversation.
 - React the way your character actually would to what the player says, including confusion,
   suspicion, amusement, or alarm at anything strange. Don't explain game rules or describe
   yourself in the third person.
+- When you mention a place, person, or thing somewhere beyond this conversation - a rumor,
+  a warning, a place worth seeing - anchor it loosely in the world the way locals do:
+  "north of town", "east along the road", "out in the marshes", "at the old windmill".
+  Vague is fine; placeless is not. Skip this for abstractions and things close at hand.
 """
 
 
@@ -253,7 +266,7 @@ NPCs: number of NPCs is given by npc_count_range in the user message. Include a 
 Naming rule: folk and wild things favor earthy compounds (Saltmarket, Hollowmere, the Glasswild); anything imperial — offices, taxes, edicts, official roles — sounds cold and Latinate (the Censorate, Provincial Edict 44).
 Names: invent distinctive, culturally varied names — not generic fantasy. Mix naming styles: short rough names (Dav, Fen, Rust), foreign-sounding names, names with epithets (One-Eye, the Mute), names that hint at history. Avoid names ending in -ius, -iel, -yn, or starting with El-, Al-, Thal-.
 Wares: most NPCs should have 1-3 items they can trade (include "gold" as one, quantity 5-30). Merchants and traders should have more (4-7 items). Invent creative, specific items suited to each NPC's role and backstory — e.g. a tanner might sell "cured hide strips" and "tallow candles"; a disgraced soldier might sell "a dented Imperial buckle" and "faded campaign maps"; a hedge witch might sell "dried crow feet" and "a stoppered vial of bad dreams". Do not limit yourself to any fixed list. "gold" is always acceptable as a trade currency.
-The user message may include lore_hooks: attributed rumors or background claims that already exist in the campaign. When lore_hooks are present, redeem at least one of the highest-salience hooks into the settlement's description, a building, an NPC backstory, local trouble, or wares. Treat hooks as local belief, rumor, or history rather than guaranteed objective truth unless their status says verified.
+The user message may include promise_hooks: attributed world promises reserved for this zone. When promise_hooks are present, realize at least one of the highest-salience hooks into the settlement's description, a building, an NPC backstory, local trouble, or wares. Treat hooks as local belief, rumor, or history rather than guaranteed objective truth unless their status says verified.
 The building field for each NPC should match one of the building types you listed, or null if they are outdoors."""
 
 
@@ -264,9 +277,11 @@ Shape:
 {
   "claims": [
     {
-      "kind": "rumor|background|quest_hook|place|person|threat|custom",
+      "kind": "rumor|background|place|person|threat|quest|prophecy|rendezvous|custom",
       "subject": "short noun phrase",
       "text": "one concrete claim, attributed when useful",
+      "where": "direction or place words exactly as said, or null",
+      "what": "concrete thing claimed to exist, or null",
       "status": "unverified|rumored|verified|contested|false",
       "confidence": 0.0,
       "salience": 1,
@@ -275,10 +290,32 @@ Shape:
   ]
 }
 
-Extract 0-3 claims. Empty is usually correct.
+Extract 0-3 claims. Empty is usually correct - most exchanges contain zero claims.
 Extract only concrete, reusable claims from the NPC reply: rumors, named places, backstory, local trouble, possible quest hooks, threats, relationships, notable objects, or recurring mysteries.
+Opinions, philosophy, warnings, sales talk, and requests for items are NOT claims. "The saints care not for squabbles" is philosophy; "bring me grave salt" is a request; neither is a claim.
+Use where for phrases like "north of town", "east", "in the woods", "near the south road", or a named place, copied as the speaker said them. Use what ONLY for a concrete thing claimed to exist at some place the player could go find: chapel, camp, witch, cache, tomb, investigator, checkpoint, shrine. Never use what for an item someone holds, wants, or trades, nor for an abstraction.
+Tags name what the claim is about - its referent - never items merely mentioned in passing.
 The player's message is context, not truth. Do not extract a claim merely because the player asserted it.
 Do not invent details. Do not summarize ordinary greetings, moods, jokes, refusals, or vague opinions.
 Use status "unverified" by default. Use "rumored" for hearsay, "verified" only when the NPC claims direct knowledge, "contested" for disputed claims, and "false" only when the NPC explicitly denies something. The engine may later mark repeated matching claims as "corroborated"; do not use that status yourself.
+Confidence is how literally the world should honor the claim: 0.9+ only for first-hand facts about real things and places, ~0.6 for ordinary hearsay, 0.3 or less for hedged or fanciful talk. Most claims are not 0.9.
 Salience is 1-5: 1 for color, 3 for useful future context, 5 for material that could shape a future location, NPC, quest, or threat.
 Keep text short enough to show back to another model as context."""
+
+
+FLESH_SYSTEM_PROMPT = """You write small narrative decorations for a place the game has already committed to build, in a fantasy roguelike of vivid color set against a handsome, cold Empire.
+Return ONLY one JSON object, no markdown, no commentary, no <think> text.
+
+Shape (every field optional - omit what you cannot improve):
+{
+  "site_name": "evocative proper name for the place",
+  "keeper_name": "name for the person who keeps it",
+  "keeper_backstory": "one or two sentences of who they are and why they stayed",
+  "prop_description": "one sentence describing a notable object there",
+  "arrival_line": "one sentence shown when the player first arrives and the rumor proves true"
+}
+
+You are given the rumor that promised this place (subject, text, tags) and its blueprint.
+Stay faithful to what was claimed - decorate the rumor, never contradict or replace it.
+You cannot change what the place is, where it is, or who must be there; the engine already decided. Words only.
+Be concrete and warm-blooded, not grandiose. No stats, no mechanics, no new locations, no new promises."""

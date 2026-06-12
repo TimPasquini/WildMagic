@@ -29,23 +29,31 @@ def load_replay(path: Path) -> dict[str, Any]:
 
 def run_replay(path: Path) -> ReplayResult:
     data = load_replay(path)
+    version = int(data.get("version") or 1)
+    if version != 3:
+        raise ValueError(f"Unsupported replay version {version}; promise apply-point replays require version 3.")
     session = GameSession(
         seed=data.get("seed"),
         scenario=data.get("scenario", "dungeon"),
         provider_name="mock",
         dialogue_provider_name="mock",
+        replay_mode=True,
     )
     actions = data.get("actions", [])
     try:
         for action in actions:
-            # Lore claims are replayed at the dialogue action that recorded them. A live
-            # town generated before a late lore drain could therefore differ until town
-            # specs themselves are recorded in replay data.
+            # Promises are injected at the recorded apply point (the command boundary
+            # where the background lore drain landed), so zones generated between the
+            # dialogue and the drain see the same reservations as the live run.
             session.execute_command(
                 str(action.get("command") or ""),
                 replay_wild_magic=action.get("wild_magic"),
                 replay_dialogue=action.get("dialogue"),
+                replay_promises=action.get("promises"),
+                replay_flesh=action.get("flesh"),
             )
+        session.apply_recorded_promises(data.get("final_promises"))
+        session.apply_recorded_flesh(data.get("final_flesh"))
         final_summary = summarize_state(session.engine)
     finally:
         session.close()

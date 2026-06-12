@@ -146,9 +146,9 @@ Every dialogue exchange writes a JSONL audit record to `logs/dialogue_audit.json
 
 ## Organic Lore
 
-Dialogue can now leave persistent story claims behind. After an NPC reply is shown, a background lore extractor reads the exchange and may append 0-3 attributed claims to the world ledger. These claims are not engine facts by default; they start as `unverified`, `rumored`, `verified`, `contested`, or `false` according to the extractor's judgment, and future systems can later redeem or contradict them.
+Dialogue can now leave persistent story promises behind. After an NPC reply is shown, a background lore extractor reads the exchange and may append 0-3 attributed `WorldPromise` entries to the world ledger. These promises are not engine facts by default; they start as `unverified`, `rumored`, `verified`, `contested`, or `false` according to the extractor's judgment, and future systems can later realize or contradict them.
 
-Repeated matching claims merge into the existing entry, raising salience and marking it `corroborated`; the ledger keeps the strongest ~200 claims and evicts old low-salience color first.
+Repeated matching promises merge into the existing entry, raising salience and marking it `corroborated`; the ledger keeps the strongest ~200 entries and evicts old low-salience color first.
 
 Lore extraction is enabled by default and uses its own configurable model:
 
@@ -162,9 +162,13 @@ Lore is routed as a background purpose, and `ollama_num_gpu("lore")` defaults to
 
 Current uses:
 
-- relevant claims are included in later NPC dialogue context
-- high-salience unredeemed claims become `lore_hooks` for future generated towns
-- when a generated town consumes hooks, those claims are marked `redeemed`
+- relevant promises are included in later NPC dialogue context
+- buildable high-salience promises bind to deterministic zone reservations
+- reserved promises can realize through generic site archetypes in open zones: `sacred_site`, `inhabited_site`, `hostile_site`, `memorial_site`, `hidden_site`, `creature_site`, and `authority_site`
+- generated towns receive only the `promise_hooks` reserved for their own zone
+- when a generated town consumes a hook, that promise is marked `realized`
+
+The extractor may include `where` and `what` fields for concrete future content, such as "north of town" and "chapel". The engine, not the LLM, decides whether that promise can bind, which zone it reserves, and whether an already-explored target should relocate farther outward.
 
 Lore extraction writes audit records to `logs/lore_audit.jsonl`. You can test extraction offline against saved dialogue evals:
 

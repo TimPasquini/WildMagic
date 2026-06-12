@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+from dataclasses import dataclass
 import math
 import random
 import time
@@ -43,6 +44,75 @@ from .models import (
 from .normalize import normalize_id
 from .props import PROP_CATEGORIES, get_all_prop_ids, get_nonblocking_prop_ids, get_prop_template
 from .regions import region_for_zone
+
+
+@dataclass(frozen=True)
+class SiteBlueprint:
+    id: str
+    structure: str
+    size: tuple[int, int]
+    prop_ids: tuple[str, ...] = ()
+    npc_role: str | None = None
+    npc_tags: tuple[str, ...] = ()
+    npc_wares: dict[str, int] | None = None
+    hostile_count: int = 0
+
+
+SITE_BLUEPRINTS: dict[str, SiteBlueprint] = {
+    "sacred_site": SiteBlueprint(
+        id="sacred_site",
+        structure="building",
+        size=(7, 5),
+        prop_ids=("saint_statue", "votive_candles", "temple_bell", "cracked_font", "offering_bowl"),
+        npc_role="site keeper",
+        npc_tags=("sacred", "keeper", "promise_bound"),
+        npc_wares={"votive candle": 2, "grave salt": 1, "gold": 8},
+    ),
+    "inhabited_site": SiteBlueprint(
+        id="inhabited_site",
+        structure="building",
+        size=(5, 5),
+        prop_ids=("rocking_chair", "writing_desk", "cursed_candle", "tattered_map"),
+        npc_role="local keeper",
+        npc_tags=("resident", "keeper", "promise_bound"),
+        npc_wares={"dried herbs": 2, "gold": 6},
+    ),
+    "hostile_site": SiteBlueprint(
+        id="hostile_site",
+        structure="open",
+        size=(6, 5),
+        prop_ids=("old_campfire_ash", "torn_bedroll", "abandoned_pack"),
+        hostile_count=2,
+    ),
+    "memorial_site": SiteBlueprint(
+        id="memorial_site",
+        structure="open",
+        size=(5, 5),
+        prop_ids=("inscribed_gravestone", "offering_bowl", "funeral_pyre_remnants"),
+    ),
+    "hidden_site": SiteBlueprint(
+        id="hidden_site",
+        structure="building",
+        size=(4, 4),
+        prop_ids=("locked_chest", "empty_chest", "abandoned_pack"),
+    ),
+    "creature_site": SiteBlueprint(
+        id="creature_site",
+        structure="open",
+        size=(6, 5),
+        prop_ids=("moss_covered_bones", "old_campfire_ash", "giant_spider_web"),
+        hostile_count=1,
+    ),
+    "authority_site": SiteBlueprint(
+        id="authority_site",
+        structure="imperial",
+        size=(7, 5),
+        prop_ids=("posted_notice", "regulation_lantern", "charter_waystone"),
+        npc_role="field official",
+        npc_tags=("empire", "official", "promise_bound"),
+        npc_wares={"sealed form": 1, "gold": 10},
+    ),
+}
 
 
 # Floor themes (max_depth -> prop category weights) now live on each Region
@@ -259,10 +329,6 @@ class _GenerationMixin:
                     if notice:
                         notice.description = notice_text
                     break
-
-        from .npc_quests import maybe_spawn_quest_item
-        avoid = {(e.x, e.y) for e in state.entities.values()} | {(px, py)}
-        maybe_spawn_quest_item(self, avoid)
 
     def _generate_test_chamber(self) -> None:
         state = self.state
@@ -630,7 +696,9 @@ class _GenerationMixin:
         imperial_density = self._imperial_density(zx, zy)
 
         self._scatter_terrain_features(zone_rng)
-        self._populate_zone(zone_rng, [], imperial_density)
+        buildings = self._place_zone_buildings(zone_rng, imperial_density)
+        realized_promises = self._realize_zone_promises(zx, zy, zone_rng, buildings)
+        self._populate_zone(zone_rng, buildings, imperial_density)
 
         if self._zone_is_road(zx, zy):
             self._draw_road_through_zone(zx, zy)
@@ -645,6 +713,9 @@ class _GenerationMixin:
         else:
             zone_type = "borderlands"
             state.add_message("The land is a patchwork - wild growth pressing against straight Imperial walls.")
+        for promise in realized_promises:
+            flesh = getattr(promise, "flesh", None) or {}
+            state.add_message(flesh.get("arrival_line") or f"The story was true: {promise.subject} is here.")
         return zone_type
 
     def _scatter_terrain_features(self, zone_rng: random.Random) -> None:
@@ -714,6 +785,189 @@ class _GenerationMixin:
             door = (room.x + room.w - 1, zone_rng.randint(room.y + 1, room.y + room.h - 2))
         self.state.tiles[door[1]][door[0]] = DOOR
 
+    def _realize_zone_promises(
+        self,
+        zx: int,
+        zy: int,
+        zone_rng: random.Random,
+        buildings: list[dict[str, Any]],
+    ) -> list[Any]:
+        reservations = list(self.state.promise_reservations.get((zx, zy), []))
+        if not reservations:
+            return []
+        realized: list[Any] = []
+        placed_rooms = [building["room"] for building in buildings]
+        by_id = {promise.id: promise for promise in self.state.promises}
+        for reservation in reservations:
+            promise = by_id.get(reservation.promise_id)
+            if promise is None or promise.status in {"realized", "fulfilled", "redeemed"}:
+                continue
+            site = SITE_BLUEPRINTS.get(reservation.blueprint)
+            if site is None:
+                continue
+            room = self._place_promise_room(zone_rng, site, placed_rooms)
+            if room is None:
+                continue
+            placed_rooms.append(room)
+            self._build_promise_structure(room, site, zone_rng)
+            buildings.append({"room": room, "kind": "promise", "blueprint": site.id, "promise_id": promise.id})
+            self._populate_promise_structure(room, site, promise, zone_rng)
+            promise.status = "realized"
+            promise.realized_in = f"{site.id} at zone ({zx},{zy})"
+            realized.append(promise)
+        self.state.promise_reservations[(zx, zy)] = [
+            reservation for reservation in reservations if reservation.promise_id not in {promise.id for promise in realized}
+        ]
+        if not self.state.promise_reservations[(zx, zy)]:
+            self.state.promise_reservations.pop((zx, zy), None)
+        return realized
+
+    def _place_promise_room(
+        self,
+        zone_rng: random.Random,
+        site: SiteBlueprint,
+        placed_rooms: list[Room],
+    ) -> Room | None:
+        state = self.state
+        margin = 3
+        w, h = site.size
+        for _ in range(100):
+            x = zone_rng.randint(margin, state.width - w - margin)
+            y = zone_rng.randint(margin, state.height - h - margin)
+            room = Room(x, y, w, h)
+            if any(room.intersects(existing) for existing in placed_rooms):
+                continue
+            return room
+        return None
+
+    def _build_promise_structure(self, room: Room, site: SiteBlueprint, zone_rng: random.Random) -> None:
+        if site.structure == "open":
+            for y in range(room.y, room.y + room.h):
+                for x in range(room.x, room.x + room.w):
+                    self.state.tiles[y][x] = FLOOR
+            return
+        if site.structure == "imperial":
+            self._build_imperial_structure(room)
+            return
+        self._build_common_structure(room, zone_rng)
+
+    def _populate_promise_structure(
+        self,
+        room: Room,
+        site: SiteBlueprint,
+        promise: Any,
+        zone_rng: random.Random,
+    ) -> None:
+        flesh = getattr(promise, "flesh", None) or {}
+        occupied = {(entity.x, entity.y) for entity in self.state.entities.values()}
+        flesh_prop_description = flesh.get("prop_description")
+        for prop_id in self._site_props_for_promise(site, promise)[:3]:
+            spot = self._random_unoccupied_open_tile_in_room(room, occupied)
+            if spot is None:
+                continue
+            prop = self.spawn_prop(prop_id, spot[0], spot[1])
+            if prop is not None:
+                occupied.add(spot)
+                if flesh_prop_description:
+                    prop.description = flesh_prop_description
+                    flesh_prop_description = None
+        if site.npc_role is not None:
+            spot = self._random_unoccupied_open_tile_in_room(room, occupied)
+            if spot is not None:
+                keeper_name = flesh.get("keeper_name") or self._promise_keeper_name(promise)
+                backstory = flesh.get("keeper_backstory") or f"Keeps this place and knows the story that brought you here: {promise.text}"
+                self.spawn_npc(
+                    keeper_name,
+                    "k",
+                    spot[0],
+                    spot[1],
+                    role=site.npc_role,
+                    backstory=backstory,
+                    traits=["watchful", "story-bound"],
+                    tags={"npc", *site.npc_tags},
+                    wares=dict(site.npc_wares or {}),
+                    hp=12,
+                    attack=2,
+                    defense=0,
+                    faction="neutral",
+                )
+                occupied.add(spot)
+        for _ in range(site.hostile_count):
+            spot = self._random_unoccupied_open_tile_in_room(room, occupied)
+            if spot is not None:
+                self._spawn_from_template(zone_rng.choice(list(self.region.enemy_templates)), spot[0], spot[1])
+                occupied.add(spot)
+        self._spawn_quest_objective_item(room, promise, occupied)
+
+    def _spawn_quest_objective_item(
+        self,
+        room: Room,
+        promise: Any,
+        occupied: set[tuple[int, int]],
+    ) -> None:
+        # Any promise carrying a fetch objective places its item at the realized site —
+        # quest fetch targets and prophesied treasure alike.
+        objective = getattr(promise, "objective", None)
+        if objective is None or objective.type != "fetch":
+            return
+        item_name = str(objective.data.get("item") or "").strip()
+        if not item_name:
+            return
+        item_key = item_name.lower()
+        if item_key in self.state.inventory:
+            return
+        if any(entity.kind == "item" and (entity.name.lower() == item_key or entity.item_type == item_key) for entity in self.state.entities.values()):
+            return
+        spot = self._random_unoccupied_open_tile_in_room(room, occupied)
+        if spot is None:
+            return
+        from .npc_quests import QUEST_ITEMS
+
+        spec = QUEST_ITEMS.get(item_key, {"char": "?", "item_type": "quest_item", "material": None, "tags": {"quest_item"}})
+        self.spawn_item(
+            name=item_name.title(),
+            char=str(spec.get("char") or "?"),
+            x=spot[0],
+            y=spot[1],
+            item_type=item_key,
+            quantity=max(1, int(objective.data.get("quantity") or 1)),
+            material=spec.get("material"),
+            tags=set(spec.get("tags") or {"quest_item"}),
+        )
+        occupied.add(spot)
+        self.state.add_message("A strange feeling washes over you. There is something important nearby...")
+
+    def _random_unoccupied_open_tile_in_room(
+        self,
+        room: Room,
+        occupied: set[tuple[int, int]],
+    ) -> tuple[int, int] | None:
+        for _ in range(30):
+            spot = self._random_open_tile_in_room(room)
+            if spot not in occupied and self.can_occupy(spot[0], spot[1]):
+                return spot
+        return None
+
+    def _site_props_for_promise(self, site: SiteBlueprint, promise: Any) -> list[str]:
+        promise_tags = {normalize_id(str(tag)) for tag in getattr(promise, "tags", [])}
+        prop_ids = list(site.prop_ids)
+        if "bone" in promise_tags or "grave" in promise_tags or "death" in promise_tags:
+            prop_ids.extend(["ossuary_niche", "inscribed_gravestone", "bone_chime"])
+        if "fire" in promise_tags or "midnight" in promise_tags:
+            prop_ids.extend(["votive_candles", "cursed_candle", "iron_brazier"])
+        if "empire" in promise_tags or "warrant" in promise_tags:
+            prop_ids.extend(["posted_notice", "requisition_ledger", "regulation_lantern"])
+        deduped: list[str] = []
+        for prop_id in prop_ids:
+            if prop_id not in deduped:
+                deduped.append(prop_id)
+        return deduped
+
+    def _promise_keeper_name(self, promise: Any) -> str:
+        subject = normalize_id(getattr(promise, "subject", "keeper")).replace("_", " ").strip()
+        words = [word.capitalize() for word in subject.split()[:2] if word]
+        return "Keeper " + (" ".join(words) if words else "Maren")
+
     def _build_imperial_structure(self, room: Room) -> None:
         """A symmetrical Imperial outpost — the Grand Empire does not build by accident.
 
@@ -746,6 +1000,8 @@ class _GenerationMixin:
                         continue
                     self._spawn_from_template(zone_rng.choice(LEGION_ENEMY_TEMPLATES), spot[0], spot[1])
                     occupied.add(spot)
+            elif building["kind"] == "promise":
+                continue
             elif zone_rng.random() < 0.5:
                 spot = self._random_open_tile_in_room(room)
                 if spot not in occupied:
@@ -914,13 +1170,22 @@ class _GenerationMixin:
         state.add_message(f"You arrive at {spec.town_name}.")
         if spec.description:
             state.add_message(spec.description)
-        lore_hooks = (generation_context or {}).get("lore_hooks") or []
-        top_hook = lore_hooks[0] if lore_hooks and isinstance(lore_hooks[0], dict) else None
+        promise_hooks = (generation_context or {}).get("promise_hooks") or []
+        top_hook = promise_hooks[0] if promise_hooks and isinstance(promise_hooks, list) and isinstance(promise_hooks[0], dict) else None
         hook_id = str(top_hook.get("id")) if top_hook and top_hook.get("id") else ""
         if hook_id:
-            redeemed = self.mark_lore_redeemed([hook_id], f"{spec.town_name} ({zx},{zy})")
-            if redeemed:
-                state.add_message(f"An old rumor finds a place in {spec.town_name}.")
+            for promise in self.state.promises:
+                if promise.id == hook_id and promise.status not in {"realized", "fulfilled", "redeemed"}:
+                    promise.status = "realized"
+                    promise.realized_in = f"{spec.town_name} ({zx},{zy})"
+                    state.add_message(f"An old promise finds a place in {spec.town_name}.")
+                    break
+            reservations = self.state.promise_reservations.get((zx, zy), [])
+            self.state.promise_reservations[(zx, zy)] = [
+                reservation for reservation in reservations if reservation.promise_id != hook_id
+            ]
+            if not self.state.promise_reservations[(zx, zy)]:
+                self.state.promise_reservations.pop((zx, zy), None)
         return f"town: {spec.town_name}"
 
     def _cross_zone_edge(self, target_x: int, target_y: int) -> bool:
@@ -1040,9 +1305,9 @@ class _GenerationMixin:
             "current_situation": current_situation,
             "settlement_type": stype,
         }
-        lore_hooks = self.lore_claims_for_context(include_redeemed=False, limit=3)
-        if lore_hooks:
-            context["lore_hooks"] = lore_hooks
+        promise_hooks = self.promise_hooks_for_zone((zx, zy), limit=3)
+        if promise_hooks:
+            context["promise_hooks"] = promise_hooks
         return context
 
     def _maybe_pregenerate_adjacent_towns(self) -> None:
@@ -1107,9 +1372,6 @@ class _GenerationMixin:
                 state.zone_type = self._generate_llm_town(zx, zy, spec, town_context)
             else:
                 state.zone_type = self._generate_open_zone(zx, zy)
-            from .npc_quests import maybe_spawn_quest_item
-            avoid = {(e.x, e.y) for e in state.entities.values()} | {(entry_x, entry_y)}
-            maybe_spawn_quest_item(self, avoid)
         state.entities[player.id] = player
         player.x, player.y = self._find_entry_tile(entry_x, entry_y)
         state.visible.clear()

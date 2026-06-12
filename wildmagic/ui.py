@@ -340,6 +340,10 @@ class GameUI:
             self.menu_active = True
             self.menu_page = "quests"
             self.menu_cursor = 0
+        elif event.key == pygame.K_j:
+            self.menu_active = True
+            self.menu_page = "journal"
+            self.menu_cursor = 0
         elif event.key == pygame.K_i:
             self.menu_active = True
             self.menu_page = "inventory"
@@ -544,8 +548,8 @@ class GameUI:
                     self.inventory_right_cursor = 0
                 return
 
-        if self.menu_page == "quests":
-            n = len(self.engine.state.quests)
+        if self.menu_page in {"quests", "journal"}:
+            n = len(self.engine.quest_log_entries()) if self.menu_page == "quests" else len(self.engine.journal_entries())
             if n == 0:
                 if event.key == pygame.K_ESCAPE:
                     self._close_menu()
@@ -1037,7 +1041,7 @@ class GameUI:
             list_h = box_h - (padding * 2 + 36 + 24)
             row_h = 28
             
-            quests = self.engine.state.quests
+            quests = self.engine.quest_log_entries()
             if not quests:
                 empty_surf = self.ui_font.render("No quests in log.", True, MUTED)
                 self.screen.blit(empty_surf, (bx + padding, pane_y))
@@ -1118,6 +1122,110 @@ class GameUI:
                 self.screen.blit(no_details_surf, (rx, ry))
 
             # Footer
+            hint_surf = self.small_font.render("▲▼/WS Select  •  Esc Close", True, MUTED)
+            self.screen.blit(hint_surf, (bx + padding, by + box_h - 22))
+            return
+
+        if self.menu_page == "journal":
+            # Journal: everything the world has told you. Same two-pane layout as the
+            # quest log; entries are dicts from engine.journal_entries().
+            box_w = 640
+            box_h = 400
+            bx = (WINDOW_WIDTH - box_w) // 2
+            by = (WINDOW_HEIGHT - box_h) // 2
+            padding = 24
+
+            pygame.draw.rect(self.screen, (28, 30, 38), (bx, by, box_w, box_h), border_radius=6)
+            pygame.draw.rect(self.screen, PANEL_EDGE, (bx, by, box_w, box_h), 1, border_radius=6)
+
+            title_surf = self.ui_font.render("JOURNAL", True, ACCENT)
+            self.screen.blit(title_surf, (bx + padding, by + padding))
+            pygame.draw.line(self.screen, PANEL_EDGE,
+                             (bx + padding, by + padding + 22),
+                             (bx + box_w - padding, by + padding + 22), 1)
+
+            left_w = 260
+            pane_y = by + padding + 36
+            list_h = box_h - (padding * 2 + 36 + 24)
+            row_h = 28
+
+            entries = self.engine.journal_entries()
+            if not entries:
+                empty_surf = self.ui_font.render("The world hasn't told you anything yet.", True, MUTED)
+                self.screen.blit(empty_surf, (bx + padding, pane_y))
+            else:
+                max_visible = list_h // row_h
+                start_idx = 0
+                if len(entries) > max_visible and self.menu_cursor >= max_visible:
+                    start_idx = self.menu_cursor - max_visible + 1
+
+                for idx in range(min(len(entries), max_visible)):
+                    e_idx = start_idx + idx
+                    if e_idx >= len(entries):
+                        break
+                    entry = entries[e_idx]
+                    ey = pane_y + idx * row_h
+                    is_selected = e_idx == self.menu_cursor
+
+                    if is_selected:
+                        pygame.draw.rect(self.screen, (50, 55, 70),
+                                         (bx + padding - 4, ey - 2, left_w, row_h - 4), border_radius=4)
+
+                    settled = entry["status"] in {"settled", "proved false"}
+                    display_text = f"[{entry['status']}] {entry['subject']}"
+                    if len(display_text) > 28:
+                        display_text = display_text[:25] + "..."
+                    color = GOLD if is_selected else (MUTED if settled else TEXT)
+                    e_surf = self.ui_font.render(display_text, True, color)
+                    self.screen.blit(e_surf, (bx + padding, ey))
+
+            pygame.draw.line(self.screen, PANEL_EDGE,
+                             (bx + padding + left_w + 10, pane_y),
+                             (bx + padding + left_w + 10, pane_y + list_h), 1)
+
+            if entries and self.menu_cursor < len(entries):
+                entry = entries[self.menu_cursor]
+                rx = bx + padding + left_w + 24
+                ry = pane_y
+
+                name_surf = self.ui_font.render(entry["subject"][:32], True, GOLD)
+                self.screen.blit(name_surf, (rx, ry))
+                ry += 28
+
+                status_colors = {
+                    "found true": (0, 200, 100),
+                    "settled": (140, 140, 150),
+                    "proved false": (200, 90, 90),
+                    "corroborated": (130, 190, 255),
+                }
+                status_color = status_colors.get(entry["status"], (220, 180, 50))
+                status_surf = self.small_font.render(f"Status: {entry['status'].upper()}", True, status_color)
+                self.screen.blit(status_surf, (rx, ry))
+                ry += 20
+
+                if entry["source"] and entry["source"] != "unknown":
+                    source_surf = self.small_font.render(f"Heard from: {entry['source'][:28]}", True, TEXT)
+                    self.screen.blit(source_surf, (rx, ry))
+                    ry += 20
+
+                if entry["hint"]:
+                    hint_text_surf = self.small_font.render(entry["hint"][:44], True, (130, 190, 255))
+                    self.screen.blit(hint_text_surf, (rx, ry))
+                    ry += 20
+
+                ry += 8
+                pygame.draw.line(self.screen, PANEL_EDGE, (rx, ry), (bx + box_w - padding, ry), 1)
+                ry += 12
+
+                for line in wrap_text(entry["text"], 36):
+                    line_surf = self.small_font.render(line, True, TEXT)
+                    self.screen.blit(line_surf, (rx, ry))
+                    ry += 16
+            else:
+                rx = bx + padding + left_w + 24
+                no_details_surf = self.small_font.render("Select an entry to read it.", True, MUTED)
+                self.screen.blit(no_details_surf, (rx, pane_y))
+
             hint_surf = self.small_font.render("▲▼/WS Select  •  Esc Close", True, MUTED)
             self.screen.blit(hint_surf, (bx + padding, by + box_h - 22))
             return

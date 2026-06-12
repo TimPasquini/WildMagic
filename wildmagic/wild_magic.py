@@ -1223,6 +1223,11 @@ _EFFECT_TYPE_ALIASES: dict[str, str] = {
     "reaction": "create_trigger",
     "contingency": "create_trigger",
     "delayed_reaction": "create_trigger",
+    "prophecy": "create_promise",
+    "prophesy": "create_promise",
+    "foretell": "create_promise",
+    "promise": "create_promise",
+    "create_prophecy": "create_promise",
 }
 
 # Status names that the LLM might use as effect type directly.
@@ -2083,8 +2088,8 @@ class MockTownProvider:
     def generate(self, zx: int, zy: int, context: dict[str, Any]) -> TownSpec:
         names = ["Ashford Crossing", "Saltmarket", "Cinder Vale", "The Waypost", "Brackenmere"]
         idx = abs(hash((zx, zy))) % len(names)
-        lore_hooks = context.get("lore_hooks") if isinstance(context, dict) else None
-        hook = lore_hooks[0] if isinstance(lore_hooks, list) and lore_hooks and isinstance(lore_hooks[0], dict) else None
+        promise_hooks = context.get("promise_hooks") if isinstance(context, dict) else None
+        hook = promise_hooks[0] if isinstance(promise_hooks, list) and promise_hooks and isinstance(promise_hooks[0], dict) else None
         description = "A rough cluster of buildings where the road bends. Travelers stop here to rest; most keep moving."
         britta_backstory = "Has lived here longer than the buildings. Knows every plant in a day's walk."
         if hook:

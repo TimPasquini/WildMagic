@@ -282,6 +282,10 @@ def lore_enabled() -> bool:
     return _bool_value("WILDMAGIC_LORE_ENABLED", True)
 
 
+def flesh_enabled() -> bool:
+    return _bool_value("WILDMAGIC_FLESH_ENABLED", True)
+
+
 def audit_dir() -> Path:
     return Path(get_config_value("WILDMAGIC_AUDIT_DIR", "logs") or "logs")
 

@@ -29,18 +29,18 @@ from .llm_client import (
     strip_thinking,
 )
 from .llm_resolver import _write_jsonl_audit
-from .models import LoreClaim
 from .normalize import normalize_id
 from .prompts import LORE_EXTRACTION_SYSTEM_PROMPT
+from .promises import WorldPromise, parse_spatial_hint, promise_context_for_prompt
 
 
 VALID_STATUSES = {"unverified", "rumored", "verified", "contested", "false", "corroborated", "redeemed"}
-VALID_KINDS = {"rumor", "background", "quest_hook", "place", "person", "threat", "custom"}
+VALID_KINDS = {"rumor", "background", "place", "person", "threat", "quest", "prophecy", "rendezvous", "custom"}
 
 
 @dataclass
 class LoreExtractionResolution:
-    claims: list[LoreClaim]
+    promises: list[WorldPromise]
     technical_failure: bool
     error: str | None = None
     provider_name: str = "unknown"
@@ -123,6 +123,7 @@ class MockLoreProvider:
                             "kind": "rumor",
                             "subject": subject,
                             "text": _attributed_claim_text(npc, reply),
+                            "what": _what_from_text(reply),
                             "status": "rumored",
                             "confidence": 0.55,
                             "salience": 4,
@@ -185,9 +186,9 @@ def resolve_lore_extraction(provider: LoreExtractionProvider, context: dict[str,
     try:
         raw = provider.extract(context)
         parsed = parse_lore_json(raw)
-        claims = normalize_lore_claims(parsed, context)
-        audit_path = write_lore_audit_log(provider, context, raw, [claim.to_dict() for claim in claims], False, None, resolved_provider_name)
-        return LoreExtractionResolution(claims, False, None, resolved_provider_name, raw, audit_path)
+        promises = normalize_lore_promises(parsed, context)
+        audit_path = write_lore_audit_log(provider, context, raw, [promise.to_dict() for promise in promises], False, None, resolved_provider_name)
+        return LoreExtractionResolution(promises, False, None, resolved_provider_name, raw, audit_path)
     except (OSError, TimeoutError, urllib.error.URLError, TypeError, ValueError, json.JSONDecodeError) as exc:
         resolved_provider_name = _lore_provider_name(provider)
         error = str(exc)
@@ -209,14 +210,14 @@ def parse_lore_json(raw: str) -> dict[str, Any]:
     return parsed
 
 
-def normalize_lore_claims(data: dict[str, Any], context: dict[str, Any]) -> list[LoreClaim]:
+def normalize_lore_promises(data: dict[str, Any], context: dict[str, Any]) -> list[WorldPromise]:
     raw_claims = data.get("claims") or []
     if isinstance(raw_claims, dict):
         raw_claims = [raw_claims]
     if not isinstance(raw_claims, list):
         raise TypeError("claims must be a list")
 
-    claims: list[LoreClaim] = []
+    promises: list[WorldPromise] = []
     seen_texts: set[str] = set()
     for index, raw in enumerate(raw_claims[:3]):
         if not isinstance(raw, dict):
@@ -238,54 +239,47 @@ def normalize_lore_claims(data: dict[str, Any], context: dict[str, Any]) -> list
         confidence = _bounded_float(raw.get("confidence"), 0.0, 1.0, 0.5)
         salience = _clamp_int(raw.get("salience"), 1, 5, 2)
         tags = _normalize_tags(raw.get("tags"))
+        what = _clean_text(raw.get("what"), 80)
+        if what:
+            for tag in _tags_from_text(what):
+                if tag not in tags:
+                    tags.append(tag)
         if not tags:
             tags = _tags_from_text(f"{subject} {text}")[:6]
-        claims.append(
-            LoreClaim(
-                id=_claim_id(context, index, subject, text),
+        origin_zone = None
+        if isinstance(context.get("zone"), dict) and context["zone"].get("x") is not None and context["zone"].get("y") is not None:
+            origin_zone = (int(context["zone"]["x"]), int(context["zone"]["y"]))
+        where = _clean_text(raw.get("where"), 120)
+        claimed_space = parse_spatial_hint(
+            where,
+            fallback_text=f"{subject} {text} {' '.join(tags)}",
+            anchor_zone=origin_zone or (0, 0),
+        ) if where else None
+        promises.append(
+            WorldPromise(
+                id=_promise_id(context, index, subject, text),
                 kind=kind,
                 subject=subject,
                 text=text,
-                source_npc=str(context.get("npc") or "unknown"),
+                source=f"dialogue:{context.get('npc') or 'unknown'}",
                 source_turn=int(context.get("turn") or 0),
+                origin_zone=origin_zone,
                 location=str(context.get("location") or "unknown"),
                 status=status,
                 confidence=confidence,
                 salience=salience,
                 tags=tags[:8],
+                what=what,
+                claimed_space=claimed_space,
                 source_message=str(context.get("message") or ""),
                 source_reply=str(context.get("reply") or ""),
-                zone_x=int(context["zone"]["x"]) if isinstance(context.get("zone"), dict) and context["zone"].get("x") is not None else None,
-                zone_y=int(context["zone"]["y"]) if isinstance(context.get("zone"), dict) and context["zone"].get("y") is not None else None,
             )
         )
-    return claims
+    return promises
 
 
-def lore_context_for_prompt(claims: list[LoreClaim], limit: int = 8, text_limit: int = 240) -> list[dict[str, Any]]:
-    ranked = sorted(
-        claims,
-        key=lambda claim: (
-            claim.status == "redeemed",
-            -claim.salience,
-            -claim.confidence,
-            claim.source_turn,
-            claim.subject.lower(),
-        ),
-    )
-    return [
-        {
-            "id": claim.id,
-            "kind": claim.kind,
-            "subject": claim.subject,
-            "text": _clean_text(claim.text, text_limit),
-            "source_npc": claim.source_npc,
-            "status": claim.status,
-            "salience": claim.salience,
-            "tags": list(claim.tags),
-        }
-        for claim in ranked[:limit]
-    ]
+def lore_context_for_prompt(promises: list[WorldPromise], limit: int = 8, text_limit: int = 240) -> list[dict[str, Any]]:
+    return promise_context_for_prompt(promises, limit=limit, text_limit=text_limit)
 
 
 def write_lore_audit_log(
@@ -326,7 +320,7 @@ def _lore_provider_name(provider: LoreExtractionProvider) -> str:
     return getattr(provider, "name", "unknown")
 
 
-def _claim_id(context: dict[str, Any], index: int, subject: str, text: str) -> str:
+def _promise_id(context: dict[str, Any], index: int, subject: str, text: str) -> str:
     seed = "|".join(
         [
             str(context.get("turn") or 0),
@@ -337,7 +331,7 @@ def _claim_id(context: dict[str, Any], index: int, subject: str, text: str) -> s
         ]
     )
     digest = hashlib.sha1(seed.encode("utf-8")).hexdigest()[:12]
-    return f"lore_{digest}"
+    return f"promise_{digest}"
 
 
 def _clean_text(value: Any, limit: int) -> str:
@@ -394,6 +388,14 @@ def _tags_from_text(text: str) -> list[str]:
         if len(tags) >= 8:
             break
     return tags
+
+
+def _what_from_text(text: str) -> str | None:
+    lowered = text.lower()
+    for keyword in ("chapel", "shrine", "temple", "witch", "hermit", "camp", "cache", "tomb", "barrow", "lair", "checkpoint"):
+        if keyword in lowered:
+            return keyword
+    return None
 
 
 def _subject_from_text(text: str) -> str | None:

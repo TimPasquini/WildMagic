@@ -5,16 +5,24 @@ from dataclasses import dataclass, field
 import shlex
 from typing import Any
 
-from .config import lore_enabled
+from .config import flesh_enabled, lore_enabled
 from .engine import GameEngine
+from .flesh import (
+    FleshProvider,
+    FleshResolution,
+    flesh_context_for_promise,
+    make_flesh_provider,
+    resolve_flesh,
+)
 from .lore import (
     LoreExtractionProvider,
     LoreExtractionResolution,
     make_lore_provider,
     resolve_lore_extraction,
 )
-from .models import LoreClaim
 from .normalize import normalize_id
+from .promises import WorldPromise
+from .promises import Objective, Reward
 from .wild_magic import (
     DialogueProvider,
     DialogueResolution,
@@ -114,6 +122,9 @@ class GameSession:
         trade_provider_name: str | None = None,
         lore_provider: LoreExtractionProvider | None = None,
         lore_provider_name: str | None = None,
+        flesh_provider: FleshProvider | None = None,
+        flesh_provider_name: str | None = None,
+        replay_mode: bool = False,
     ) -> None:
         self.seed = seed
         self.scenario = scenario
@@ -129,8 +140,22 @@ class GameSession:
             resolved_lore_provider_name = provider_name
         self.lore_provider = lore_provider or make_lore_provider(resolved_lore_provider_name)
         self.lore_provider_label = getattr(self.lore_provider, "name", "unknown")
+        resolved_flesh_provider_name = flesh_provider_name
+        if resolved_flesh_provider_name is None and provider_name in {"mock", "ollama", "auto"}:
+            resolved_flesh_provider_name = provider_name
+        self.flesh_provider = flesh_provider or make_flesh_provider(resolved_flesh_provider_name)
+        self.flesh_provider_label = getattr(self.flesh_provider, "name", "unknown")
+        # In replay mode, promises and flesh come from the recorded apply points;
+        # background producers must stay silent.
+        self.replay_mode = replay_mode
         self._lore_executor: concurrent.futures.ThreadPoolExecutor | None = None
         self._pending_lore: list[tuple[concurrent.futures.Future[LoreExtractionResolution], dict[str, Any]]] = []
+        self._pending_flesh: list[tuple[concurrent.futures.Future[FleshResolution], str]] = []
+        self._queued_flesh_ids: set[str] = set()
+        # Promise dicts applied to the engine since the last recorded action, snapshotted
+        # pre-merge so replay can re-run the deterministic bind/merge at the same point.
+        self._promise_apply_buffer: list[dict[str, Any]] = []
+        self._flesh_apply_buffer: list[dict[str, Any]] = []
         self.records: list[dict[str, Any]] = []
 
     def execute_command(
@@ -138,9 +163,19 @@ class GameSession:
         command: str,
         replay_wild_magic: dict[str, Any] | None = None,
         replay_dialogue: dict[str, Any] | None = None,
+        replay_promises: dict[str, Any] | None = None,
+        replay_flesh: dict[str, Any] | None = None,
         record: bool = True,
     ) -> ActionResult:
         self.drain_lore(block=False)
+        self._enqueue_flesh_for_bound_promises()
+        self.drain_flesh(block=False)
+        if replay_promises is not None:
+            self.apply_recorded_promises(replay_promises.get("before"))
+        if replay_flesh is not None:
+            self.apply_recorded_flesh(replay_flesh.get("before"))
+        promises_before = self._pop_applied_promises() if record else []
+        flesh_before = self._pop_applied_flesh() if record else []
         original_command = command.strip()
         turn_before = self.engine.state.turn
         message_count_before = len(self.engine.state.messages)
@@ -172,6 +207,10 @@ class GameSession:
                 action = "inspect"
                 success = True
                 explicit_messages = describe_state(self.engine)
+            elif verb in {"journal", "rumors", "promises"}:
+                action = "journal"
+                success = True
+                explicit_messages = describe_journal(self.engine)
             elif verb in {"wares", "browse", "shop"} and self.engine.state.pending_trade is None:
                 action = "wares"
                 success = True
@@ -268,11 +307,12 @@ class GameSession:
                 if subverb == "list":
                     success = True
                     explicit_messages = []
-                    if not self.engine.state.quests:
+                    quests = self.engine.quest_log_entries()
+                    if not quests:
                         explicit_messages.append("Quest Log is empty.")
                     else:
                         explicit_messages.append("Quest Log:")
-                        for idx, q in enumerate(self.engine.state.quests, 1):
+                        for idx, q in enumerate(quests, 1):
                             status_label = "[x]" if q.status == "completed" else "[ ]"
                             explicit_messages.append(f"  {idx}. {status_label} {q.name} - {q.description} (Contact: {q.contact}, Location: {q.location})")
                 elif subverb == "add":
@@ -287,17 +327,23 @@ class GameSession:
                             loc = f"Zone ({state.zone_x},{state.zone_y}) — {state.zone_type}"
                         else:
                             loc = f"Depth {state.depth}/{state.max_depth}"
-                    from .models import Quest
-                    new_q = Quest(name=name, description=desc, contact=contact, location=loc, status="active")
-                    self.engine.state.quests.append(new_q)
+                    self.engine.add_quest_promise(
+                        name=name,
+                        description=desc,
+                        contact=contact,
+                        location=loc,
+                        objective=Objective("visit", {"location": loc}),
+                        reward=Reward(),
+                        tags=["quest", "manual"],
+                    )
                     self.engine.state.add_message(f"Quest added: {name}")
                     success = True
                 elif subverb == "complete":
                     try:
                         idx = int(tokens[2]) - 1
-                        if 0 <= idx < len(self.engine.state.quests):
-                            self.engine.state.quests[idx].status = "completed"
-                            self.engine.state.add_message(f"Quest marked completed: {self.engine.state.quests[idx].name}")
+                        completed = self.engine.complete_quest_by_index(idx)
+                        if completed is not None:
+                            self.engine.state.add_message(f"Quest marked completed: {completed.name}")
                             success = True
                         else:
                             explicit_messages = ["Invalid quest index."]
@@ -306,8 +352,8 @@ class GameSession:
                 elif subverb == "remove":
                     try:
                         idx = int(tokens[2]) - 1
-                        if 0 <= idx < len(self.engine.state.quests):
-                            removed = self.engine.state.quests.pop(idx)
+                        removed = self.engine.remove_quest_by_index(idx)
+                        if removed is not None:
                             self.engine.state.add_message(f"Quest removed: {removed.name}")
                             success = True
                         else:
@@ -336,9 +382,22 @@ class GameSession:
             llm_context=llm_context,
             should_quit=should_quit,
         )
-        if record:
-            self.records.append(result.to_record())
         self.drain_lore(block=False)
+        self._enqueue_flesh_for_bound_promises()
+        self.drain_flesh(block=False)
+        if replay_promises is not None:
+            self.apply_recorded_promises(replay_promises.get("after"))
+        if replay_flesh is not None:
+            self.apply_recorded_flesh(replay_flesh.get("after"))
+        if record:
+            action_record = result.to_record()
+            promises_after = self._pop_applied_promises()
+            flesh_after = self._pop_applied_flesh()
+            if promises_before or promises_after:
+                action_record["promises"] = {"before": promises_before, "after": promises_after}
+            if flesh_before or flesh_after:
+                action_record["flesh"] = {"before": flesh_before, "after": flesh_after}
+            self.records.append(action_record)
         return result
 
     def cast_wild(self, spell: str, record: bool = True) -> ActionResult:
@@ -458,16 +517,14 @@ class GameSession:
                 trade_data = trade_resolution.data
 
         self.engine.apply_dialogue_exchange(npc, message, reply, trade_data)
-        if replay_dialogue is not None:
-            self._apply_replay_lore(dialogue_record)
-        else:
+        if replay_dialogue is None:
             lore_context = self.engine.lore_extraction_context(npc, message, reply)
             self._enqueue_lore_extraction(lore_context, dialogue_record)
         return True, False, dialogue_record
 
     def _enqueue_lore_extraction(self, context: dict[str, Any], dialogue_record: dict[str, Any]) -> None:
         if not lore_enabled():
-            dialogue_record["lore"] = {"enabled": False, "claims": []}
+            dialogue_record["lore"] = {"enabled": False, "promises": []}
             return
         dialogue_record["lore"] = {
             "enabled": True,
@@ -475,7 +532,7 @@ class GameSession:
             "provider": self.lore_provider_label,
             "technical_failure": False,
             "error": None,
-            "claims": [],
+            "promises": [],
         }
         if self._lore_executor is None:
             self._lore_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
@@ -493,7 +550,10 @@ class GameSession:
             except Exception as exc:
                 resolution = LoreExtractionResolution([], True, str(exc), self.lore_provider_label)
             self.lore_provider_label = resolution.provider_name
-            added = self.engine.add_lore_claims(resolution.claims)
+            # Snapshot the extraction outputs before add_promises mutates them (binding,
+            # merging) so the replay record carries the apply-point inputs.
+            self._promise_apply_buffer.extend(promise.to_dict() for promise in resolution.promises)
+            added = self.engine.add_promises(resolution.promises)
             lore_record = dialogue_record.setdefault("lore", {})
             lore_record.update(
                 {
@@ -504,26 +564,88 @@ class GameSession:
                     "error": resolution.error,
                     "raw_response": resolution.raw_response,
                     "audit_path": resolution.audit_path,
-                    "claims": [claim.to_dict() for claim in added],
+                    "promises": [promise.to_dict() for promise in added],
                 }
             )
         self._pending_lore = remaining
+
+    def _enqueue_flesh_for_bound_promises(self) -> None:
+        """Queue a background decoration draft for each newly bound promise.
+
+        Live only: in replay mode flesh comes from the recorded apply points. Flesh is
+        never load-bearing — a promise that never receives it realizes from the
+        deterministic skeleton alone.
+        """
+        if self.replay_mode or not flesh_enabled():
+            return
+        for promise in self.engine.state.promises:
+            if promise.status != "bound" or promise.binding is None:
+                continue
+            if promise.flesh is not None or promise.id in self._queued_flesh_ids:
+                continue
+            self._queued_flesh_ids.add(promise.id)
+            if self._lore_executor is None:
+                self._lore_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = self._lore_executor.submit(resolve_flesh, self.flesh_provider, flesh_context_for_promise(promise))
+            self._pending_flesh.append((future, promise.id))
+
+    def drain_flesh(self, block: bool = False) -> None:
+        remaining: list[tuple[concurrent.futures.Future[FleshResolution], str]] = []
+        for future, promise_id in self._pending_flesh:
+            if not block and not future.done():
+                remaining.append((future, promise_id))
+                continue
+            try:
+                resolution = future.result()
+            except Exception as exc:
+                resolution = FleshResolution(None, True, str(exc), self.flesh_provider_label)
+            self.flesh_provider_label = resolution.provider_name
+            if resolution.flesh:
+                applied = self.engine.apply_promise_flesh(promise_id, resolution.flesh)
+                if applied is not None:
+                    self._flesh_apply_buffer.append({"promise_id": promise_id, "flesh": dict(applied.flesh or {})})
+        self._pending_flesh = remaining
+
+    def apply_recorded_flesh(self, raw_events: list[dict[str, Any]] | None) -> None:
+        """Inject flesh recorded at this apply point in a live run."""
+        for event in raw_events or []:
+            if not isinstance(event, dict):
+                continue
+            promise_id = str(event.get("promise_id") or "")
+            applied = self.engine.apply_promise_flesh(promise_id, event.get("flesh"))
+            if applied is not None:
+                self._flesh_apply_buffer.append({"promise_id": promise_id, "flesh": dict(applied.flesh or {})})
+
+    def _pop_applied_flesh(self) -> list[dict[str, Any]]:
+        applied, self._flesh_apply_buffer = self._flesh_apply_buffer, []
+        return applied
 
     def close(self) -> None:
         for future, _dialogue_record in self._pending_lore:
             future.cancel()
         self._pending_lore.clear()
+        for future, _promise_id in self._pending_flesh:
+            future.cancel()
+        self._pending_flesh.clear()
         if self._lore_executor is not None:
             self._lore_executor.shutdown(wait=False, cancel_futures=True)
             self._lore_executor = None
 
-    def _apply_replay_lore(self, dialogue_record: dict[str, Any]) -> None:
-        lore_record = dialogue_record.get("lore")
-        if not isinstance(lore_record, dict):
+    def apply_recorded_promises(self, raw_promises: list[dict[str, Any]] | None) -> None:
+        """Inject promises recorded at this apply point in a live run.
+
+        Binding and merging re-run deterministically against the replayed engine state,
+        which matches the live state because apply points are recorded per action.
+        """
+        promises = [WorldPromise.from_dict(raw) for raw in raw_promises or [] if isinstance(raw, dict)]
+        if not promises:
             return
-        raw_claims = lore_record.get("claims") or []
-        claims = [LoreClaim.from_dict(raw) for raw in raw_claims if isinstance(raw, dict)]
-        self.engine.add_lore_claims(claims)
+        self._promise_apply_buffer.extend(promise.to_dict() for promise in promises)
+        self.engine.add_promises(promises)
+
+    def _pop_applied_promises(self) -> list[dict[str, Any]]:
+        applied, self._promise_apply_buffer = self._promise_apply_buffer, []
+        return applied
 
     def _browse_wares(self) -> list[str]:
         npc = self.engine.find_talk_target()
@@ -537,8 +659,16 @@ class GameSession:
 
     def to_replay(self) -> dict[str, Any]:
         self.drain_lore(block=True)
+        self.drain_flesh(block=True)
+        # Promises and flesh drained after the last recorded action have no action to
+        # attach to; replay injects them after the action loop, before the final summary.
+        final_promises = self._pop_applied_promises()
+        final_flesh = self._pop_applied_flesh()
         return {
-            "version": 1,
+            "version": 3,
+            "final_promises": final_promises,
+            "final_flesh": final_flesh,
+            "flesh_provider": self.flesh_provider_label,
             "seed": self.seed,
             "scenario": self.scenario,
             "provider": self.provider_label,
@@ -568,13 +698,28 @@ def command_argument(command: str, tokens: list[str]) -> str:
 
 def command_help() -> list[str]:
     return [
-        "Commands: move north/south/east/west, open, descend, ascend, wait, cast <spell>, talk <message>, use <item>, equip <item>, unequip <slot>, drop <item>, pickup, inspect (or inventory), wares (or browse), quit.",
+        "Commands: move north/south/east/west, open, descend, ascend, wait, cast <spell>, talk <message>, use <item>, equip <item>, unequip <slot>, drop <item>, pickup, inspect (or inventory), journal (or rumors), wares (or browse), quit.",
+        "Journal: 'journal' lists everything the world has told you - rumors heard, claims corroborated, places found true - with a rough direction when one was given. Free, costs no turn.",
         "Talking: stand next to an NPC and 'talk <what you want to say>' (or 'speak'/'say') to start a conversation - it costs a turn, just like any other action.",
         "Trading: some NPCs deal in goods and gold - 'wares' (or 'browse') lists what they have for trade, a free look. Haggle naturally through 'talk' - if a real offer comes together, you'll get a confirmation prompt to 'accept' (or 'yes') or 'reject' (or 'no') before anything changes hands.",
         "Equipment: weapons, armor, clothing, and charms go in their own slots and add to your attack/defense while worn. Equip with 'equip <item>' (or 'wear'/'wield'); take gear off with 'unequip <slot_or_item>' (or 'remove <item>').",
         "Standard spells (deterministic, no wild magic risk): spark, frost, heal, ward, reveal. Type the name directly, e.g. 'frost' -- 'cast frost' instead asks wild magic to improvise one.",
         "Short movement aliases also work: n, s, e, w. Walk into an enemy to attack it.",
     ]
+
+
+def describe_journal(engine: GameEngine) -> list[str]:
+    entries = engine.journal_entries()
+    if not entries:
+        return ["Your journal is empty. The world talks - listen to people."]
+    lines = ["Journal - what the world has told you:"]
+    for index, entry in enumerate(entries, 1):
+        source = f" (from {entry['source']})" if entry["source"] and entry["source"] != "unknown" else ""
+        line = f"  {index}. [{entry['status']}] {entry['subject']}: {entry['text']}{source}"
+        lines.append(line)
+        if entry["hint"]:
+            lines.append(f"       ~ {entry['hint']}")
+    return lines
 
 
 def describe_state(engine: GameEngine) -> list[str]:
@@ -712,11 +857,24 @@ def summarize_state(engine: GameEngine) -> dict[str, Any]:
             for curse_id, curse in sorted(state.curses.items())
         },
         "quests": [
-            quest.to_dict() for quest in state.quests
+            {
+                "id": quest.id,
+                "name": quest.name,
+                "description": quest.description,
+                "contact": quest.contact,
+                "location": quest.location,
+                "status": quest.status,
+            }
+            for quest in engine.quest_log_entries()
         ],
-        "lore_claims": [
-            claim.to_dict()
-            for claim in sorted(state.lore_claims, key=lambda claim: claim.id)
+        "promises": [
+            promise.to_dict()
+            for promise in sorted(state.promises, key=lambda promise: promise.id)
+        ],
+        "promise_reservations": [
+            reservation.to_dict()
+            for zone in sorted(state.promise_reservations)
+            for reservation in state.promise_reservations[zone]
         ],
         "living_enemies": [
             {

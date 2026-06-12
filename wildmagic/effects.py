@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import math
 from typing import Any
 
@@ -30,6 +31,7 @@ from .normalize import (
     sanitize_name,
     tile_from_name,
 )
+from .promises import Objective, WorldPromise, parse_spatial_hint
 from .spell_contract import STATUS_FLAVOR_ALIASES, validate_resolution
 from .templates import creature_template, item_template
 
@@ -557,26 +559,7 @@ class _EffectsMixin:
             # mechanically inert, so make the debt real: a visible stacking
             # curse now, and a collector already on its way.
             if any(word in flag for word in ("debt", "owed", "owe", "price", "payment", "reckoning", "collector")):
-                curse_message = self._apply_cost({
-                    "type": "curse",
-                    "id": "wild_debt",
-                    "name": "Wild Debt",
-                    "description": "The wild expects repayment. Something is already on its way.",
-                })
-                stacks = self.state.curses["wild_debt"].stacks if "wild_debt" in self.state.curses else 1
-                self.state.event_timers.append({
-                    "turns": self.rng.randint(8, 15),
-                    "event_type": "summon",
-                    "name": "debt collector",
-                    "char": "D",
-                    "hp": 8 + 2 * stacks,
-                    "attack": 3 + stacks,
-                    "faction": "enemy",
-                })
-                messages = ["The debt is real. Somewhere, something turns toward you."]
-                if curse_message:
-                    messages.insert(0, curse_message)
-                return messages
+                return self._incur_wild_debt()
             return [f"World flag set: {flag}."]
         if effect_type == "schedule_event":
             event = dict(effect.get("event") if isinstance(effect.get("event"), dict) else effect)
@@ -615,6 +598,8 @@ class _EffectsMixin:
                 trigger["expires_turn"] = self.state.turn + clamp_int(trigger["duration"], 1, 999)
             self.state.triggers.append(trigger)
             return [f"{trigger['name']} waits for {trigger_name.replace('_', ' ')}."]
+        if effect_type == "create_promise":
+            return self._create_spoken_promise(effect)
         if effect_type == "add_curse":
             message = self._apply_cost({"type": "curse", **effect})
             return [message] if message else []
@@ -622,6 +607,103 @@ class _EffectsMixin:
             text = str(effect.get("text") or "").strip()
             return [text] if text else []
         return []
+
+    def _create_spoken_promise(self, effect: dict[str, Any]) -> list[str]:
+        """Prophecy: the player speaks a future into the ledger. The spoken claim goes
+        through the same binding gate as any rumor — concrete words bind, loose words
+        stay flavor — and the world honors what binds. Speaking is never free, and
+        prophesied treasure is borrowed, not given: it incurs Wild Debt."""
+        kind = normalize_id(str(effect.get("kind") or "prophecy")) or "prophecy"
+        if kind not in {"prophecy", "threat", "rumor", "place", "person"}:
+            kind = "prophecy"
+        what = " ".join(str(effect.get("what") or "").split())[:80]
+        where = " ".join(str(effect.get("where") or "").split())[:120]
+        item_name = " ".join(str(effect.get("item") or "").split())[:60]
+        if item_name and not what:
+            what = "cache"  # prophesied things wait somewhere holdable
+        subject = " ".join(str(effect.get("subject") or what or "a spoken prophecy").split())[:80]
+        text = " ".join(str(effect.get("text") or effect.get("claim") or "").split())[:360]
+        if not text:
+            text = f"You spoke it into the world: {subject}."
+        salience = clamp_int(effect.get("salience") or 3, 1, 5)
+        zone = (self.state.zone_x, self.state.zone_y)
+        claimed = parse_spatial_hint(where, fallback_text=f"{subject} {text}", anchor_zone=zone) if where else None
+        digest = hashlib.sha1(f"{self.state.turn}|{subject}|{text}|{item_name}".encode("utf-8")).hexdigest()[:12]
+        promise = WorldPromise(
+            id=f"promise_prophecy_{digest}",
+            kind=kind,
+            subject=subject,
+            text=text,
+            tags=[tag for tag in (normalize_id(what), "prophecy") if tag],
+            source="spell:prophecy",
+            source_turn=self.state.turn,
+            origin_zone=zone,
+            location=self.state.location_label(),
+            salience=salience,
+            confidence=0.9,  # the wild heard you say it
+            what=what,
+            claimed_space=claimed,
+            objective=Objective("fetch", {"item": item_name, "quantity": clamp_int(effect.get("quantity") or 1, 1, 5)}) if item_name else None,
+        )
+        added = self.add_promises([promise])
+        spoken = added[0] if added else promise
+        # Engine-authoritative cost floor on top of whatever the resolution charged.
+        floor = 3 + salience + (5 if item_name else 0)
+        messages = [message for message in [self._apply_cost({"type": "mana", "amount": floor})] if message]
+        if item_name:
+            messages.extend(self._incur_wild_debt())
+        if spoken.binding is not None:
+            messages.append("The world makes room for your words.")
+        else:
+            messages.append("Your words drift into the world, too loose yet to bind it.")
+        return messages
+
+    def _incur_wild_debt(self) -> list[str]:
+        """One rolling Wild Debt: a stacking curse, a collector already on its way, and
+        a threat-promise in the ledger so the journal knows something is coming. The
+        timer is the temporal executor — it settles the promise when it fires."""
+        curse_message = self._apply_cost({
+            "type": "curse",
+            "id": "wild_debt",
+            "name": "Wild Debt",
+            "description": "The wild expects repayment. Something is already on its way.",
+        })
+        stacks = self.state.curses["wild_debt"].stacks if "wild_debt" in self.state.curses else 1
+        debt_promise = next((promise for promise in self.state.promises if promise.id == "promise_wild_debt"), None)
+        if debt_promise is None:
+            self.add_promises([
+                WorldPromise(
+                    id="promise_wild_debt",
+                    kind="threat",
+                    subject="wild debt",
+                    text="The wild expects repayment. Something is already on its way.",
+                    tags=["debt", "collector"],
+                    source="spell:wild_debt",
+                    source_turn=self.state.turn,
+                    origin_zone=(self.state.zone_x, self.state.zone_y),
+                    location=self.state.location_label(),
+                    salience=3,
+                    confidence=0.9,
+                )
+            ])
+        else:
+            # The ledger reopens: a settled debt un-settles when you borrow again.
+            debt_promise.status = "unverified"
+            debt_promise.source_turn = self.state.turn
+        self.state.event_timers.append({
+            "turns": self.rng.randint(8, 15),
+            "event_type": "summon",
+            "name": "debt collector",
+            "char": "D",
+            "hp": 8 + 2 * stacks,
+            "attack": 3 + stacks,
+            "faction": "enemy",
+            "promise_id": "promise_wild_debt",
+        })
+        messages = ["The debt is real. Somewhere, something turns toward you."]
+        if curse_message:
+            messages.insert(0, curse_message)
+        return messages
 
     def shape_points(self, effect: dict[str, Any], fallback_x: int, fallback_y: int) -> list[tuple[int, int]]:
         shape = normalize_id(str(effect.get("shape") or effect.get("pattern") or ""))

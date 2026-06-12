@@ -29,7 +29,7 @@ drives `GameSession` in a readline loop, and optionally saves a replay JSON at e
 `GameSession` — the single object callers interact with. Wraps `GameEngine` and the LLM
 providers. Exposes `process_command(text)` which routes movement, wait, open/close, stairs,
 cast, talk, trade, and inventory commands. Returns an `ActionResult`. Also owns the background
-lore-extraction executor used after dialogue; completed claims are added to `GameState` and
+lore-extraction executor used after dialogue; completed promises are added to `GameState` and
 recorded into replay data. `close()` cancels pending lore work and shuts down the executor.
 Also holds `summarize_state()` (used by the replay system) and `to_replay()` / `from_replay()`
 serialization.
@@ -56,7 +56,7 @@ split into mixins, leaving engine.py with the infrastructure that everything els
 - Spawning: `spawn_actor`, `spawn_npc`, `next_entity_id`
 - Player actions: `attempt_player_move`, `wait_turn`, `open_door`, `open_adjacent_door`, `descend_stairs`, `ascend_stairs`, `teleport_entity`, `_move_to_nearest_open_tile`
 - Standard spells (deterministic, no LLM): `cast_standard_bolt`, `cast_standard_frost`, `cast_standard_heal`, `cast_standard_ward`, `cast_standard_reveal`
-- NPC dialogue/trade/lore: `find_talk_target`, `dialogue_context_for_llm`, `lore_extraction_context`, `lore_claims_for_context`, `add_lore_claims`, `mark_lore_redeemed`, `apply_dialogue_exchange`, `resolve_pending_trade`, `should_consider_trade`, `trade_context_for_llm`
+- NPC dialogue/trade/promises: `find_talk_target`, `dialogue_context_for_llm`, `lore_extraction_context`, `promises_for_context`, `promise_hooks_for_zone`, `add_promises`, `apply_dialogue_exchange`, `resolve_pending_trade`, `should_consider_trade`, `trade_context_for_llm`
 - LLM context building: `context_for_llm`, `nearby_spell_anchors`, `nearby_map_strings`, `nearby_tile_details`
 - Turn bookkeeping: `finish_player_turn`, `_regenerate_player`, `resolve_target`, `resolve_target_group`, `nearest_enemy`, `_verb`
 - Environment tick: `_tick_environment`, `_tick_fire_spread`, `_tick_poison_spread`, `_apply_tile_entry`, `_ambient_sounds`, `_tick_simple_statuses`, `_tick_tile_durations`, `_tick_event_timers`
@@ -98,12 +98,16 @@ All map and world generation (41 methods):
   `_generate_town_start`, `_generate_frontier_start`
 - **Frontier/open zones** — `_generate_open_zone`, `_scatter_terrain_features`,
   `_place_zone_buildings`, `_build_common_structure`, `_build_imperial_structure`,
-  `_wall_room_perimeter`, `_populate_zone`, `_spawn_from_template`, `_random_open_ground_tile`,
-  `_find_entry_tile`
+  `_wall_room_perimeter`, `_realize_zone_promises`, `_build_promise_structure`,
+  `_populate_promise_structure`, `_populate_zone`, `_spawn_from_template`,
+  `_random_open_ground_tile`, `_find_entry_tile`. Open-zone promise realization uses
+  data-driven site archetypes: `sacred_site`, `inhabited_site`, `hostile_site`,
+  `memorial_site`, `hidden_site`, `creature_site`, and `authority_site`. Each archetype
+  defines structure style, footprint, props, optional NPC role, and optional hostile count.
 - **LLM towns** — `_generate_llm_town`, `_draw_road_through_zone`, `_build_town_context`,
-  `_get_town_spec`, `_maybe_pregenerate_adjacent_towns`. Town context includes high-salience
-  unredeemed `LoreClaim` entries as `lore_hooks`; generated towns can redeem those claims
-  into description/NPC/building content and mark them `redeemed`.
+  `_get_town_spec`, `_maybe_pregenerate_adjacent_towns`. Town context includes
+  `promise_hooks` reserved for that specific zone; generated towns can fold one into
+  description/NPC/building content and mark it `realized`.
 - **Zone navigation** — `_cross_zone_edge`, `_save_current_zone`, `_load_or_generate_zone`
 - **Road network** — `_road_anchor`, `_zone_is_road`, `_road_edges`, `_zone_should_be_town`
 
@@ -151,11 +155,22 @@ JSON Schema used for constrained spell decoding live in `spell_contract.py`.
 
 ### `wildmagic/lore.py`
 Dialogue-derived lore extraction. Defines `LoreExtractionProvider` plus Ollama/mock/auto
-providers, `LoreExtractionResolution`, JSON parsing/normalization into `LoreClaim`, and
+providers, `LoreExtractionResolution`, JSON parsing/normalization into `WorldPromise`, and
 `write_lore_audit_log`. The Ollama provider uses purpose `lore`, which routes through the
 background Ollama settings by default; lore `num_gpu` defaults to `0` unless overridden.
-`lore_context_for_prompt()` converts stored claims into compact context for dialogue and
-generated-town hooks.
+Extracted promises are stored in the unified Promise Ledger rather than a separate lore
+claim list.
+
+### `wildmagic/promises.py`
+Promise Ledger data types and prompt-shaping helpers. Defines `WorldPromise`,
+`SpatialHint`, `PromiseBinding`, typed `Objective`/`Reward` stubs, lifecycle/kind constants,
+`PromiseReservation`, deterministic binding helpers, serialization helpers, and
+`promise_context_for_prompt()`. `GameState.promises` is capped to 200 entries. Repeated
+subject/tag-overlap promises merge into the existing entry, bump salience/confidence, and
+can mark it `corroborated`; old low-salience entries are evicted first.
+Buildable promises bind immediately at the lore-drain/action boundary. Directional,
+terrain, and wildcard hints can reserve future zones, with a default capacity of two
+promise realizations per zone and directional overflow spilling outward.
 
 ### `wildmagic/llm_client.py`
 Raw Ollama HTTP transport, completely decoupled from game logic:
@@ -207,11 +222,7 @@ All shared data types and tile constants. No game logic.
   `WATER`, `FIRE`, `SLICK_ICE`, `ICE_WALL`, `POISON_CLOUD`, `VINES`, `RUBBLE`, `MIST`, `ROAD`
 - Derived tile sets: `BLOCKING_TILES`, `DAMAGING_TILES`, `TILE_NAMES`, `TILE_TAGS`, `TILE_ALIASES`
 - Status/damage type catalogues: `MECHANICAL_STATUSES`, `DAMAGE_TYPES`
-- Dataclasses: `Entity`, `Curse`, `Quest`, `LoreClaim`, `NPCProfile`, `GameStats`, `WildMagicOutcome`, `Room`, `ZoneSnapshot`
-
-`GameState.lore_claims` is capped to 200 entries. Repeated subject/tag-overlap claims merge
-into the existing entry, bump salience/confidence, and can mark it `corroborated`; old
-low-salience claims are evicted first.
+- Dataclasses: `Entity`, `Curse`, `NPCProfile`, `GameStats`, `WildMagicOutcome`, `Room`, `ZoneSnapshot`
 
 ### `wildmagic/game_data.py`
 All hand-authored game content and tunable constants:
@@ -257,7 +268,7 @@ ambience, and the wild-magic prompt builder (`region_style` in the LLM context, 
 into the system prompt by `_wild_prompt_messages` in `wild_magic.py`).
 
 ### `wildmagic/npc_quests.py`
-Quest system logic and data. Defines the `QUEST_ITEMS` dictionary mapping special unique quest items to their visual/materials/tags specs. Handles the automatic quest assignment when talking to NPCs, the probability checks for quest item spawning when entering zones (`maybe_spawn_quest_item`), and procedural quest generation (`generate_npc_quest`) for generated NPCs.
+Quest-promise producer logic and data. Defines the `QUEST_ITEMS` dictionary mapping special unique quest items to their visual/materials/tags specs. When an NPC request is heard, `register_heard_quest_item()` appends a `WorldPromise(kind="quest")` with typed fetch objective/reward data. Quest item placement happens when that promise's reserved site realizes; there is no independent random zone-entry quest-item spawner. `generate_npc_quest()` still supplies request fields for procedural NPC profiles.
 
 ### `wildmagic/normalize.py`
 Pure functions for sanitising and coercing LLM output. No side effects, no imports outside
@@ -297,7 +308,7 @@ report under `logs/dialogue_eval/`.
 ### `wildmagic/lore_eval.py`
 Lore-extraction eval harness (`python -m wildmagic.lore_eval`): reads saved dialogue eval
 reports, runs each NPC reply through the lore extractor provider, and writes the extracted
-claims plus technical failures under `logs/lore_eval/`.
+promises plus technical failures under `logs/lore_eval/`.
 
 ### `wildmagic/smoke_test.py`
 Headless integration test. Creates a `test_chamber` session with `MockWildMagicProvider`,
@@ -328,7 +339,7 @@ main.py / cli.py
             │       ├── prompts.py      (system prompts)
             │       ├── spell_contract.py (spell schema + validation)
             │       └── fallbacks.py    (regex fallback)
-            └── lore.py (dialogue claim extraction + lore prompt context)
+            └── lore.py (dialogue promise extraction)
                     ├── llm_client.py
                     ├── llm_resolver.py
                     └── prompts.py
@@ -340,4 +351,5 @@ Shared leaves (imported by many, import nothing above them):
     geometry.py
     determinism.py
     normalize.py
+    promises.py
 ```

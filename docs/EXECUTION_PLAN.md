@@ -721,6 +721,64 @@ when you return to a town where you did something notable, the townsfolk have he
 - Reputation observably changes at least three NPC behaviors (prices, hostility, sheltering).
 - Rumor state is covered by replay tests.
 
+*(June 2026 note: the dialogue-lore extraction system has landed — `wildmagic/lore.py`,
+LoreClaim ledger, town lore_hooks. Phase 17 below absorbs that system and this phase's
+rumor-ledger half into a unified Promise Ledger; the reputation/propagation half of this
+phase remains as scoped, consuming the same ledger.)*
+
+## Phase 17: The Promise Ledger (Unify Rumors, Quests, And Emergent World Creation)
+
+Goal: one system for everything the world has committed to narratively but not yet
+delivered mechanically. Full design in `docs/WORLD_PROMISES.md` — decisions locked
+June 2026:
+
+- **Always honor (pure yes-and):** every bound promise comes true; the quality gate is
+  binding, not realization. What the world can't build stays flavor lore.
+- **One `WorldPromise` entity** absorbs `LoreClaim`, `Quest`, and town lore_hooks — one
+  lifecycle (pending → bound → realized/fulfilled/contested), one spatial-binding model,
+  one realization pipeline.
+- **Deterministic skeleton + LLM flesh:** seeded rules decide what binds where and what
+  gets built (replay-safe); the background CPU model optionally fleshes names and
+  backstories via the existing pregen pattern, never load-bearing.
+- **v1 ceiling:** structures in any zone (the "chapel north of town" case), promise-bound
+  NPCs aware of the rumor that created them, and quest objectives/rewards realized
+  cross-zone. Conditional appearances ("only at midnight") deferred.
+
+Flagship acceptance test: an NPC says "there is a chapel north of town" → the next
+unexplored zone north — town or not — contains a chapel whose keeper has heard the story.
+
+Build order (M1–M6 detailed in the design doc): ledger + migration → binding (spatial
+resolver, blueprint table, reservations) → open-zone realization → quest unification →
+LLM flesh → `promise_eval` harness.
+
+**Status (late June 2026): M1–M4 implemented** — unified ledger, deterministic
+binding/reservations, archetype-site realization in any zone, promise-backed quest log;
+all deletion gates verified held. The replay contract (the open M2 debt) is now closed:
+replay format v3 records promise apply points per action (`promises.before/after` +
+`final_promises`), replays inject them with zero model calls, and a late-drain
+integration test proves a zone generated between dialogue and drain replays identically.
+M5 flesh is also in: background decoration drafts (keeper, arrival line, prop flavor)
+enqueued when a promise binds, never load-bearing, recorded at apply points and
+replay-injected with zero model calls. Remaining, in order (detailed in the design
+doc's "Next pieces"): live-model capture shakedown (funnel-scoring `lore_eval` built;
+live run pending review), M6 eval graduation + agent playtest, a player-facing promise
+journal, then prophecy spells as the first new producer bridging back to Phase 8.
+
+Revised after Codex review (`WORLD_PROMISES_NOTES_TO_CLAUDE.md`): **every milestone now
+ends with named legacy writers deleted** (M1 kills `LoreClaim`/`lore_claims`, M2 kills
+`lore_hooks`/`mark_lore_redeemed`, M4 kills persistent `Quest`/`maybe_spawn_quest_item`);
+the schema separates `claimed_space` from `bound_space` so always-honor relocations are
+recorded, not silent; objective/reward schemas are typed from M1; the replay contract
+(record creation/binding/reservation/realization/flesh; zero model calls on replay) and
+golden binding tests start in M2, not M6. Old replay files are deleted outright — no
+migration parser; the format version bumps so stale files fail fast, and new goldens are
+recorded fresh.
+
+Future producers already designed for: prophecy spells (wild magic that mints promises),
+NPC rendezvous commitments ("I'll meet you at the chapel"), clerk/flier threat-promises
+from the Phase 14 heat system (including named investigators like Kipler), and
+player-spread false rumors for the coalition arc.
+
 ## Continuous Testing Plan
 
 Testing should grow alongside features rather than wait until the end.

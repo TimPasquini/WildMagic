@@ -8,6 +8,8 @@ The core design rule:
 
 Your job as an agent is to help the game become a broader, more reliable simulation where strange prompts can be expressed through reusable mechanics.
 
+Always design for maximum flexibility. The core promise of the game is that you can do anything (unless it's overpowered,) so every decision must consider how it unlocks the maximum amount of interesting possibilities. Hard-coding should be a last resort, and should require explicit authorization from the human user. Build general, flexible systems instead which can handle a wide range of circumstances, relying on the LLM when necessary as an enabler.
+
 ## Project Strategy
 
 Wild Magic should handle arbitrary inputs gracefully by growing general systems:
@@ -18,6 +20,7 @@ Wild Magic should handle arbitrary inputs gracefully by growing general systems:
 - Prefer rich state plus small composable effects: damage, status, terrain, movement, summoning, faction changes, tags, inventory, curses, flags, delayed events.
 - Keep the deterministic engine in charge of legality, bounds, turn cost, state validation, and logging.
 - Make every feature playable through the headless CLI so agents can test it without manual UI work.
+- Consider adding new features for spell resolution when the existing resolutions are not satisfactory, and the new feature is general enough to unlock a huge number of possibilities.
 
 ## Design Principles
 
