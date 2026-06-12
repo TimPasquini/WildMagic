@@ -1,6 +1,7 @@
 """Replay contract for the Promise Ledger: promises are injected at the recorded apply
 point (the command boundary where the background lore drain landed), so zones generated
 between the dialogue and the drain see the same reservations live and on replay."""
+
 from __future__ import annotations
 
 import concurrent.futures
@@ -45,10 +46,16 @@ class GatedChapelLoreProvider:
         )
 
 
-def _walk_north_until_zone(session: GameSession, target_zone_y: int, max_commands: int = 400) -> bool:
+def _walk_north_until_zone(
+    session: GameSession, target_zone_y: int, max_commands: int = 400
+) -> bool:
     state = session.engine.state
     commands = 0
-    while state.zone_y != target_zone_y and commands < max_commands and not state.game_over:
+    while (
+        state.zone_y != target_zone_y
+        and commands < max_commands
+        and not state.game_over
+    ):
         player = state.player
         for move in ("north", "northeast", "northwest", "east", "west"):
             before = (player.x, player.y, state.zone_y)
@@ -60,7 +67,9 @@ def _walk_north_until_zone(session: GameSession, target_zone_y: int, max_command
     return state.zone_y == target_zone_y
 
 
-def test_replay_reproduces_late_lore_drain_across_zone_generation(tmp_path: Path) -> None:
+def test_replay_reproduces_late_lore_drain_across_zone_generation(
+    tmp_path: Path,
+) -> None:
     lore_provider = GatedChapelLoreProvider()
     session = GameSession(
         seed=101,
@@ -86,20 +95,30 @@ def test_replay_reproduces_late_lore_drain_across_zone_generation(tmp_path: Path
         # Cross into zone (0, -1) while the extraction is still pending: this zone must
         # generate without the chapel, live and on replay alike.
         assert _walk_north_until_zone(session, -1)
-        assert not any(promise.kind == "rumor" for promise in session.engine.state.promises)
+        assert not any(
+            promise.kind == "rumor" for promise in session.engine.state.promises
+        )
 
         # Release the extraction; the drain lands at the next command boundary.
         lore_provider.gate.set()
-        concurrent.futures.wait([future for future, _ in session._pending_lore], timeout=10)
+        concurrent.futures.wait(
+            [future for future, _ in session._pending_lore], timeout=10
+        )
         session.execute_command("wait")
         assert lore_provider.calls == 1
 
-        chapels = [promise for promise in session.engine.state.promises if "chapel" in promise.tags]
+        chapels = [
+            promise
+            for promise in session.engine.state.promises
+            if "chapel" in promise.tags
+        ]
         assert len(chapels) == 1
         chapel = chapels[0]
         # (0, -1) was explored before the drain, so the claim relocates further north.
         assert chapel.bound_space is not None and chapel.bound_space.zone == (0, -2)
-        assert session.records[-1]["promises"]["before"], "drain must be recorded at its apply point"
+        assert session.records[-1]["promises"]["before"], (
+            "drain must be recorded at its apply point"
+        )
 
         # Crossing into the bound zone realizes the promised site.
         assert _walk_north_until_zone(session, -2)
@@ -112,7 +131,10 @@ def test_replay_reproduces_late_lore_drain_across_zone_generation(tmp_path: Path
 
     result = run_replay(replay_path)
     assert result.matched, json.dumps(
-        {"expected": result.expected_summary, "actual": result.final_summary}, indent=2, sort_keys=True, default=str
+        {"expected": result.expected_summary, "actual": result.final_summary},
+        indent=2,
+        sort_keys=True,
+        default=str,
     )
 
 

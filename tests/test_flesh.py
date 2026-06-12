@@ -3,6 +3,7 @@
 Flesh decorates realization (keeper, arrival line, prop flavor) but is never
 load-bearing — the deterministic skeleton stands complete without it — and it is
 recorded at its apply point so replays reproduce it with zero model calls."""
+
 from __future__ import annotations
 
 import concurrent.futures
@@ -54,10 +55,16 @@ class GatedChapelLoreProvider:
         )
 
 
-def _walk_north_until_zone(session: GameSession, target_zone_y: int, max_commands: int = 400) -> bool:
+def _walk_north_until_zone(
+    session: GameSession, target_zone_y: int, max_commands: int = 400
+) -> bool:
     state = session.engine.state
     commands = 0
-    while state.zone_y != target_zone_y and commands < max_commands and not state.game_over:
+    while (
+        state.zone_y != target_zone_y
+        and commands < max_commands
+        and not state.game_over
+    ):
         player = state.player
         for move in ("north", "northeast", "northwest", "east", "west"):
             before = (player.x, player.y, state.zone_y)
@@ -72,7 +79,13 @@ def _walk_north_until_zone(session: GameSession, target_zone_y: int, max_command
 def test_normalize_flesh_whitelists_and_clamps() -> None:
     assert normalize_flesh(None) is None
     assert normalize_flesh({"unknown_key": "x", "site_name": "  "}) is None
-    flesh = normalize_flesh({"site_name": "The Long " + "Name " * 40, "keeper_name": "Warden Ash", "effects": [{"type": "damage"}]})
+    flesh = normalize_flesh(
+        {
+            "site_name": "The Long " + "Name " * 40,
+            "keeper_name": "Warden Ash",
+            "effects": [{"type": "damage"}],
+        }
+    )
     assert flesh is not None
     assert set(flesh) == {"site_name", "keeper_name"}
     assert len(flesh["site_name"]) <= 60
@@ -100,7 +113,10 @@ def test_replay_flesh_injects_without_provider_call() -> None:
         salience=4,
         confidence=0.7,
     )
-    flesh_event = {"promise_id": "promise_chapel", "flesh": {"keeper_name": "Warden Ash", "arrival_line": "The bell still rings."}}
+    flesh_event = {
+        "promise_id": "promise_chapel",
+        "flesh": {"keeper_name": "Warden Ash", "arrival_line": "The bell still rings."},
+    }
 
     session.execute_command(
         "wait",
@@ -136,22 +152,31 @@ def test_flesh_decorates_realization_and_replays_identically(tmp_path: Path) -> 
             {},
         )
         lore_provider.gate.set()
-        concurrent.futures.wait([future for future, _ in session._pending_lore], timeout=10)
+        concurrent.futures.wait(
+            [future for future, _ in session._pending_lore], timeout=10
+        )
         session.execute_command("wait")  # drains lore, binds the chapel, enqueues flesh
-        concurrent.futures.wait([future for future, _ in session._pending_flesh], timeout=10)
+        concurrent.futures.wait(
+            [future for future, _ in session._pending_flesh], timeout=10
+        )
         session.execute_command("wait")  # drains flesh at a recorded apply point
 
         chapel = next(p for p in session.engine.state.promises if "chapel" in p.tags)
         assert chapel.flesh is not None
         assert chapel.flesh["keeper_name"] == "Warden Hill"
-        assert session.records[-1]["flesh"]["before"] or session.records[-1]["flesh"]["after"]
+        assert (
+            session.records[-1]["flesh"]["before"]
+            or session.records[-1]["flesh"]["after"]
+        )
 
         assert _walk_north_until_zone(session, -1)
         # The chapel bound to the first unexplored northern zone: (0, -1).
         assert chapel.status == "realized"
         messages = session.engine.state.messages
         assert any("The story was true after all" in message for message in messages)
-        keepers = [e for e in session.engine.state.entities.values() if e.name == "Warden Hill"]
+        keepers = [
+            e for e in session.engine.state.entities.values() if e.name == "Warden Hill"
+        ]
         assert keepers, "flesh keeper_name should name the realized site's keeper"
 
         replay_path = tmp_path / "flesh.json"
@@ -161,5 +186,8 @@ def test_flesh_decorates_realization_and_replays_identically(tmp_path: Path) -> 
 
     result = run_replay(replay_path)
     assert result.matched, json.dumps(
-        {"expected": result.expected_summary, "actual": result.final_summary}, indent=2, sort_keys=True, default=str
+        {"expected": result.expected_summary, "actual": result.final_summary},
+        indent=2,
+        sort_keys=True,
+        default=str,
     )

@@ -71,7 +71,9 @@ def test_dialogue_lore_extraction_adds_claim_to_ledger() -> None:
     session.drain_lore(block=True)
 
     assert result.success is True
-    lore_promises = [promise for promise in session.engine.state.promises if promise.kind != "quest"]
+    lore_promises = [
+        promise for promise in session.engine.state.promises if promise.kind != "quest"
+    ]
     assert len(lore_promises) == 1
     promise = lore_promises[0]
     assert promise.kind == "rumor"
@@ -96,7 +98,9 @@ class CountingLoreProvider:
 
 def test_replay_promises_inject_at_apply_point_without_provider_call() -> None:
     lore_provider = CountingLoreProvider()
-    session = GameSession(seed=7, scenario="town", provider_name="mock", lore_provider=lore_provider)
+    session = GameSession(
+        seed=7, scenario="town", provider_name="mock", lore_provider=lore_provider
+    )
     _stand_next_to_first_npc(session)
     promise = WorldPromise(
         id="promise_replay",
@@ -124,9 +128,14 @@ def test_replay_promises_inject_at_apply_point_without_provider_call() -> None:
 
     assert result.success is True
     assert lore_provider.calls == 0
-    assert [stored.id for stored in session.engine.state.promises if stored.kind != "quest"] == ["promise_replay"]
+    assert [
+        stored.id for stored in session.engine.state.promises if stored.kind != "quest"
+    ] == ["promise_replay"]
     # Replaying re-records the same apply point, so a replay round-trips byte-identically.
-    assert session.records[-1]["promises"] == {"before": [], "after": [promise.to_dict()]}
+    assert session.records[-1]["promises"] == {
+        "before": [],
+        "after": [promise.to_dict()],
+    }
 
 
 def test_dialogue_context_includes_nearby_objects() -> None:
@@ -151,10 +160,15 @@ def test_dialogue_context_includes_nearby_objects() -> None:
     far_names = [
         entity.name
         for entity in engine.state.entities.values()
-        if entity.kind in {"prop", "item"} and max(abs(entity.x - npc.x), abs(entity.y - npc.y)) > 6
+        if entity.kind in {"prop", "item"}
+        and max(abs(entity.x - npc.x), abs(entity.y - npc.y)) > 6
     ]
     for name in far_names:
-        if name not in [e.name for e in engine.state.entities.values() if max(abs(e.x - npc.x), abs(e.y - npc.y)) <= 6]:
+        if name not in [
+            e.name
+            for e in engine.state.entities.values()
+            if max(abs(e.x - npc.x), abs(e.y - npc.y)) <= 6
+        ]:
             assert name not in names
 
 

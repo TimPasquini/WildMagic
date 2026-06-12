@@ -20,7 +20,9 @@ def test_manual_quest_commands_use_promise_log() -> None:
     assert session.engine.state.promises[0].kind == "quest"
 
 
-def test_npc_request_registers_quest_promise_and_realizes_fetch_item(monkeypatch) -> None:
+def test_npc_request_registers_quest_promise_and_realizes_fetch_item(
+    monkeypatch,
+) -> None:
     session = GameSession(seed=23, scenario="frontier", provider_name="mock")
     engine = session.engine
     monkeypatch.setattr(engine, "_zone_should_be_town", lambda zx, zy: False)
@@ -37,11 +39,15 @@ def test_npc_request_registers_quest_promise_and_realizes_fetch_item(monkeypatch
         reward_gold=25,
     )
 
-    engine.apply_dialogue_exchange(npc, "Any work?", "Bring me the Glass Eye of Hollowmere.", None)
+    engine.apply_dialogue_exchange(
+        npc, "Any work?", "Bring me the Glass Eye of Hollowmere.", None
+    )
 
     entries = engine.quest_log_entries()
     assert len(entries) == 1
-    promise = next(promise for promise in engine.state.promises if promise.kind == "quest")
+    promise = next(
+        promise for promise in engine.state.promises if promise.kind == "quest"
+    )
     assert promise.binding is not None
     assert promise.binding.blueprint == "hidden_site"
     assert promise.bound_space is not None
@@ -72,7 +78,9 @@ def test_quest_turn_in_fulfills_matching_promise() -> None:
         wanted_qty=1,
         reward_gold=25,
     )
-    engine.apply_dialogue_exchange(npc, "Any work?", "Bring me the Glass Eye of Hollowmere.", None)
+    engine.apply_dialogue_exchange(
+        npc, "Any work?", "Bring me the Glass Eye of Hollowmere.", None
+    )
     engine.state.inventory["glass eye of hollowmere"] = 1
     engine.state.pending_trade = {
         "npc_id": npc.id,
@@ -85,7 +93,9 @@ def test_quest_turn_in_fulfills_matching_promise() -> None:
 
     engine.resolve_pending_trade(True)
 
-    promise = next(promise for promise in engine.state.promises if promise.kind == "quest")
+    promise = next(
+        promise for promise in engine.state.promises if promise.kind == "quest"
+    )
     assert promise.status == "fulfilled"
     assert engine.state.npc_profiles[npc.id].quest_completed is True
     assert engine.quest_log_entries()[0].status == "completed"
