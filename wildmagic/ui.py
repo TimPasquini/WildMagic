@@ -19,6 +19,7 @@ from .autoplay import (
     adjacent_options,
     avoid_commands_from_history,
     compact_messages,
+    expedition_direction_for_seed,
     local_map_view,
     result_summary,
     validate_agent_command,
@@ -126,6 +127,7 @@ class VisualAutoplayController:
         self.next_command_at = 0.0
         self.thinking_since: float | None = None
         self.book_popup_until: float | None = None
+        self.expedition_direction = expedition_direction_for_seed(None, int(time.time()))
         if enabled:
             self.start()
 
@@ -170,6 +172,7 @@ class VisualAutoplayController:
         self.last_message_count = 0
         self.next_command_at = time.monotonic() + 0.2
         self.book_popup_until = None
+        self.expedition_direction = expedition_direction_for_seed(self.ui.session.seed, int(time.time()))
 
     def toggle(self) -> None:
         if self.enabled:
@@ -298,10 +301,12 @@ class VisualAutoplayController:
             recent_results=self.recent_results[-6:],
             last_result=self.last_result,
             avoid_commands=avoid,
+            expedition_direction=self.expedition_direction,
             nudge=(
                 "You are being watched in the graphical UI. Do not merely wander. Rotate through visible "
                 "systems: inspect/examine/investigate rooms, read books, talk to NPCs, fight or control "
-                "enemies, pick up/use/equip items, and cast varied wild spells that visibly change the scene."
+                "enemies, pick up/use/equip items, and cast varied wild spells that visibly change the scene. "
+                f"When local work is done, resume exploring generally {self.expedition_direction}."
             ),
         )
 
@@ -319,7 +324,7 @@ class VisualAutoplayController:
     def overlay_lines(self) -> list[tuple[str, tuple[int, int, int]]]:
         if not self.enabled:
             return [("AI Watch: off   F8 start", MUTED)]
-        lines = [(f"AI Watch: {self.status}   F8 stop  F9 pause  F10 step", ACCENT)]
+        lines = [(f"AI Watch: {self.status}   heading {self.expedition_direction}   F8 stop  F9 pause  F10 step", ACCENT)]
         if self.last_command:
             lines.append((f"> {self.last_command}", TEXT))
         if self.last_note:

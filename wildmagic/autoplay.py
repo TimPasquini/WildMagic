@@ -39,6 +39,7 @@ CARDINAL_DIRECTIONS = {
     "east": (1, 0),
     "west": (-1, 0),
 }
+EXPEDITION_DIRECTIONS = ("north", "east", "south", "west")
 THEMES = (
     "Focus on terrain-transformation spells this run.",
     "Use ordinary roguelike tactics and cast only when pressured.",
@@ -79,7 +80,9 @@ Coverage goals:
   evade, summon help, or reshape the battlefield.
 - Explore rooms deliberately. Move into unexplored/open space, open doors, pick up useful
   items, descend or ascend when ready, and use the map/adjacent table instead of choosing
-  random directions.
+  random directions. Each run has an expedition_direction; after local interactions, resume
+  generally traveling that way. If that direction is blocked, use nearby open doors/rooms or
+  a side-step until you can make progress that way again.
 - Test world-interaction systems. Use inspect/status to understand state; journal to review
   persistent rumors/promises; examine/study/observe to materialize room lore; investigate/search
   rooms, props, clues, or secrets; read books or readable objects once; talk/speak/say to NPCs;
@@ -87,7 +90,8 @@ Coverage goals:
   items when inventory suggests it.
 - Do not treat movement as the default answer. If the last few commands were mostly movement,
   choose a different useful system command such as inspect, examine, investigate, talk, read,
-  pickup, a standard spell, or a wild spell.
+  pickup, a standard spell, or a wild spell. If the last few commands were mostly spells and
+  no enemy or urgent object remains, stop casting and return to exploration.
 
 Command meanings:
 - inspect/status/inventory: free state summary; use when unsure what is nearby or what changed.
@@ -115,7 +119,8 @@ Play rules:
 - Do not read the same book/title repeatedly after it has already shown its text.
 - Do not cast the same spell phrase more than twice in a row; vary spell text or observe the result.
 - If HP is low, heal, ward, retreat, or use an item rather than continuing a risky loop.
-- If MP is low, use ordinary movement/safe spells/items instead of repeated wild casts.
+- If MP is low, use ordinary movement/safe spells/items instead of repeated wild casts; wild
+  spells can charge health when mana is insufficient.
 - Use the local map and adjacent direction table: north is up, east is right.
 - If you suspect a bug, set bug_suspected=true and put a concise lead in note, but still choose a useful command.
 - Never edit files, run shell commands, or ask for help. You are only playing through CLI commands.
@@ -195,6 +200,7 @@ class AgentObservation:
     recent_results: list[dict[str, Any]] = field(default_factory=list)
     last_result: dict[str, Any] | None = None
     avoid_commands: list[str] = field(default_factory=list)
+    expedition_direction: str | None = None
     nudge: str | None = None
 
     def to_prompt_dict(self) -> dict[str, Any]:
@@ -207,6 +213,11 @@ class AgentObservation:
         )
         data["decision_hints"] = decision_hints(data)
         return data
+
+
+def expedition_direction_for_seed(seed: int | None, episode: int = 0) -> str:
+    basis = seed if seed is not None else episode
+    return EXPEDITION_DIRECTIONS[basis % len(EXPEDITION_DIRECTIONS)]
 
 
 @dataclass
@@ -531,6 +542,22 @@ def avoid_commands_from_history(
 def decision_hints(prompt_data: dict[str, Any]) -> list[str]:
     hints: list[str] = []
     adjacent = prompt_data.get("adjacent") or {}
+    expedition_direction = str(prompt_data.get("expedition_direction") or "").strip().lower()
+    if expedition_direction:
+        info = adjacent.get(expedition_direction) if isinstance(adjacent, dict) else None
+        if isinstance(info, dict):
+            status = info.get("status")
+            suggested = info.get("suggested_command")
+            if status in {"open", "door", "enemy"} and suggested:
+                hints.append(
+                    f"Run heading is {expedition_direction}; after local interactions, prefer `{suggested}` to keep exploring."
+                )
+            elif status == "blocked":
+                hints.append(
+                    f"Run heading is {expedition_direction}, but it is blocked now; use a side route, door, investigation, or room exit to regain that heading."
+                )
+        else:
+            hints.append(f"Run heading is {expedition_direction}; resume that general direction after local interactions.")
     open_dirs = [
         direction
         for direction, info in adjacent.items()
@@ -704,6 +731,7 @@ class EpisodeRunner:
         self.notes: list[str] = []
         self.findings: list[Finding] = []
         self.step_count = 0
+        self.expedition_direction = expedition_direction_for_seed(seed, episode_index)
         stem = f"episode_{episode_index:03d}"
         self.step_path = run_dir / f"{stem}.jsonl"
         self.replay_path = run_dir / f"{stem}.replay.json"
@@ -759,6 +787,7 @@ class EpisodeRunner:
                         repeated_command,
                         repeated_count,
                     ),
+                    expedition_direction=self.expedition_direction,
                     nudge=nudge,
                 )
                 nudge = None
@@ -836,6 +865,14 @@ class EpisodeRunner:
                     nudge = (
                         f"`{result.command}` did not change the turn. Pick a different command; use the adjacent "
                         "direction table instead of retrying the same blocked action."
+                    )
+                recent_casts = sum(1 for item in self.command_history[-4:] if item.lower().startswith("cast "))
+                living_enemies = session.engine.living_enemies()
+                visible_enemies = [enemy for enemy in living_enemies if session.engine.is_visible(enemy.x, enemy.y)]
+                if recent_casts >= 3 and not visible_enemies:
+                    nudge = (
+                        f"You have cast several spells and no visible enemy remains. Resume exploration toward "
+                        f"{self.expedition_direction}; use rooms, doors, stairs, investigate/read/talk, or movement."
                     )
                 if result.should_quit:
                     completion_reason = "quit"

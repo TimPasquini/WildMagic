@@ -105,7 +105,22 @@ class _EffectsMixin:
         player = self.state.player
         if cost_type == "mana":
             amount = clamp_int(cost.get("amount"), 1, 99)
-            player.mana = max(0, player.mana - amount)
+            paid = min(player.mana, amount)
+            shortfall = amount - paid
+            player.mana -= paid
+            if shortfall:
+                if paid:
+                    self.state.add_message(
+                        f"Cost: {paid} mana; mana shortfall costs {shortfall} health.",
+                        is_danger=True,
+                    )
+                else:
+                    self.state.add_message(
+                        f"Cost unpaid: no mana; wild magic takes {shortfall} health.",
+                        is_danger=True,
+                    )
+                self.damage_entity(player, shortfall, "blood")
+                return None
             return f"Cost: {amount} mana."
         if cost_type in {"health", "hp"}:
             amount = clamp_int(cost.get("amount"), 1, 99)
@@ -917,5 +932,4 @@ class _EffectsMixin:
                 if self.can_occupy(tx, ty):
                     return tx, ty
         return self.state.player.x, self.state.player.y
-
 

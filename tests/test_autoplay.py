@@ -15,6 +15,7 @@ from wildmagic.autoplay import (
     cluster_notes,
     compact_messages,
     finding_spell,
+    expedition_direction_for_seed,
     local_map_view,
     parse_agent_response,
     result_summary,
@@ -157,6 +158,7 @@ def test_agent_observation_compacts_long_messages_and_exposes_decision_hints() -
         recent_commands=["move north", "move north"],
         last_result={"command": "move north", "success": False, "messages": ["wall blocks the way."]},
         avoid_commands=["move north"],
+        expedition_direction="east",
     )
 
     payload = observation.to_prompt_dict()
@@ -165,6 +167,13 @@ def test_agent_observation_compacts_long_messages_and_exposes_decision_hints() -
     assert "persona_guidance" in payload
     assert any("Useful directions" in hint and "east" in hint for hint in payload["decision_hints"])
     assert any("Do not choose" in hint and "move north" in hint for hint in payload["decision_hints"])
+    assert any("Run heading is east" in hint and "move east" in hint for hint in payload["decision_hints"])
+
+
+def test_expedition_direction_is_stable_from_seed() -> None:
+    assert expedition_direction_for_seed(1, 1) == "east"
+    assert expedition_direction_for_seed(1, 99) == "east"
+    assert expedition_direction_for_seed(None, 2) == "south"
 
 
 def test_ollama_agent_prompt_contains_loop_recovery_instructions() -> None:

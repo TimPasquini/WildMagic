@@ -78,6 +78,40 @@ def test_successful_resolution_applies_effects_and_costs_before_advancing_turn()
     assert engine.state.stats.spells_cast == 1
 
 
+def test_mana_cost_shortfall_becomes_health_cost() -> None:
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    player = engine.state.player
+    player.mana = 1
+    hp_before = player.hp
+
+    outcome = engine.apply_wild_magic_resolution(
+        resolution(costs=[{"type": "mana", "amount": 4}])
+    )
+
+    assert outcome.technical_failure is False
+    assert outcome.consumed_turn is True
+    assert player.mana == 0
+    assert player.hp == hp_before - 3
+    assert any("mana shortfall costs 3 health" in message for message in engine.state.messages)
+
+
+def test_zero_mana_wild_spell_costs_health_instead_of_being_free() -> None:
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    player = engine.state.player
+    player.mana = 0
+    hp_before = player.hp
+
+    outcome = engine.apply_wild_magic_resolution(
+        resolution(costs=[{"type": "mana", "amount": 3}])
+    )
+
+    assert outcome.technical_failure is False
+    assert outcome.consumed_turn is True
+    assert player.mana == 0
+    assert player.hp == hp_before - 3
+    assert any("Cost unpaid: no mana" in message for message in engine.state.messages)
+
+
 def test_application_exception_rolls_back_all_partial_state(
     monkeypatch,
 ) -> None:
