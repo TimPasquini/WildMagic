@@ -145,8 +145,9 @@ python -m wildmagic.autoplay --episodes 3 --max-turns 50 --provider mock --agent
 ```
 
 Flags: `--episodes`, `--hours`, `--max-turns`, `--scenario` (repeatable; default rotation),
-`--persona` (repeatable; default rotation), `--seed-base`, `--provider` (game resolver:
-mock/ollama), `--agent` (command chooser: ollama/stub/random), `--out`.
+`--persona` (repeatable; default rotation), `--seed-base` (optional reproducibility override;
+defaults to a fresh random seed base per campaign), `--provider` (game resolver: mock/ollama),
+`--agent` (command chooser: ollama/stub/random), `--out`.
 
 ### Output layout
 

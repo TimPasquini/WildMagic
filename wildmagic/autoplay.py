@@ -40,6 +40,7 @@ CARDINAL_DIRECTIONS = {
     "west": (-1, 0),
 }
 EXPEDITION_DIRECTIONS = ("north", "east", "south", "west")
+MAX_RANDOM_SEED_BASE = 2_147_483_647
 THEMES = (
     "Focus on terrain-transformation spells this run.",
     "Use ordinary roguelike tactics and cast only when pressured.",
@@ -48,6 +49,10 @@ THEMES = (
     "Stress-test boundaries with ambitious but not instantly winning magic.",
     "Try to reach the next area while keeping yourself alive.",
 )
+
+
+def random_seed_base() -> int:
+    return random.SystemRandom().randint(1, MAX_RANDOM_SEED_BASE)
 
 PERSONA_GUIDANCE = {
     "cautious": (
@@ -283,7 +288,7 @@ class CampaignConfig:
     episode_minutes: float = 15.0
     scenarios: list[str] = field(default_factory=lambda: list(SCENARIOS))
     personas: list[str] = field(default_factory=lambda: list(PERSONAS))
-    seed_base: int = 1
+    seed_base: int = field(default_factory=random_seed_base)
     provider: str | None = "mock"
     agent: str = "stub"
     out: Path = Path("logs/autoplay")
@@ -1248,7 +1253,12 @@ def parse_args(argv: list[str] | None = None) -> CampaignConfig:
     parser.add_argument("--episode-minutes", type=float, default=15.0)
     parser.add_argument("--scenario", action="append", choices=["dungeon", "test_chamber", "empire_compound", "frontier", "town"])
     parser.add_argument("--persona", action="append", choices=list(PERSONAS))
-    parser.add_argument("--seed-base", type=int, default=1)
+    parser.add_argument(
+        "--seed-base",
+        type=int,
+        default=None,
+        help="First episode seed. Defaults to a fresh random seed base for each campaign.",
+    )
     parser.add_argument("--provider", default="mock", choices=["auto", "mock", "ollama"])
     parser.add_argument("--agent", default="stub", choices=["ollama", "stub", "random"])
     parser.add_argument("--out", type=Path, default=Path("logs/autoplay"))
@@ -1264,7 +1274,7 @@ def parse_args(argv: list[str] | None = None) -> CampaignConfig:
         episode_minutes=max(0.1, args.episode_minutes),
         scenarios=args.scenario or list(SCENARIOS),
         personas=args.persona or list(PERSONAS),
-        seed_base=args.seed_base,
+        seed_base=args.seed_base if args.seed_base is not None else random_seed_base(),
         provider=args.provider,
         agent=args.agent,
         out=args.out,

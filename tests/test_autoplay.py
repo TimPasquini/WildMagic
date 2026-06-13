@@ -17,7 +17,9 @@ from wildmagic.autoplay import (
     finding_spell,
     expedition_direction_for_seed,
     local_map_view,
+    parse_args,
     parse_agent_response,
+    random_seed_base,
     result_summary,
     validate_agent_command,
 )
@@ -174,6 +176,17 @@ def test_expedition_direction_is_stable_from_seed() -> None:
     assert expedition_direction_for_seed(1, 1) == "east"
     assert expedition_direction_for_seed(1, 99) == "east"
     assert expedition_direction_for_seed(None, 2) == "south"
+
+
+def test_autoplay_default_seed_base_is_randomized_and_overridable() -> None:
+    generated = random_seed_base()
+    assert 1 <= generated <= 2_147_483_647
+
+    default_config = parse_args([])
+    explicit_config = parse_args(["--seed-base", "7"])
+
+    assert 1 <= default_config.seed_base <= 2_147_483_647
+    assert explicit_config.seed_base == 7
 
 
 def test_ollama_agent_prompt_contains_loop_recovery_instructions() -> None:
