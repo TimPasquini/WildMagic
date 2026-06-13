@@ -113,7 +113,7 @@ ignoring the spell contract in creative ways.
 | `WILDMAGIC_AGENT_NUM_PREDICT` | no | 256 (64-1024) | command-chooser response budget |
 | `WILDMAGIC_TOWN_NUM_PREDICT` | no | 2000 (256–8192) | town generation budget |
 | `WILDMAGIC_LORE_NUM_PREDICT` | no | 700 (64–2048) | lore/flesh budget |
-| `WILDMAGIC_CANON_NUM_PREDICT` | no | 1400 (64–2048) | examine/read budget; sized for compressed book pages. Truncation past the cap is recovered by the canon JSON salvage, so it stays modest — this is a blocking call, and on slow backends a bigger cap risks blowing the timeout (empty result) instead of just truncating |
+| `WILDMAGIC_CANON_NUM_PREDICT` | no | 2048 (64–4096) | examine/study/investigate/read budget; sized for compressed book pages and close-study prose. Truncation past the cap is recovered by the canon JSON salvage. This is a blocking call, and on slow backends a bigger cap risks blowing the timeout (empty result) instead of just truncating — raise with care |
 | `WILDMAGIC_OLLAMA_RESOLUTION_ATTEMPTS` | no | 2 (1–4) | wild-magic retries on malformed JSON |
 
 For `--agent ollama`, keep `WILDMAGIC_AGENT_OLLAMA_NUM_CTX` aligned with the foreground

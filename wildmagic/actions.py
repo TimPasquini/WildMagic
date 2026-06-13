@@ -354,6 +354,17 @@ class GameSession:
                 success = self.engine.unequip_item(slot_name) if slot_name else False
                 if not slot_name:
                     explicit_messages = ["Unequip what? Specify a slot or item name."]
+            elif verb in {"possess", "swap", "inhabit"}:
+                action = "possess"
+                before_id = self.engine.state.player_id
+                target = self._find_swap_target(command_argument(original_command, tokens))
+                if target is None:
+                    explicit_messages = ["No body within reach to inhabit."]
+                else:
+                    explicit_messages = self.engine.swap_control_to(target.id)
+                    success = self.engine.state.player_id != before_id
+                    if success:
+                        self.engine.finish_player_turn()
             elif verb in {"cast", "wild"}:
                 action = "cast"
                 spell = command_argument(original_command, tokens)
@@ -483,6 +494,26 @@ class GameSession:
 
     def cast_wild(self, spell: str, record: bool = True) -> ActionResult:
         return self.execute_command(f"cast {spell}", record=record)
+
+    def _find_swap_target(self, name: str) -> Any | None:
+        """Pick a body to inhabit for the `possess` command: the named creature if one
+        matches, otherwise the nearest inhabitable entity. Husks are eligible, so you
+        can leap back into a body you left behind."""
+        state = self.engine.state
+        player = state.player
+        candidates = [
+            entity
+            for entity in state.entities.values()
+            if entity.kind in {"actor", "npc"} and entity.alive and entity.id != state.player_id
+        ]
+        wanted = name.strip().lower()
+        if wanted:
+            named = [entity for entity in candidates if wanted in entity.name.lower()]
+            if named:
+                candidates = named
+        if not candidates:
+            return None
+        return min(candidates, key=lambda entity: self.engine.distance(player, entity))
 
     def _present_canon(self, record: CanonRecord) -> list[str]:
         """Canon prose goes through the message log so every frontend shows it —
@@ -1857,7 +1888,8 @@ def command_argument(command: str, tokens: list[str]) -> str:
 
 def command_help() -> list[str]:
     return [
-        "Commands: move north/south/east/west, open, descend, ascend, wait (recover 1 MP), cast <spell>, talk <message>, examine, read [book], use <item>, equip <item>, unequip <slot>, drop <item>, pickup, inspect (or inventory), journal (or rumors), wares (or browse), quit.",
+        "Commands: move north/south/east/west, open, descend, ascend, wait (recover 1 MP), cast <spell>, talk <message>, possess [name], examine, read [book], use <item>, equip <item>, unequip <slot>, drop <item>, pickup, inspect (or inventory), journal (or rumors), wares (or browse), quit.",
+        "Possessing: 'possess' (or 'swap'/'inhabit') leaps your soul into the nearest body - or 'possess <name>' for a specific one. You become that body entirely: its stats, its hit points, its inventory. The body you leave drops as an inert husk. Costs a turn.",
         "Reading: stand on or next to a book and 'read' (or 'read <name>' to pick one). The first reading takes a turn and fixes the book's title and pages forever; rereading is free. What books claim about the world is hearsay - but the world has a way of honoring what gets written down.",
         "Investigating: 'investigate' (or 'search') studies the room - it costs 1-3 turns while the world keeps moving, and what you learn is permanent. If something here is hidden, careful search turns up a clue; investigate the thing the clue points at ('investigate <name>') to see what it was protecting.",
         "Journal: 'journal' lists everything the world has told you - rumors heard, claims corroborated, places found true - with a rough direction when one was given. Free, costs no turn.",

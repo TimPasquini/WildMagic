@@ -30,7 +30,7 @@ from .models import (
     WALL,
     WATER,
     VINES,
-    Curse,
+    CharacterProfile,
     Entity,
     GameStats,
     NPCProfile,
@@ -179,18 +179,6 @@ class GameState:
     turn: int = 0
     messages: list[str] = field(default_factory=list)
     message_count: int = 0
-    inventory: dict[str, int] = field(default_factory=lambda: {
-        "chalk": 2,
-        "grave salt": 2,
-        "mana crystal": 2,
-        "blood moss": 2,
-        "bone shard": 2,
-        "viscous residue": 1,
-        "metal scrap": 2,
-        "arcane residue": 1,
-        "gold": 30,
-    })
-    curses: dict[str, Curse] = field(default_factory=dict)
     npc_profiles: dict[str, NPCProfile] = field(default_factory=dict)
     pending_trade: dict[str, Any] | None = None
     flags: dict[str, Any] = field(default_factory=dict)
@@ -218,12 +206,39 @@ class GameState:
     tile_rooms: dict[str, str] = field(default_factory=dict)
     canon_records: dict[str, CanonRecord] = field(default_factory=dict)
     _player_taking_damage: bool = False
+    # Stable empty stashes returned by the inventory/curses properties when no body
+    # is controlled yet (mid-generation). Never the real store once a body exists.
+    _no_body_inventory: dict[str, int] = field(default_factory=dict)
+    _no_body_curses: dict[str, Any] = field(default_factory=dict)
     promises: list[WorldPromise] = field(default_factory=list)
     promise_reservations: dict[tuple[int, int], list[PromiseReservation]] = field(default_factory=dict)
+    # Handoff slot for character creation: a profile to stamp onto the starting
+    # player entity. None → a default profile is generated. The live profile always
+    # lives on the controlled entity (state.player.profile), not here.
+    character: CharacterProfile | None = None
 
     @property
     def player(self) -> Entity:
+        # "player" means the currently controlled entity. Body-swap reassigns
+        # player_id, so all the player-centric code follows the soul automatically.
         return self.entities[self.player_id]
+
+    @property
+    def inventory(self) -> dict[str, int]:
+        """The controlled entity's inventory. Inventory is per-entity (it stays with
+        the body on a swap); this property keeps the ~200 existing `state.inventory`
+        call sites pointing at whoever is currently controlled. During world
+        generation the body may not exist yet (entities are cleared then rebuilt),
+        in which case there is genuinely no inventory — a stable empty stash is
+        returned so reads (and any stray writes) are safe."""
+        player = self.entities.get(self.player_id)
+        return player.inventory if player is not None else self._no_body_inventory
+
+    @property
+    def curses(self) -> dict[str, Any]:
+        """The controlled entity's curses (per-entity, like inventory)."""
+        player = self.entities.get(self.player_id)
+        return player.curses if player is not None else self._no_body_curses
 
     def add_message(self, message: str, is_danger: bool = False) -> None:
         if self._player_taking_damage:
@@ -322,6 +337,14 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             tags=actor_tags,
             resistances=dict(resistances or {}),
             weaknesses=dict(weaknesses or {}),
+            # Every creature carries the same universal profile, so a body you swap
+            # into already has stats to inherit. Vigor scales with the body's bulk.
+            profile=CharacterProfile(
+                origin_id="creature",
+                vigor=max(1, min(6, hp // 8)),
+                attunement=2,
+                composure=3,
+            ),
         )
         self.state.entities[entity.id] = entity
         return entity
@@ -371,6 +394,18 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             faction=faction,
             ai="npc",
             tags=npc_tags,
+            description=appearance or None,
+            # The universal profile mirrors the NPC's persona appearance/backstory so
+            # that inhabiting this body presents its identity (name/appearance follow
+            # the body), and the wild-magic resolver can read its stats like anyone's.
+            profile=CharacterProfile(
+                origin_id="folk",
+                vigor=max(1, min(6, hp // 8)),
+                attunement=2,
+                composure=3,
+                appearance=appearance,
+                backstory=backstory,
+            ),
         )
         self.state.entities[entity.id] = entity
         npc_wares = dict(wares or {})
@@ -1373,6 +1408,57 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             self.state.add_message(f"You climb back to dungeon floor {self.state.depth}.")
             return True
 
+    def swap_control_to(self, target_id: str) -> list[str]:
+        """Move the locus of control into another entity — body-swap / possession.
+
+        Per docs/ENTITY_UNIFICATION.md the whole point of unifying PC/NPC/enemy onto
+        one entity model is that this needs no special cases:
+
+        - You inherit the body's stats/abilities, HP, mana, and profile, because you
+          literally *become* that entity — `player_id` now points at it, and every
+          player-centric system (casting, inventory, FOV, combat ownership, the LLM
+          caster profile) follows that one pointer.
+        - Inventory stays with the body: it is per-entity, so nothing is carried over.
+        - Identity follows the body: the inhabited entity keeps its own name and
+          appearance; only the avatar glyph and the controlling faction change.
+        - The vacated body becomes an inert husk: no AI, neutral faction, tagged
+          ``husk`` and left unconscious until something re-inhabits it.
+        """
+        state = self.state
+        target = state.entities.get(target_id)
+        old_id = state.player_id
+        if target is None or not target.alive or target.kind in {"item", "prop"}:
+            return ["There is no body there to inhabit."]
+        if target_id == old_id:
+            return ["You already wear this body."]
+
+        old = state.entities.get(old_id)
+        if old is not None:
+            # The body keeps its own glyph and appearance — it's still that body, just
+            # emptied — but loses all agency until something re-inhabits it.
+            old.kind = "actor"
+            old.faction = "neutral"
+            old.ai = None
+            old.blocks = True
+            old.tags.discard("npc")
+            old.tags.add("husk")
+            old.statuses["unconscious"] = "permanent"
+            if old.name == "You":
+                old.name = "your emptied body"
+
+        state.player_id = target_id
+        target.kind = "player"
+        target.faction = "player"
+        target.ai = None
+        target.char = "@"
+        target.blocks = True
+        target.tags.discard("husk")
+        target.statuses.pop("unconscious", None)
+        if target.profile is None:
+            target.profile = CharacterProfile()
+        self.update_fov()
+        return [f"Your soul tears free and pours into {target.name}."]
+
     def cast_standard_bolt(self) -> bool:
         if self.state.game_over:
             return False
@@ -2187,6 +2273,11 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             # Consumed by the prompt builder (spliced into the system prompt),
             # stripped from the user-message JSON. See _wild_prompt_messages.
             "region_style": self.region.prompt_style(),
+            # The profile of whoever is currently controlled (the player, or a body
+            # they've swapped into). Carries the Composure volatility band, plus the
+            # appearance/backstory/signature flavor lenses, so the resolver styles
+            # casts for the soul-in-the-body rather than a hardcoded "player".
+            "caster_profile": (player.profile or CharacterProfile()).to_public_dict(),
             "turn": self.state.turn,
             "depth": self.state.depth,
             "max_depth": self.state.max_depth,
@@ -2227,6 +2318,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 "modify_inventory",
                 "transform_entity",
                 "change_faction",
+                "possess",
                 "add_tag",
                 "remove_tag",
                 "add_resistance",

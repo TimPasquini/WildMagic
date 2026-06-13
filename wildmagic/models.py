@@ -177,6 +177,47 @@ MECHANICAL_STATUSES = {
 
 
 @dataclass
+class CharacterProfile:
+    """The universal profile carried by any creature — player, NPC, or enemy alike.
+    It is deliberately the *same* type for everyone so the wild-magic resolver,
+    character creation, and body-swap all treat every caster identically: when you
+    inhabit a body you simply adopt that body's profile.
+
+    Stats are the three wild-magic-flavored axes (see docs/CHARACTER_CREATION.md):
+    Vigor (body), Attunement (mana/potency), Composure (how hard wild magic bites
+    back). The free-form fields feed the LLM — appearance is what NPCs perceive,
+    signature is a persistent per-cast flavor lens."""
+
+    origin_id: str = "wanderer"
+    vigor: int = 3
+    attunement: int = 3
+    composure: int = 3
+    appearance: str = ""
+    backstory: str = ""
+    signature: str = ""
+
+    def composure_band(self) -> str:
+        """Coarse label fed to the resolver as a volatility dial."""
+        if self.composure <= 2:
+            return "low"
+        if self.composure >= 5:
+            return "high"
+        return "steady"
+
+    def to_public_dict(self) -> dict[str, Any]:
+        return {
+            "origin": self.origin_id,
+            "vigor": self.vigor,
+            "attunement": self.attunement,
+            "composure": self.composure,
+            "composure_band": self.composure_band(),
+            "appearance": self.appearance,
+            "backstory": self.backstory,
+            "signature": self.signature,
+        }
+
+
+@dataclass
 class Entity:
     id: str
     name: str
@@ -208,6 +249,13 @@ class Entity:
     })
     description: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
+    # Per-entity state. Once global on GameState (player-only); now carried by the
+    # entity itself so any creature can own items/curses and so body-swap leaves
+    # inventory with the body. GameState.inventory/curses are properties that
+    # resolve to whichever entity is currently controlled.
+    inventory: dict[str, int] = field(default_factory=dict)
+    curses: dict[str, "Curse"] = field(default_factory=dict)
+    profile: "CharacterProfile | None" = None
 
     def __post_init__(self) -> None:
         if self.kind == "player" and not any(self.equipment.values()):

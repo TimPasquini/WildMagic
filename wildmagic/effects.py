@@ -633,6 +633,11 @@ class _EffectsMixin:
         if effect_type == "add_curse":
             message = self._apply_cost({"type": "curse", **effect})
             return [message] if message else []
+        if effect_type == "possess":
+            target = self.resolve_target(str(effect.get("target") or "nearest_enemy"))
+            if not target or target.kind in {"item", "prop"}:
+                return ["The possession finds no one to inhabit."]
+            return self.swap_control_to(target.id)
         if effect_type == "message":
             text = str(effect.get("text") or "").strip()
             return [text] if text else []

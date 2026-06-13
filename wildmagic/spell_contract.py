@@ -25,6 +25,7 @@ SUPPORTED_EFFECTS = {
     "modify_inventory",
     "transform_entity",
     "change_faction",
+    "possess",
     "add_tag",
     "remove_tag",
     "add_resistance",

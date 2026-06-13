@@ -43,6 +43,7 @@ from .models import (
     RoomProfile,
     ZoneSnapshot,
 )
+from .character import clone_profile, default_profile, starting_inventory_for
 from .normalize import normalize_id
 from .props import PROP_CATEGORIES, get_all_prop_ids, get_nonblocking_prop_ids, get_prop_template
 from .regions import region_for_zone
@@ -267,6 +268,33 @@ _PROP_SCENES: list[tuple[str, str]] = [
 class _GenerationMixin:
     """Generation methods extracted from GameEngine."""
 
+    def _make_player(self, x: int, y: int) -> Entity:
+        """The single source of truth for the starting player entity. Stamps the
+        character profile (from state.character, or a fresh default) onto the entity
+        and seeds its per-entity inventory. All scenario generators call this instead
+        of hand-building an Entity, so the player is created consistently in one place
+        — which is also what lets a body be inhabited later without special cases."""
+        profile = clone_profile(self.state.character) if self.state.character else default_profile(self.rng)
+        return Entity(
+            id="player",
+            name="You",
+            kind="player",
+            x=x,
+            y=y,
+            char="@",
+            hp=24,
+            max_hp=24,
+            mana=14,
+            max_mana=14,
+            attack=4,
+            defense=1,
+            blocks=True,
+            faction="player",
+            description=profile.appearance or None,
+            profile=profile,
+            inventory=starting_inventory_for(profile),
+        )
+
     def _generate_new_run(self) -> None:
         state = self.state
         state.depth = 1
@@ -323,22 +351,7 @@ class _GenerationMixin:
                 break
 
         if existing_player is None:
-            player = Entity(
-                id="player",
-                name="You",
-                kind="player",
-                x=px,
-                y=py,
-                char="@",
-                hp=24,
-                max_hp=24,
-                mana=14,
-                max_mana=14,
-                attack=4,
-                defense=1,
-                blocks=True,
-                faction="player",
-            )
+            player = self._make_player(px, py)
         else:
             player = existing_player
             player.x = px
@@ -443,22 +456,7 @@ class _GenerationMixin:
         state.tiles[7][6] = DOOR
         state.tiles[7][20] = DOOR
 
-        player = Entity(
-            id="player",
-            name="You",
-            kind="player",
-            x=5,
-            y=7,
-            char="@",
-            hp=24,
-            max_hp=24,
-            mana=14,
-            max_mana=14,
-            attack=4,
-            defense=1,
-            blocks=True,
-            faction="player",
-        )
+        player = self._make_player(5, 7)
         state.entities[player.id] = player
         state.tiles[8][10] = WATER
         state.tiles[6][11] = VINES
@@ -588,22 +586,7 @@ class _GenerationMixin:
         )
 
         cx, cy = courtyard.center
-        player = Entity(
-            id="player",
-            name="You",
-            kind="player",
-            x=cx,
-            y=cy - 2,
-            char="@",
-            hp=24,
-            max_hp=24,
-            mana=14,
-            max_mana=14,
-            attack=4,
-            defense=1,
-            blocks=True,
-            faction="player",
-        )
+        player = self._make_player(cx, cy - 2)
         state.entities[player.id] = player
         state.tiles[cy + 2][cx] = STAIRS_DOWN
         self.spawn_actor(
@@ -675,22 +658,7 @@ class _GenerationMixin:
             )
 
         px, py = state.width // 2, state.height // 2
-        player = Entity(
-            id="player",
-            name="You",
-            kind="player",
-            x=px,
-            y=py,
-            char="@",
-            hp=24,
-            max_hp=24,
-            mana=14,
-            max_mana=14,
-            attack=4,
-            defense=1,
-            blocks=True,
-            faction="player",
-        )
+        player = self._make_player(px, py)
         state.entities[player.id] = player
         if not self.can_occupy(px, py):
             player.x, player.y = self._find_entry_tile(px, py)
@@ -862,22 +830,7 @@ class _GenerationMixin:
         state.zone_type = self._generate_open_zone(0, 0)
 
         px, py = state.width // 2, state.height // 2
-        player = Entity(
-            id="player",
-            name="You",
-            kind="player",
-            x=px,
-            y=py,
-            char="@",
-            hp=24,
-            max_hp=24,
-            mana=14,
-            max_mana=14,
-            attack=4,
-            defense=1,
-            blocks=True,
-            faction="player",
-        )
+        player = self._make_player(px, py)
         state.entities[player.id] = player
         if not self.can_occupy(px, py):
             player.x, player.y = self._find_entry_tile(px, py)
