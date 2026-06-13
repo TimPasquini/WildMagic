@@ -143,7 +143,7 @@ Useful CLI commands:
 - `inspect`
 - `move north`, `move south`, `move east`, `move west`
 - `north`, `south`, `east`, `west`
-- `wait`
+- `wait` — spend a turn and recover 1 MP
 - `open`
 - `descend`
 - `ascend`

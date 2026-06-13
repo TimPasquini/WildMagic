@@ -41,6 +41,40 @@ CARDINAL_DIRECTIONS = {
 }
 EXPEDITION_DIRECTIONS = ("north", "east", "south", "west")
 MAX_RANDOM_SEED_BASE = 2_147_483_647
+SPELL_FOCI = (
+    "enemy control or status effects",
+    "terrain or battlefield reshaping",
+    "summoning allies or distractions",
+    "light, reveal, sensing, or information magic",
+    "object transformation or item interaction",
+    "delayed consequences, bargains, or curses",
+    "movement, escape, pushing, pulling, or repositioning",
+    "doors, thresholds, locks, passages, or barriers",
+    "water, mist, ice, steam, or extinguishing hazards",
+    "fire, heat, smoke, ash, or controlled burning",
+    "plants, roots, webs, bindings, or growth",
+    "stone, metal, glass, crystal, or brittle surfaces",
+    "sound, silence, echoes, vibration, or distraction",
+    "shadows, invisibility, concealment, or misdirection",
+    "weather, wind, pressure, gravity, or falling",
+    "time delay, countdowns, stored effects, or future debt",
+    "memory, dreams, names, fear, courage, or morale",
+    "healing, shielding, cleansing, or protective tradeoffs",
+    "resistances, weaknesses, vulnerability, or elemental tags",
+    "faction, attitude, pacification, fear, or alliance shifts",
+    "items, inventory, equipment, tools, or consumables",
+    "books, writing, maps, symbols, or readable objects",
+    "secrets, clues, hidden rooms, traps, or reveal effects",
+    "area denial, zones, clouds, hazards, or temporary terrain",
+    "single-target precision, marks, pins, or disabling strikes",
+    "group targeting, swarms, crowds, chains, or spreading effects",
+    "summoned scouts, decoys, guards, mounts, or helpers",
+    "resource exchange, sacrifice, curses, wounds, or debts",
+    "environmental combos, hazard conversion, or cleanup",
+    "NPC interaction, bargains, reputation, or social magic",
+    "noncombat utility, traversal, sensing, or problem solving",
+    "risk stress test with ambitious but bounded consequences",
+)
 THEMES = (
     "Focus on terrain-transformation spells this run.",
     "Use ordinary roguelike tactics and cast only when pressured.",
@@ -108,9 +142,10 @@ Command meanings:
 - wares/browse/shop: inspect merchant goods when near a trading NPC.
 - pickup/drop/use/equip/unequip: exercise inventory, consumable, and equipment systems.
 - spark/frost/heal/ward/reveal: deterministic standard spells for combat and survival.
-- cast your own spell idea: wild magic. Invent a concrete spell relevant to the current
-  situation, such as "cast bind the goblin in silver roots", "cast turn this doorway into
-  friendly mist", or "cast summon a brass moth to distract the nearest enemy".
+- Wild magic command: begin with the word cast, then continue with a specific original
+  spell in plain English. Use the current spell_focus as inspiration, but do not reuse
+  instruction text, fixed examples, or stock phrases; compose fresh wording from visible
+  enemies, terrain, objects, NPCs, needs, and risks.
 
 Play rules:
 - Return exactly one JSON object: {"command":"...", "note":null, "bug_suspected":false}
@@ -124,21 +159,22 @@ Play rules:
 - Do not read the same book/title repeatedly after it has already shown its text.
 - Do not cast the same spell phrase more than twice in a row; vary spell text or observe the result.
 - If HP is low, heal, ward, retreat, or use an item rather than continuing a risky loop.
-- If MP is low, use ordinary movement/safe spells/items instead of repeated wild casts; wild
-  spells can charge health when mana is insufficient.
+- If MP is low, use ordinary movement/items or wait to recover 1 MP instead of repeated wild
+  casts; wild spells can charge health when mana is insufficient.
 - Use the local map and adjacent direction table: north is up, east is right.
 - If you suspect a bug, set bug_suspected=true and put a concise lead in note, but still choose a useful command.
 - Never edit files, run shell commands, or ask for help. You are only playing through CLI commands.
 """.strip()
 
 COMMAND_SURFACE = """
-Known commands: inspect, journal, wait, open, descend, ascend, move north/south/east/west,
+Known commands: inspect, journal, wait (recover 1 MP), open, descend, ascend, move north/south/east/west,
 north, south, east, west, spark, frost, heal, ward, reveal, pickup, drop an item name,
 use an item name, equip an item name, unequip a slot or item name, read a nearby target,
 examine, investigate a target or area, wares, accept, reject,
-cast your own concrete spell idea, talk your own message to an adjacent NPC.
+wild magic: command must start with cast and continue with specific original spell wording,
+talk: command must start with talk and continue with your message to an adjacent NPC.
 The words "spell idea", "message", "target", "item", and "slot" are descriptions, not
-literal command text. Never include angle brackets in your command.
+literal command text. Never include angle brackets or instruction phrases in your command.
 Return JSON only: {"command":"...", "note":null, "bug_suspected":false}
 """
 
@@ -151,6 +187,15 @@ PLACEHOLDER_FRAGMENTS = {
     "<slot>",
     "<slot_or_item>",
     "<north|south|east|west>",
+}
+COPIED_INSTRUCTION_COMMANDS = {
+    "cast your own concrete spell idea",
+    "cast your own spell idea",
+    "cast a spell idea",
+    "cast specific original spell wording",
+    "cast specific original spell in plain english",
+    "cas your own concrete spell idea",
+    "cas your own spell idea",
 }
 
 EXACT_VERBS = {
@@ -206,6 +251,7 @@ class AgentObservation:
     last_result: dict[str, Any] | None = None
     avoid_commands: list[str] = field(default_factory=list)
     expedition_direction: str | None = None
+    spell_focus: str | None = None
     nudge: str | None = None
 
     def to_prompt_dict(self) -> dict[str, Any]:
@@ -223,6 +269,11 @@ class AgentObservation:
 def expedition_direction_for_seed(seed: int | None, episode: int = 0) -> str:
     basis = seed if seed is not None else episode
     return EXPEDITION_DIRECTIONS[basis % len(EXPEDITION_DIRECTIONS)]
+
+
+def spell_focus_for_seed(seed: int | None, episode: int = 0) -> str:
+    basis = (seed if seed is not None else episode) + episode
+    return SPELL_FOCI[basis % len(SPELL_FOCI)]
 
 
 @dataclass
@@ -547,6 +598,18 @@ def avoid_commands_from_history(
 def decision_hints(prompt_data: dict[str, Any]) -> list[str]:
     hints: list[str] = []
     adjacent = prompt_data.get("adjacent") or {}
+    state_text = "\n".join(str(line) for line in prompt_data.get("state_lines") or [])
+    mp_match = re.search(r"\bMP\s+(\d+)/(\d+)", state_text)
+    if mp_match:
+        mana = int(mp_match.group(1))
+        max_mana = int(mp_match.group(2))
+        if mana <= 0:
+            hints.append("MP is empty: wild spells with mana costs will take HP. Use wait to recover 1 MP.")
+        elif mana < max_mana:
+            hints.append("Waiting recovers 1 MP; consider waiting before more wild casting if no enemy is urgent.")
+    spell_focus = str(prompt_data.get("spell_focus") or "").strip()
+    if spell_focus:
+        hints.append(f"Current spell focus: {spell_focus}. If casting, invent a fresh situation-specific phrase.")
     expedition_direction = str(prompt_data.get("expedition_direction") or "").strip().lower()
     if expedition_direction:
         info = adjacent.get(expedition_direction) if isinstance(adjacent, dict) else None
@@ -623,6 +686,8 @@ def validate_agent_command(command: str) -> str:
     lowered = original.lower()
     if any(fragment in lowered for fragment in PLACEHOLDER_FRAGMENTS):
         raise ValueError("replace placeholder text with a specific command, such as a concrete spell idea or target")
+    if lowered in COPIED_INSTRUCTION_COMMANDS:
+        raise ValueError("do not copy spell instructions; write a specific original spell after cast")
     tokens = split_command(original)
     if not tokens:
         raise ValueError("command is empty")
@@ -737,6 +802,7 @@ class EpisodeRunner:
         self.findings: list[Finding] = []
         self.step_count = 0
         self.expedition_direction = expedition_direction_for_seed(seed, episode_index)
+        self.spell_focus = spell_focus_for_seed(seed, episode_index)
         stem = f"episode_{episode_index:03d}"
         self.step_path = run_dir / f"{stem}.jsonl"
         self.replay_path = run_dir / f"{stem}.replay.json"
@@ -793,6 +859,7 @@ class EpisodeRunner:
                         repeated_count,
                     ),
                     expedition_direction=self.expedition_direction,
+                    spell_focus=self.spell_focus,
                     nudge=nudge,
                 )
                 nudge = None

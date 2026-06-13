@@ -745,7 +745,13 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
     def wait_turn(self) -> bool:
         if self.state.game_over:
             return False
+        player = self.state.player
+        mana_before = player.mana
+        if player.mana < player.max_mana:
+            player.mana += 1
         self.state.add_message("You hold still and listen.")
+        if player.mana > mana_before:
+            self.state.add_message("You catch your breath and recover 1 mana.")
         self.finish_player_turn()
         return True
 

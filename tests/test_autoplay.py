@@ -10,6 +10,7 @@ from wildmagic.autoplay import (
     Finding,
     InvariantChecker,
     OllamaAgent,
+    SPELL_FOCI,
     adjacent_options,
     avoid_commands_from_history,
     cluster_notes,
@@ -21,6 +22,7 @@ from wildmagic.autoplay import (
     parse_agent_response,
     random_seed_base,
     result_summary,
+    spell_focus_for_seed,
     validate_agent_command,
 )
 from wildmagic.models import WALL
@@ -47,11 +49,18 @@ def test_agent_command_validation_rejects_unknown_verbs() -> None:
 
 
 def test_agent_command_validation_rejects_literal_placeholders() -> None:
-    for command in ["cast <wild spell idea>", "cast <spell idea>", "talk <message>", "read <target>"]:
+    for command in [
+        "cast <wild spell idea>",
+        "cast <spell idea>",
+        "talk <message>",
+        "read <target>",
+        "cast your own concrete spell idea",
+        "cas your own concrete spell idea",
+    ]:
         try:
             validate_agent_command(command)
         except ValueError as exc:
-            assert "replace placeholder text" in str(exc)
+            assert "placeholder text" in str(exc) or "do not copy spell instructions" in str(exc)
         else:
             raise AssertionError(f"placeholder command should fail validation: {command}")
 
@@ -161,6 +170,7 @@ def test_agent_observation_compacts_long_messages_and_exposes_decision_hints() -
         last_result={"command": "move north", "success": False, "messages": ["wall blocks the way."]},
         avoid_commands=["move north"],
         expedition_direction="east",
+        spell_focus="terrain or battlefield reshaping",
     )
 
     payload = observation.to_prompt_dict()
@@ -170,12 +180,45 @@ def test_agent_observation_compacts_long_messages_and_exposes_decision_hints() -
     assert any("Useful directions" in hint and "east" in hint for hint in payload["decision_hints"])
     assert any("Do not choose" in hint and "move north" in hint for hint in payload["decision_hints"])
     assert any("Run heading is east" in hint and "move east" in hint for hint in payload["decision_hints"])
+    assert any("Current spell focus: terrain" in hint for hint in payload["decision_hints"])
+
+
+def test_agent_observation_warns_empty_mana_casting_costs_health() -> None:
+    observation = AgentObservation(
+        episode=1,
+        seed=7,
+        scenario="test_chamber",
+        persona="wild",
+        theme="Use wild magic.",
+        step=3,
+        turn=2,
+        new_messages=["The last spell drained you."],
+        state_lines=["Turn 2 | HP 24/24 | MP 0/14"],
+    )
+
+    payload = observation.to_prompt_dict()
+
+    assert any("MP is empty" in hint for hint in payload["decision_hints"])
+    assert any("will take HP" in hint for hint in payload["decision_hints"])
+    assert "wait (recover 1 MP)" in payload["command_surface"]
 
 
 def test_expedition_direction_is_stable_from_seed() -> None:
     assert expedition_direction_for_seed(1, 1) == "east"
     assert expedition_direction_for_seed(1, 99) == "east"
     assert expedition_direction_for_seed(None, 2) == "south"
+
+
+def test_spell_focus_is_stable_from_seed_and_episode() -> None:
+    assert spell_focus_for_seed(1, 1) == spell_focus_for_seed(1, 1)
+    assert spell_focus_for_seed(1, 1) != spell_focus_for_seed(1, 2)
+
+
+def test_spell_focus_palette_is_large_and_not_copyable_commands() -> None:
+    assert len(SPELL_FOCI) >= 30
+    assert len(set(SPELL_FOCI)) == len(SPELL_FOCI)
+    assert all(not focus.lower().startswith("cast ") for focus in SPELL_FOCI)
+    assert all("<" not in focus and ">" not in focus for focus in SPELL_FOCI)
 
 
 def test_autoplay_default_seed_base_is_randomized_and_overridable() -> None:
@@ -230,6 +273,9 @@ def test_ollama_agent_prompt_explains_gameplay_systems_to_cover() -> None:
     assert "investigate/search [target]" in system
     assert "talk/speak/say your own message" in system
     assert "Do not treat movement as the default answer" in system
+    assert "fixed examples" in system
+    assert "friendly mist" not in system
+    assert "silver roots" not in system
 
 
 def test_ollama_agent_prompt_forbids_literal_placeholders() -> None:
@@ -251,7 +297,9 @@ def test_ollama_agent_prompt_forbids_literal_placeholders() -> None:
 
     assert "Never include angle brackets" in system
     assert "Do not copy placeholder text" in system
-    assert "cast your own concrete spell idea" in payload["command_surface"]
+    assert "specific original spell wording" in payload["command_surface"]
+    assert "cast your own concrete spell idea" not in system
+    assert "cast your own concrete spell idea" not in payload["command_surface"]
     assert "cast <spell idea>" not in payload["command_surface"]
 
 

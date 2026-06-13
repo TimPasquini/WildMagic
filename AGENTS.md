@@ -30,7 +30,7 @@ Wild Magic should handle arbitrary inputs gracefully by growing general systems:
 - Keep configuration user-controlled. Load local defaults from `.env`, preserve explicit shell-environment overrides, and route all consumers through one shared configuration API.
 - Separate durable world memory from magical generation. Retrieval may supply lore, history, reputation, and NPC knowledge, but must not recycle previous spell resolutions as templates.
 - Favor explicit data flow and observable boundaries over hidden global state, duplicated defaults, dynamic dispatch, or silent fallback behavior.
-- Add tests at architectural boundaries. Tests should enforce contracts such as turn consumption, transaction rollback, configuration precedence, replayability, and provider consistency.
+- Add tests for important game behavior, architectural boundaries, and regressions that would be painful to rediscover. Tests should enforce contracts such as turn consumption, transaction rollback, configuration precedence, replayability, and provider consistency, but do not add tests merely for the sake of increasing test count or pinning every minor wording/UI/prompt adjustment.
 - Use `pyproject.toml` as the authoritative Python project and dependency metadata file, following the applicable Python packaging standards. Keep it current when dependencies, supported Python versions, build configuration, or development tooling change.
 - `uv` is a supported dependency-management and execution workflow for this repository. Keep `uv.lock` current when using it, while avoiding parallel dependency manifests or undocumented installation paths.
 - Inspect impact, coupling, affected execution paths, and test coverage before and after architectural changes. Use available structural-analysis tools as evidence to verify against source, not as infallible truth.
@@ -159,7 +159,7 @@ Read before editing. This repo may have uncommitted work from another agent or t
 Keep changes scoped and testable:
 
 - Put core behavior in the engine or action layer, not only in the UI.
-- Add or adjust CLI/scripted coverage when changing gameplay.
+- Add or adjust CLI/scripted coverage when changing important gameplay behavior or cross-module contracts. For small copy, prompt, documentation, tuning, or purely presentational changes, use judgment: run the relevant checks, but do not create brittle tests just to prove the edit happened.
 - Preserve replayability where possible.
 - Keep wild-magic effects transactional: validate, normalize, apply effects, apply costs, advance turn, log.
 - Make costs visible after casting, not before, except for severe warning behavior explicitly supported by the design.

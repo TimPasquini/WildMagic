@@ -78,6 +78,29 @@ def test_successful_resolution_applies_effects_and_costs_before_advancing_turn()
     assert engine.state.stats.spells_cast == 1
 
 
+def test_waiting_recovers_one_mana() -> None:
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    player = engine.state.player
+    player.mana = max(0, player.max_mana - 3)
+    engine.state.turn = 1
+
+    assert engine.wait_turn() is True
+
+    assert player.mana == player.max_mana - 2
+    assert "You catch your breath and recover 1 mana." in engine.state.messages
+
+
+def test_waiting_does_not_exceed_maximum_mana() -> None:
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    player = engine.state.player
+    player.mana = player.max_mana
+
+    assert engine.wait_turn() is True
+
+    assert player.mana == player.max_mana
+    assert "You catch your breath and recover 1 mana." not in engine.state.messages
+
+
 def test_mana_cost_shortfall_becomes_health_cost() -> None:
     engine = GameEngine(seed=7, scenario="test_chamber")
     player = engine.state.player

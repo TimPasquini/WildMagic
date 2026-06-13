@@ -22,6 +22,7 @@ from .autoplay import (
     expedition_direction_for_seed,
     local_map_view,
     result_summary,
+    spell_focus_for_seed,
     validate_agent_command,
 )
 from .config import DEFAULT_MODEL, audit_dir, get_config_value, set_config_value
@@ -128,6 +129,8 @@ class VisualAutoplayController:
         self.thinking_since: float | None = None
         self.book_popup_until: float | None = None
         self.expedition_direction = expedition_direction_for_seed(None, int(time.time()))
+        self.spell_focus = spell_focus_for_seed(None, int(time.time()))
+        self.death_restart_at: float | None = None
         if enabled:
             self.start()
 
@@ -143,6 +146,7 @@ class VisualAutoplayController:
         self.paused = False
         self.status = "watching"
         self.last_error = None
+        self.death_restart_at = None
         self.next_command_at = time.monotonic() + 0.2
 
     def stop(self) -> None:
@@ -152,6 +156,7 @@ class VisualAutoplayController:
         self.status = "off"
         self.future = None
         self.thinking_since = None
+        self.death_restart_at = None
         if self.executor is not None:
             self.executor.shutdown(wait=False, cancel_futures=True)
         self.executor = None
@@ -173,6 +178,8 @@ class VisualAutoplayController:
         self.next_command_at = time.monotonic() + 0.2
         self.book_popup_until = None
         self.expedition_direction = expedition_direction_for_seed(self.ui.session.seed, int(time.time()))
+        self.spell_focus = spell_focus_for_seed(self.ui.session.seed, int(time.time()))
+        self.death_restart_at = None
 
     def toggle(self) -> None:
         if self.enabled:
@@ -202,8 +209,19 @@ class VisualAutoplayController:
             self.ui.book_popup = None
             self.book_popup_until = None
         if self.ui.engine.state.game_over:
-            self.paused = True
-            self.status = "game over"
+            if self.ui.engine.state.victory:
+                self.paused = True
+                self.status = "victory"
+                return
+            if self.death_restart_at is None:
+                self.death_restart_at = now + 2.5
+            if now >= self.death_restart_at:
+                self.ui.restart_run()
+                self.paused = False
+                self.status = "watching"
+                self.next_command_at = time.monotonic() + 0.4
+            else:
+                self.status = "death; restarting"
             return
         if self.future is not None:
             if self.future.done():
@@ -302,6 +320,7 @@ class VisualAutoplayController:
             last_result=self.last_result,
             avoid_commands=avoid,
             expedition_direction=self.expedition_direction,
+            spell_focus=self.spell_focus,
             nudge=(
                 "You are being watched in the graphical UI. Do not merely wander. Rotate through visible "
                 "systems: inspect/examine/investigate rooms, read books, talk to NPCs, fight or control "
@@ -324,7 +343,11 @@ class VisualAutoplayController:
     def overlay_lines(self) -> list[tuple[str, tuple[int, int, int]]]:
         if not self.enabled:
             return [("AI Watch: off   F8 start", MUTED)]
-        lines = [(f"AI Watch: {self.status}   heading {self.expedition_direction}   F8 stop  F9 pause  F10 step", ACCENT)]
+        lines = [(
+            f"AI Watch: {self.status}   heading {self.expedition_direction}   "
+            f"spell {self.spell_focus}   F8 stop  F9 pause  F10 step",
+            ACCENT,
+        )]
         if self.last_command:
             lines.append((f"> {self.last_command}", TEXT))
         if self.last_note:
