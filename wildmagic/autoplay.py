@@ -255,14 +255,52 @@ class AgentObservation:
     nudge: str | None = None
 
     def to_prompt_dict(self) -> dict[str, Any]:
-        data = asdict(self)
+        decision_hints_value = decision_hints(asdict(self))
+        prior_casts = prior_cast_commands(self.recent_commands)
+        top_context = {
+            "orientation": "North is up, east is right. Use local_map and adjacent before choosing movement.",
+            "turn": self.turn,
+            "state_lines": self.state_lines,
+            "local_map": self.local_map,
+            "adjacent": self.adjacent,
+            "new_messages": self.new_messages,
+        }
+        data: dict[str, Any] = {
+            "immediate_context_read_first": top_context,
+            "decision_hints": decision_hints_value,
+            "episode": self.episode,
+            "seed": self.seed,
+            "scenario": self.scenario,
+            "persona": self.persona,
+            "theme": self.theme,
+            "step": self.step,
+            "turn": self.turn,
+            "new_messages": self.new_messages,
+            "state_lines": self.state_lines,
+            "local_map": self.local_map,
+            "adjacent": self.adjacent,
+            "expedition_direction": self.expedition_direction,
+            "spell_focus": self.spell_focus,
+            "recent_commands_already_done": self.recent_commands,
+            "recent_results": self.recent_results,
+            "last_result": self.last_result,
+            "prior_spells_already_cast_do_not_repeat": prior_casts,
+            "avoid_commands": sorted(set([*self.avoid_commands, *prior_casts])),
+            "nudge": self.nudge,
+        }
         data["command_surface"] = COMMAND_SURFACE.strip()
         data["persona_guidance"] = PERSONA_GUIDANCE.get(self.persona, "")
         data["map_legend"] = (
             "@ you, # wall (cannot walk into), . floor, + door, > stairs down, < stairs up; "
             "letters are creatures/props; blank is unexplored. North is up, east is right."
         )
-        data["decision_hints"] = decision_hints(data)
+        data["final_action_guidance_read_last"] = [
+            "Return exactly one JSON object with one useful command.",
+            "Recent commands and prior spells are things you already did, not examples to copy.",
+            "Do not repeat prior spell wording. If casting, invent a new spell relevant to the visible environment, current threat, spell_focus, and MP/HP risk.",
+            "Prefer local progress: fight visible enemies, open/explore rooms, investigate/read/talk/pickup when available, then resume the expedition direction.",
+            "If MP is empty or low and no danger is urgent, wait to recover MP instead of casting.",
+        ]
         return data
 
 
@@ -274,6 +312,23 @@ def expedition_direction_for_seed(seed: int | None, episode: int = 0) -> str:
 def spell_focus_for_seed(seed: int | None, episode: int = 0) -> str:
     basis = (seed if seed is not None else episode) + episode
     return SPELL_FOCI[basis % len(SPELL_FOCI)]
+
+
+def prior_cast_commands(commands: list[str], limit: int = 8) -> list[str]:
+    casts: list[str] = []
+    seen: set[str] = set()
+    for command in reversed(commands):
+        cleaned = " ".join(str(command).split())
+        lowered = cleaned.lower()
+        if not (lowered.startswith("cast ") or lowered.startswith("wild ")):
+            continue
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        casts.append(cleaned)
+        if len(casts) >= limit:
+            break
+    return list(reversed(casts))
 
 
 @dataclass
@@ -324,7 +379,8 @@ class EpisodeSummary:
     command_path: str
     log_path: str
     notes: list[str] = field(default_factory=list)
-    technical_failures: int = 0
+    cast_technical_failures: int = 0
+    canon_technical_failures: int = 0
     rejected_casts: int = 0
     command_counts: dict[str, int] = field(default_factory=dict)
     agent_summary: str | None = None
@@ -820,7 +876,8 @@ class EpisodeRunner:
         repeated_count = 0
         turns = 0
         casts = 0
-        technical_failures = 0
+        cast_technical_failures = 0
+        canon_technical_failures = 0
         rejected_casts = 0
         command_counts: dict[str, int] = {}
         max_steps = self.config.max_steps or max(1, self.config.max_turns * 3)
@@ -912,7 +969,13 @@ class EpisodeRunner:
                 verb = split_command(command)[0].lower() if split_command(command) else ""
                 command_counts[verb] = command_counts.get(verb, 0) + 1
                 if result.technical_failure:
-                    technical_failures += 1
+                    # Casting failures (the wild resolver) and read/investigate
+                    # failures (canon materialization) have different causes, so
+                    # they are counted and reported separately.
+                    if result.action == "cast":
+                        cast_technical_failures += 1
+                    else:
+                        canon_technical_failures += 1
                 if wild_rejected(result):
                     rejected_casts += 1
                 violations = self.checker.check(session, result, self.episode_index)
@@ -983,7 +1046,8 @@ class EpisodeRunner:
             command_path=str(self.command_path),
             log_path=str(self.step_path),
             notes=self.notes,
-            technical_failures=technical_failures,
+            cast_technical_failures=cast_technical_failures,
+            canon_technical_failures=canon_technical_failures,
             rejected_casts=rejected_casts,
             command_counts=command_counts,
             agent_summary=agent_summary,
@@ -1213,11 +1277,22 @@ class CampaignRunner:
         if self.episode_summaries:
             total_steps = sum(summary.steps for summary in self.episode_summaries)
             total_parse_failures = sum(summary.parse_failures for summary in self.episode_summaries)
-            total_technical = sum(summary.technical_failures for summary in self.episode_summaries)
+            total_cast_technical = sum(summary.cast_technical_failures for summary in self.episode_summaries)
+            total_canon_technical = sum(summary.canon_technical_failures for summary in self.episode_summaries)
             total_rejected = sum(summary.rejected_casts for summary in self.episode_summaries)
+            total_canon_actions = sum(
+                count
+                for summary in self.episode_summaries
+                for verb, count in summary.command_counts.items()
+                if verb in {"read", "investigate", "examine"}
+            )
             lines.append(f"- Agent parse-failure rate: {total_parse_failures}/{max(total_steps, 1)} steps")
-            lines.append(f"- Wild-cast technical failures: {total_technical}/{total_casts} casts")
+            lines.append(f"- Wild-cast technical failures: {total_cast_technical}/{total_casts} casts")
             lines.append(f"- Wild-cast OP rejections: {total_rejected}/{total_casts} casts")
+            lines.append(
+                f"- Read/investigate (canon) technical failures: "
+                f"{total_canon_technical}/{total_canon_actions} read/investigate/examine actions"
+            )
             by_reason: dict[str, int] = {}
             for summary in self.episode_summaries:
                 by_reason[summary.completion_reason] = by_reason.get(summary.completion_reason, 0) + 1

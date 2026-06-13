@@ -20,6 +20,7 @@ from wildmagic.autoplay import (
     local_map_view,
     parse_args,
     parse_agent_response,
+    prior_cast_commands,
     random_seed_base,
     result_summary,
     spell_focus_for_seed,
@@ -166,7 +167,7 @@ def test_agent_observation_compacts_long_messages_and_exposes_decision_hints() -
             "north": {"status": "blocked", "reason": "wall blocks movement"},
             "east": {"status": "open", "suggested_command": "move east"},
         },
-        recent_commands=["move north", "move north"],
+        recent_commands=["cast cloud the door with pale fog", "move north", "move north"],
         last_result={"command": "move north", "success": False, "messages": ["wall blocks the way."]},
         avoid_commands=["move north"],
         expedition_direction="east",
@@ -181,6 +182,25 @@ def test_agent_observation_compacts_long_messages_and_exposes_decision_hints() -
     assert any("Do not choose" in hint and "move north" in hint for hint in payload["decision_hints"])
     assert any("Run heading is east" in hint and "move east" in hint for hint in payload["decision_hints"])
     assert any("Current spell focus: terrain" in hint for hint in payload["decision_hints"])
+    assert payload["immediate_context_read_first"]["local_map"] == []
+    assert payload["prior_spells_already_cast_do_not_repeat"] == ["cast cloud the door with pale fog"]
+    assert "cast cloud the door with pale fog" in payload["avoid_commands"]
+    assert "Do not repeat prior spell wording" in payload["final_action_guidance_read_last"][2]
+
+
+def test_prior_cast_commands_labels_recent_spells_as_history() -> None:
+    commands = [
+        "inspect",
+        "cast bind the door in fog",
+        "move east",
+        "cast bind the door in fog",
+        "wild ask the floor to remember footsteps",
+    ]
+
+    assert prior_cast_commands(commands) == [
+        "cast bind the door in fog",
+        "wild ask the floor to remember footsteps",
+    ]
 
 
 def test_agent_observation_warns_empty_mana_casting_costs_health() -> None:

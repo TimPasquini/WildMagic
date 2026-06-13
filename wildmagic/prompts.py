@@ -23,24 +23,32 @@ magical tradition (blood, bone, crystal, song and sound, and others like them), 
 tradition's idiom in the text. Backfires and costs should read as strange beauty, not punishment.
 
 Use only the effects and costs needed for this one spell. Do not copy every available option.
-Typical minor/moderate spell: 1-3 effects and 1-2 costs.
-Typical major spell: 2-5 effects and 2-4 costs.
-Catastrophic spell: dangerous effects, severe permanent costs, or rejection.
+Match the severity to the ambition and scale of what the player described. A vivid, sweeping, or
+destructive spell should resolve as major or catastrophic with effects to match — never quietly
+shrink the player's vision to something safe. The player has ~10 HP and most enemies have 4-10 HP,
+so size the numbers to that world:
+- minor: 1-2 effects, 1 cost. Damage ~2-4, radius 1-2, brief status (2-3 turns).
+- moderate: 1-3 effects, 1-2 costs. Damage ~4-8, radius 2-3.
+- major: 2-5 effects, 2-4 costs. Damage ~8-15, radius 3-5 — enough to drop a weak group or reshape a room.
+- catastrophic: room-altering, rule-bending power. Damage 15+, radius 5-8 — but pair it with severe,
+  lasting costs (heavy health or max-resource loss, a curse, a permanent change) or reject it outright.
+Going big is encouraged when the player asks big. The cost, not a small number, is what keeps it fair.
 
 Effect catalog:
 - damage: target, amount, damage_type.
-- area_damage: target (center entity), radius 0-4, amount, damage_type, include_player boolean, affects "enemies|non_player|allies|all". Center the blast where the spell aims: the named enemy's id or "nearest_enemy" for thrown/hurled/aimed blasts, "player" only for novas and auras bursting outward from the caster.
-- area_status: target (center, same aiming rule as area_damage), radius 0-4, status, duration, affects "enemies|non_player|allies|all". Use for "slow all enemies in sight", "confuse everything nearby", etc.
+- area_damage: target (center entity), radius (2-3 for typical spells, up to 6-8 for major/catastrophic ones), amount, damage_type, include_player boolean, affects "enemies|non_player|allies|all". Center the blast where the spell aims: the named enemy's id or "nearest_enemy" for thrown/hurled/aimed blasts, "player" only for novas and auras bursting outward from the caster.
+- area_status: target (center, same aiming rule as area_damage), radius (2-3 typical, up to 6-8 for major/catastrophic), status, duration, affects "enemies|non_player|allies|all". Use for "slow all enemies in sight", "confuse everything nearby", etc.
 - heal or restore_mana: target, amount.
 - teleport: target, x, y.
 - push or pull: target, origin or dx/dy, distance.
-- create_tile or create_tiles: x/y or target, tile, radius, duration. Add hollow:true for a ring/perimeter pattern, or shape:"line|wall|cone|scatter" with origin:"player" and target:"nearest_enemy" for paths, barriers, cones, and bursts. Use ONE create_tiles effect for shapes — never list individual coordinates.
+- create_tile or create_tiles: x/y or target, tile, radius, duration. Add hollow:true for a ring/perimeter pattern, or shape:"line|wall|cone|scatter" with origin:"player" and target:"nearest_enemy" for paths, barriers, cones, and bursts. Use ONE create_tiles effect for shapes — never list individual coordinates. Directional wording — "wall", "line", "barrier", "between me and X", "in a line", "path", "bridge" — MUST use shape:"wall" or "line" with origin:"player" and target the foe (its id or "nearest_enemy"); do not fall back to a player-centered radius disc, which throws away the direction the player asked for.
 - add_status or remove_status: target, status, duration. Optional display_name (shown to player instead of the status key, e.g. "petrified" for frozen) and expiry_text (message when it wears off). For single target: an actor id, "player", or "nearest_enemy". For all enemies: "all_enemies". For everyone: "all".
 - summon: name, faction ("ally" or "enemy"), hp, attack, defense, char, x, y. All at top level.
 - spawn_item: name, item_type, x, y, char, material, quantity, tags.
 - conjure_item: template, name, material, tags, target, placement, count.
 - conjure_creature: template, name, faction ("ally" or "enemy"), tags, placement, count. Always include faction.
-- modify_inventory, transform_entity, change_faction, add_tag, remove_tag, add_resistance (fields: target, damage_type, amount), add_weakness (fields: target, damage_type, amount), set_flag, schedule_event, create_trigger, create_promise, message.
+- transform_entity: target (the creature id or "nearest_enemy"), plus the fields that change — name, char, faction, material, hp, max_hp, attack, defense, tags. Use this to turn an existing creature INTO something else ("turn the goblin into a chicken", "polymorph", "petrify into a statue"): rename the target and drop its attack/hp so it stops being a threat. Do NOT conjure_creature a new creature for this — that leaves the original enemy alive and standing next to a decoration.
+- modify_inventory, change_faction, add_tag, remove_tag, add_resistance (fields: target, damage_type, amount), add_weakness (fields: target, damage_type, amount), set_flag, schedule_event, create_trigger, create_promise, message.
 
 Valid target strings: "player", "nearest_enemy", or a specific entity id from context. For add_status, you may also use "all_enemies" or "enemies" to affect all enemies, or "all" for everyone.
 
@@ -57,6 +65,8 @@ Balance rules:
 - Big damage, big area, big effects are fine — they need commensurate costs (mana, health, curses, items).
 - Use affects "enemies" for spells that should only harm foes.
 - When the spell names or aims at a foe (a fireball thrown at the goblin, "engulf the cultist in flame"), center area effects on that foe — its entity id or "nearest_enemy" — never on "player". A player-centered blast with a small radius misses distant enemies entirely.
+- A spell shaped as a wall, line, or barrier ("a wall of fire between me and them", "a line of ice", "a thorn barrier") is a create_tiles with shape:"wall" or "line" from origin:"player" toward the foe — not a radius disc on yourself.
+- To turn a creature INTO something else (polymorph, "turn it into a chicken", "petrify it", "shrink it to a mouse"), use transform_entity on that creature — never conjure_creature, which spawns a duplicate and leaves the threat alive.
 - Keep effects local and concrete. Prefer entity ids from context.
 - The user JSON includes spell_anchors: visible environmental props sorted toward relevance. When the spell mentions surroundings, materials, objects, altars, braziers, mirrors, water, blood, bone, machinery, notices, cages, plants, webs, crystals, lights, books, bells, shrines, or other scenery, scan spell_anchors before choosing a generic resolution.
 - Use actual prop ids from spell_anchors as target/center/origin/placement anchors for create_tiles, area_damage, area_status, summon, conjure_item, conjure_creature, create_trigger, push, or pull. Use a prop's tags/affordances to flavor the mechanics.
@@ -121,8 +131,12 @@ Good examples:
 {"accepted": true, "severity": "moderate", "outcome_text": "A healing font pulses softly. Stand near it to recover.", "effects": [{"type": "summon", "name": "healing font", "faction": "ally", "hp": 6, "attack": 0, "defense": 2, "char": "+", "tags": ["aura_heal_3", "stationary"]}], "costs": [{"type": "mana", "amount": 7}], "rejected_reason": null}
 {"accepted": true, "severity": "moderate", "outcome_text": "Fire leaps up around you in a bright, eager ring.", "effects": [{"type": "create_tiles", "tile": "fire", "target": "player", "radius": 3, "hollow": true, "duration": 5}], "costs": [{"type": "mana", "amount": 5}], "rejected_reason": null}
 {"accepted": true, "severity": "minor", "outcome_text": "Ice unrolls toward your enemy like a silver carpet.", "effects": [{"type": "create_tiles", "shape": "line", "origin": "player", "target": "nearest_enemy", "tile": "slick_ice", "duration": 4}], "costs": [{"type": "mana", "amount": 3}], "rejected_reason": null}
+{"accepted": true, "severity": "moderate", "outcome_text": "A sheet of fire springs up in a line, sealing the goblins off from you.", "effects": [{"type": "create_tiles", "shape": "wall", "origin": "player", "target": "nearest_enemy", "tile": "fire", "duration": 4}], "costs": [{"type": "mana", "amount": 5}, {"type": "item", "item": "chalk", "amount": 1}], "rejected_reason": null}
+{"accepted": true, "severity": "moderate", "outcome_text": "The enemy's bones soften into feathers; a bewildered chicken stands where it stood.", "effects": [{"type": "transform_entity", "target": "nearest_enemy", "name": "clucking chicken", "char": "c", "attack": 0, "hp": 1, "max_hp": 1, "tags": ["harmless", "chicken"]}], "costs": [{"type": "mana", "amount": 5}, {"type": "item", "item": "chalk", "amount": 1}], "rejected_reason": null}
 {"accepted": true, "severity": "moderate", "outcome_text": "Your wound learns to answer.", "effects": [{"type": "create_trigger", "name": "thorn-blood answer", "trigger": "on_player_hit", "target": "player", "charges": 1, "duration": 6, "effects": [{"type": "damage", "target": "trigger_source", "amount": 5, "damage_type": "physical"}, {"type": "add_status", "target": "trigger_source", "status": "bleeding", "duration": 3}]}], "costs": [{"type": "mana", "amount": 4}], "rejected_reason": null}
 {"accepted": true, "severity": "major", "outcome_text": "You speak the blade into the world's debt-book. Somewhere north, steel begins to wait.", "effects": [{"type": "create_promise", "kind": "prophecy", "subject": "a blade that knows my name", "text": "Somewhere north of here, a blade waits with my name on it.", "what": "cache", "where": "north", "item": "named blade", "salience": 4}], "costs": [{"type": "mana", "amount": 6}], "rejected_reason": null}
+{"accepted": true, "severity": "major", "outcome_text": "A roaring gout of flame swallows the foe and everything crowded around it.", "effects": [{"type": "area_damage", "target": "nearest_enemy", "radius": 5, "amount": 12, "damage_type": "fire", "include_player": false, "affects": "enemies"}], "costs": [{"type": "mana", "amount": 8}, {"type": "health", "amount": 2}], "rejected_reason": null}
+{"accepted": true, "severity": "catastrophic", "outcome_text": "The floor heaves and splits; the whole room comes down in a roar of stone and dust.", "effects": [{"type": "area_damage", "target": "player", "radius": 7, "amount": 22, "damage_type": "physical", "include_player": false, "affects": "enemies"}, {"type": "create_tiles", "target": "player", "radius": 6, "tile": "rubble", "duration": 0}], "costs": [{"type": "max_health", "amount": 3}, {"type": "curse", "id": "stone_debt", "name": "Stone Debt", "description": "The earth gave once; it will ask for you later."}], "rejected_reason": null}
 {"accepted": false, "severity": "catastrophic", "outcome_text": "", "effects": [], "costs": [], "rejected_reason": "Reality refuses to become that convenient."}
 """.replace("{supported_statuses}", SUPPORTED_STATUS_TEXT)
 

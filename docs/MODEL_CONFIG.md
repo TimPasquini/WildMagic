@@ -113,7 +113,7 @@ ignoring the spell contract in creative ways.
 | `WILDMAGIC_AGENT_NUM_PREDICT` | no | 256 (64-1024) | command-chooser response budget |
 | `WILDMAGIC_TOWN_NUM_PREDICT` | no | 2000 (256–8192) | town generation budget |
 | `WILDMAGIC_LORE_NUM_PREDICT` | no | 700 (64–2048) | lore/flesh budget |
-| `WILDMAGIC_CANON_NUM_PREDICT` | no | 1400 (64–2048) | examine/read budget; sized for compressed book pages |
+| `WILDMAGIC_CANON_NUM_PREDICT` | no | 1400 (64–2048) | examine/read budget; sized for compressed book pages. Truncation past the cap is recovered by the canon JSON salvage, so it stays modest — this is a blocking call, and on slow backends a bigger cap risks blowing the timeout (empty result) instead of just truncating |
 | `WILDMAGIC_OLLAMA_RESOLUTION_ATTEMPTS` | no | 2 (1–4) | wild-magic retries on malformed JSON |
 
 For `--agent ollama`, keep `WILDMAGIC_AGENT_OLLAMA_NUM_CTX` aligned with the foreground
@@ -249,7 +249,19 @@ visible there in one minute.
   (backend variables above), and remember an autostarted server gets `.env` while a
   tray-started one does not. Server logs (`%LOCALAPPDATA%\Ollama\server.log` on Windows)
   show GPU discovery at startup; look for your card's name, `no compatible GPUs`, or
-  `dropping integrated GPU`.
+  `dropping integrated GPU`. Three things that trip people up here:
+  - **A running server's device is fixed at startup.** Editing backend env (or `.env`)
+    does nothing to a server that's already up — `ollama ps` will keep reporting the old
+    device. Fully stop Ollama and let it restart so it re-runs GPU discovery.
+  - **`ollama ps` says GPU, not *which* GPU.** On a machine with more than one adapter
+    (e.g. a discrete card plus an integrated one), `100% GPU` only confirms offload
+    happened, not that it's the fast card. The startup discovery line in `server.log` is
+    the authoritative source for the selected device name.
+  - **An autostarted server has no readable log.** When the *game* starts `ollama serve`,
+    it discards the server's stdout/stderr, so `server.log` is **not** refreshed and may
+    sit stale from an earlier manual/tray launch. To actually read GPU discovery, start
+    `ollama serve` yourself in a terminal (it logs to the console), or just trust
+    `ollama ps` plus cast latency.
 - **VRAM fills and empties repeatedly; periodic long stalls.** Model thrash — same model
   tag requested with different `num_gpu`/`num_ctx`, or more models than
   `OLLAMA_MAX_LOADED_MODELS` allows. See the thrash warning above.
@@ -259,6 +271,14 @@ visible there in one minute.
 - **Spells fail with timeouts.** Raise `WILDMAGIC_OLLAMA_TIMEOUT` (or the purpose-scoped
   variant). First call after idle includes model load time; `OLLAMA_KEEP_ALIVE=10m`
   (our default) keeps warm models warm.
+- **`examine`/`read` or town generation return nothing (empty canon/settlement).** A
+  long-form generation hit the timeout and produced an empty result rather than
+  truncating. The risk scales with response budget ÷ throughput: at low tokens/sec a
+  full book (`WILDMAGIC_CANON_NUM_PREDICT`) or town (`WILDMAGIC_TOWN_NUM_PREDICT` 2000)
+  can exceed the default timeout. Check `ollama ps`/audit for throughput, then either
+  raise the scoped timeout (`WILDMAGIC_CANON_OLLAMA_TIMEOUT`, `WILDMAGIC_TOWN_OLLAMA_TIMEOUT`
+  — town is background, so a multi-minute budget is fine) or lower that purpose's
+  `NUM_PREDICT`. Canon truncation is salvaged automatically, but a timeout is not.
 - **Spells return prose or broken JSON.** Confirm `WILDMAGIC_OLLAMA_FORMAT` is on, try a
   larger/instruct-tuned model, and check the audit log for what the model actually said.
   The resolver already retries (`WILDMAGIC_OLLAMA_RESOLUTION_ATTEMPTS`).

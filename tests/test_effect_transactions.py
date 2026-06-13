@@ -101,6 +101,27 @@ def test_waiting_does_not_exceed_maximum_mana() -> None:
     assert "You catch your breath and recover 1 mana." not in engine.state.messages
 
 
+def test_max_stat_costs_always_bite() -> None:
+    # Regression: a max_health/max_mana cost with a missing, zero, or negative amount
+    # used to clamp to 0 and silently do nothing. It must always reduce the stat, and
+    # a negative amount is read as its magnitude (the model means "lose 5", not "+5").
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    player = engine.state.player
+
+    base_hp = player.max_hp
+    assert engine._apply_cost({"type": "max_health", "amount": -5}) == "Cost: 5 maximum health."
+    assert player.max_hp == base_hp - 5
+    assert player.hp <= player.max_hp
+
+    base_mana = player.max_mana
+    assert engine._apply_cost({"type": "max_mana"}) == "Cost: 1 maximum mana."
+    assert player.max_mana == base_mana - 1
+
+    base_hp2 = player.max_hp
+    assert engine._apply_cost({"type": "max_health", "amount": 0}) == "Cost: 1 maximum health."
+    assert player.max_hp == base_hp2 - 1
+
+
 def test_mana_cost_shortfall_becomes_health_cost() -> None:
     engine = GameEngine(seed=7, scenario="test_chamber")
     player = engine.state.player

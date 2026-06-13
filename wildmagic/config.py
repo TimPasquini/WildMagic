@@ -279,7 +279,11 @@ def ollama_lore_num_predict() -> int:
 
 def ollama_canon_num_predict() -> int:
     """Books are full compressed pages (300-600 words), so the canon budget is
-    sized for them; shorter kinds simply stop early."""
+    sized for them; shorter kinds simply stop early. Truncation past this cap is
+    recovered by _repair_truncated_json (canon.py), so the budget stays modest to
+    bound worst-case generation time: this is a blocking, player-facing call, and
+    on slow backends a larger cap risks blowing the request timeout (empty result)
+    for marginal gain over the salvage path."""
     return _int_value("WILDMAGIC_CANON_NUM_PREDICT", 1400, 64, 2048)
 
 

@@ -417,15 +417,91 @@ def _resolve_canon_once(provider: CanonProvider, context: dict[str, Any]) -> Can
         return CanonResolution(None, True, error, resolved_provider_name, raw, audit_path)
 
 
+def _repair_truncated_json(raw: str) -> str | None:
+    """Best-effort recovery of a JSON object truncated mid-output, which happens
+    when the model hits its token budget partway through a long book. Closes an
+    unterminated string and any still-open brackets, trimming a dangling trailing
+    key/colon/comma if needed, and only returns a result that actually parses.
+    Returns None when the text can't be salvaged so callers can raise as before."""
+    start = raw.find("{")
+    if start == -1:
+        return None
+    body = raw[start:]
+    in_string = False
+    escape = False
+    stack: list[str] = []
+    for ch in body:
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in "}]" and stack:
+            stack.pop()
+    if escape:  # ended on a dangling backslash that would escape our closing quote
+        body = body[:-1]
+    if in_string:
+        body += '"'
+    closers = "".join(reversed(stack))
+    # Closing the open brackets is enough when truncation landed after a complete
+    # value (the common case). When it landed on a dangling key/colon/comma, peel
+    # that fragment off and retry; trimming keys never changes bracket depth, so
+    # the precomputed closers stay valid.
+    candidate = body
+    for _ in range(6):
+        candidate = candidate.rstrip()
+        try:
+            # strict=False so a body that is both truncated and contains literal
+            # newlines/tabs inside a string value still validates.
+            json.loads(candidate + closers, strict=False)
+            return candidate + closers
+        except json.JSONDecodeError:
+            trimmed = re.sub(r'(?:,\s*)?"[^"]*"\s*:?\s*$', "", candidate)
+            trimmed = re.sub(r"[:,]\s*$", "", trimmed)
+            if trimmed == candidate:
+                return None
+            candidate = trimmed
+    return None
+
+
 def parse_canon_json(raw: str) -> dict[str, Any]:
     cleaned = strip_thinking(raw)
+    parsed: Any
+    # strict=False tolerates literal newlines/tabs inside string values, which the
+    # model routinely emits in long book prose instead of escaping them as \n.
     try:
-        parsed = json.loads(cleaned)
+        parsed = json.loads(cleaned, strict=False)
     except json.JSONDecodeError:
-        match = re.search(r"\{.*\}", cleaned, re.DOTALL)
-        if not match:
-            raise
-        parsed = json.loads(match.group(0))
+        parsed = None
+        start = cleaned.find("{")
+        if start != -1:
+            # raw_decode reads the first complete object and ignores any prose or
+            # second object the model appended after it ("Extra data" errors).
+            try:
+                parsed, _ = json.JSONDecoder(strict=False).raw_decode(cleaned[start:])
+            except json.JSONDecodeError:
+                parsed = None
+        if parsed is None:
+            match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+            if match:
+                try:
+                    parsed = json.loads(match.group(0), strict=False)
+                except json.JSONDecodeError:
+                    parsed = None
+        if parsed is None:
+            repaired = _repair_truncated_json(cleaned)
+            if repaired is None:
+                raise
+            parsed = json.loads(repaired, strict=False)
     if not isinstance(parsed, dict):
         raise TypeError("canon response was not a JSON object")
     return parsed
