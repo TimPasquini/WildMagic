@@ -1,7 +1,40 @@
 # Semantic Effects — Latent Mechanics in an LLM-Resolved Roguelike
 
-Status: **proposal / design doc** (no code written yet). Owner: resolver / world-state.
+Status: **substrate implemented (2026-06-14)**; consumers wired for resolver + dialogue.
+Owner: resolver / world-state.
 Companion to `CAPABILITY_ROUTING.md`, `CAPABILITY_CARD_PLAN.md`, and `WILD_MAGIC_SCHEMA.md`.
+
+## 0. Implementation status (2026-06-14)
+
+The substrate from §6–§9 is built and tested (`wildmagic/semantics.py`, `tests/test_semantics.py`,
+234 tests green):
+
+- **Note/anchor model + ledger** — `WorldNote` and `SemanticLedger` in `semantics.py`, anchored
+  over entity / item / place / faction / world. De-dupes, caps per anchor (evicting
+  lowest-salience), ranks by salience×recency, and decays by TTL. Lives on `GameState.semantics`;
+  `GameEngine._tick_auras`/turn loop calls `semantics.decay()` each turn.
+- **Entity traits channel** — `Entity.traits` (narrative facts), surfaced in `to_public_dict`, so
+  they ride into any prompt the entity appears in for free.
+- **Scene assembler** — `GameEngine.scene_anchors_around()` + `collect_scene_notes()` gather the
+  place/faction/world notes in scope, budgeted. Injected as `scene_notes` into **both**
+  `context_for_llm` (resolver) and `dialogue_context_for_llm` (dialogue); item traits flow into
+  `floor_items`/`nearby_objects`, the player's traits into the dialogue `player` block.
+- **Shared interpretation preamble** — `SEMANTIC_PREAMBLE` is spliced into the resolver
+  `CORE_PROMPT` *and* the `DIALOGUE_SYSTEM_PROMPT` from one source, so a trait means the same
+  thing to both models.
+- **Write paths** — the `add_trait` effect mints a trait onto an entity *and* records a ledger
+  note (the spell-facing mint); `GameEngine.record_note()` is the single deposit API; combat
+  writes back a place note when a non-player entity is slain ("X was slain here").
+- **Observability** — `scene_notes` rides inside the logged resolver/dialogue context, so audits
+  capture which facts surfaced on each call.
+
+**Not yet built (deliberate, see §4/§7):** automatic crystallization of a trait into an `aura`/tag
+(the model can already do it by emitting an `aura` effect; no dedicated promotion verb yet); a
+periodic LLM consolidation pass for contradiction-resolution (only the cap + TTL bound notes
+today); faction/world note *minting* from trade/lore consumers (only combat + `add_trait` write
+back so far); and surfacing into the trade/lore prompts (resolver + dialogue are wired; the rest
+reuse the same `collect_scene_notes` when wanted). The cheapest next step remains the live
+animated-hat probe in §8.
 
 ## 1. The idea
 

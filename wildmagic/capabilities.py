@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .prompts import SUPPORTED_STATUS_TEXT
+from .semantics import SEMANTIC_PREAMBLE
 from .spell_contract import SUPPORTED_EFFECTS
 
 
@@ -51,6 +52,7 @@ CORE_EFFECT_TYPES: frozenset[str] = frozenset(
         "add_curse",
         "message",
         "aura",
+        "add_trait",
     }
 )
 
@@ -110,6 +112,9 @@ Beyond these core effects, additional mechanics (summoning, polymorph, barriers,
 
 Valid target strings: "player", "nearest_enemy", or a specific entity id from context. For add_status, you may also use "all_enemies" or "enemies" to affect all enemies, or "all" for everyone.
 
+{semantic_preamble}
+Two context fields carry this narrative weight, not rules: entities in "nearby_entities" may have a "traits" list, and "scene_notes" holds notes about the place, factions, and world. Let them color how you resolve (a goblin-hating hat's wearer reads as more menacing to goblins; a floor that "remembers a murder" colors a divination). You MAY also MINT a lasting trait with the add_trait effect when a spell's enduring meaning is narrative rather than mechanical — add_trait fields: target (entity id / "player" / "nearest_enemy"), text (the trait, in plain words), salience 1-5. Use it for "brand him a coward so others see it", "let the blade remember this betrayal"; pair it with a real cost when it is consequential, and prefer a concrete mechanical effect when the spell wants an immediate, reliable result.
+
 Cost catalog:
 - mana, health, max_health, max_mana, item (fields: item name, amount), status, curse.
 - Costs are discovered after casting. Effects happen first, then costs.
@@ -147,7 +152,9 @@ Good examples:
 {"accepted": true, "severity": "major", "outcome_text": "A roaring gout of flame swallows the foe and everything crowded around it.", "effects": [{"type": "area_damage", "target": "nearest_enemy", "radius": 5, "amount": 12, "damage_type": "fire", "include_player": false, "affects": "enemies"}], "costs": [{"type": "mana", "amount": 8}, {"type": "health", "amount": 2}], "rejected_reason": null}
 {"accepted": true, "severity": "catastrophic", "outcome_text": "The floor heaves and splits; the whole room comes down in a roar of stone and dust.", "effects": [{"type": "area_damage", "target": "player", "radius": 7, "amount": 22, "damage_type": "physical", "include_player": false, "affects": "enemies"}, {"type": "create_tiles", "target": "player", "radius": 6, "tile": "rubble", "duration": 0}], "costs": [{"type": "max_health", "amount": 3}, {"type": "curse", "id": "stone_debt", "name": "Stone Debt", "description": "The earth gave once; it will ask for you later."}], "rejected_reason": null}
 {"accepted": false, "severity": "catastrophic", "outcome_text": "", "effects": [], "costs": [], "rejected_reason": "Reality refuses to become that convenient."}
-""".replace("{supported_statuses}", SUPPORTED_STATUS_TEXT)
+""".replace("{supported_statuses}", SUPPORTED_STATUS_TEXT).replace(
+    "{semantic_preamble}", SEMANTIC_PREAMBLE
+)
 
 
 @dataclass(frozen=True)

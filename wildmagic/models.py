@@ -276,6 +276,11 @@ class Entity:
     # backed by a concrete mechanical effect (damage, or a status that buffs or
     # debuffs); resolved once per turn in GameEngine._tick_auras.
     auras: list[dict[str, Any]] = field(default_factory=list)
+    # Narrative traits: descriptive facts with no fixed mechanical rule that the LLM
+    # consumers weigh ("righteously hates goblins", "smells of the deep wild"). Latent
+    # mechanics -- see wildmagic/semantics.py and docs/SEMANTIC_EFFECTS.md. Entity-attached
+    # so they ride into any prompt this entity appears in for free.
+    traits: list[str] = field(default_factory=list)
     equipment: dict[str, str | None] = field(
         default_factory=lambda: {
             "weapon": None,
@@ -327,6 +332,8 @@ class Entity:
             data["status_display"] = self.status_display
         if self.auras:
             data["auras"] = self.auras
+        if self.traits:
+            data["traits"] = list(self.traits)
         if self.kind != "item":
             data.update(
                 {

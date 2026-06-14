@@ -8,6 +8,7 @@ import random
 import re
 import time
 from typing import Any
+from collections.abc import Iterable
 
 from .models import (
     BLOCKING_TILES,
@@ -40,6 +41,14 @@ from .models import (
     TILE_ALIASES,
     TILE_TAGS,
     WildMagicOutcome,
+)
+from .semantics import (
+    SemanticLedger,
+    SEMANTIC_PREAMBLE,
+    entity_anchor,
+    faction_anchor,
+    place_anchor,
+    WORLD_ANCHOR,
 )
 from .combat import _CombatMixin
 from .ai import _AIMixin
@@ -200,6 +209,9 @@ class GameState:
     # -- a hexed circle that bleeds anyone standing on it, a warded floor that
     # steadies allies. Resolved alongside entity-borne auras in _tick_auras.
     tile_auras: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    # The shared semantic substrate: world notes/traits keyed by anchor, read and
+    # written by every LLM consumer. See wildmagic/semantics.py.
+    semantics: SemanticLedger = field(default_factory=SemanticLedger)
     event_timers: list[dict[str, Any]] = field(default_factory=list)
     triggers: list[dict[str, Any]] = field(default_factory=list)
     game_over: bool = False
@@ -1295,6 +1307,8 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         }
         if player_appearance:
             player_block["appearance"] = player_appearance
+        if player.traits:
+            player_block["traits"] = list(player.traits)
         return {
             "npc": profile.to_dialogue_context(),
             "player": player_block,
@@ -1307,6 +1321,15 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             "nearby_objects": self._npc_nearby_objects(npc),
             "relevant_lore": self.promises_for_context(
                 subject=npc.name, tags=npc.tags, limit=5, text_limit=160
+            ),
+            # The same semantic substrate the resolver reads, focused on this NPC's scene:
+            # the player's traits, the room's notes, the NPC's faction standing. A fact
+            # minted by a spell ("wears a goblin-hating hat") reaches dialogue with no extra
+            # wiring -- the whole point of one shared ledger.
+            "scene_notes": self.collect_scene_notes(
+                self.scene_anchors_around(
+                    npc.x, npc.y, NPC_PERCEPTION_RADIUS, include=[npc, player]
+                )
             ),
             "message": message,
         }
@@ -1330,6 +1353,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 "what": "object" if entity.kind == "prop" else "loose item",
                 "description": entity.description,
                 "tags": sorted(entity.tags),
+                **({"traits": list(entity.traits)} if entity.traits else {}),
             }
             for _, _, entity in nearby[:limit]
         ]
@@ -1846,6 +1870,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         self._tick_environment()
         self._tick_tile_durations()
         self._tick_auras()
+        self.state.semantics.decay(self.state.turn)
         self._tick_event_timers()
         self._tick_triggers()
         self.update_fov()
@@ -2692,6 +2717,66 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         anchors.sort(key=lambda item: (item[0], item[1]["distance"], item[1]["name"]))
         return [anchor for _, anchor in anchors[:limit]]
 
+    def record_note(
+        self,
+        anchor: str,
+        text: str,
+        *,
+        kind: str = "trait",
+        source: str = "engine",
+        salience: int = 3,
+        ttl: int | None = None,
+    ) -> None:
+        """Single write-path into the semantic ledger. Combat, spells, dialogue, and trade
+        all deposit facts through here so a fact minted anywhere is visible everywhere."""
+        self.state.semantics.record(
+            anchor,
+            text,
+            turn=self.state.turn,
+            kind=kind,
+            source=source,
+            salience=salience,
+            ttl=ttl,
+        )
+
+    def scene_anchors_around(
+        self, cx: int, cy: int, radius: int, *, include: Iterable[Entity] = ()
+    ) -> list[str]:
+        """The retrieval index for a scene: the anchors whose notes should be in scope --
+        every nearby living entity, the factions present, the ground underfoot, and the
+        world. Entity-attached facts are already in the prompt via to_public_dict; this is
+        how place/faction/world facts get gathered."""
+        anchors: list[str] = []
+        seen: set[str] = set()
+
+        def add(anchor: str) -> None:
+            if anchor not in seen:
+                seen.add(anchor)
+                anchors.append(anchor)
+
+        for entity in include:
+            add(entity_anchor(entity.id))
+            if entity.faction and entity.faction not in {"neutral", ""}:
+                add(faction_anchor(entity.faction))
+        for entity in self.state.entities.values():
+            if not entity.alive or entity.kind == "item":
+                continue
+            if max(abs(entity.x - cx), abs(entity.y - cy)) <= radius:
+                add(entity_anchor(entity.id))
+                if entity.faction and entity.faction not in {"neutral", ""}:
+                    add(faction_anchor(entity.faction))
+        add(place_anchor(cx, cy))
+        add(WORLD_ANCHOR)
+        return anchors
+
+    def collect_scene_notes(self, anchors: list[str], limit: int = 8) -> list[dict[str, Any]]:
+        """Gather, rank, and budget the notes for a scene's anchors, ready to splice into a
+        prompt. Logged as part of the call's context, so we can audit which facts surfaced."""
+        notes = self.state.semantics.for_anchors(
+            anchors, turn=self.state.turn, limit=limit
+        )
+        return [note.to_dict() for note in notes]
+
     def context_for_llm(self, spell: str) -> dict[str, Any]:
         player = self.state.player
         current_room = self.room_profile_at(player.x, player.y)
@@ -2715,6 +2800,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 "x": e.x,
                 "y": e.y,
                 "tags": sorted(e.tags),
+                **({"traits": list(e.traits)} if e.traits else {}),
             }
             for e in self.state.entities.values()
             if e.kind == "item"
@@ -2747,6 +2833,13 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             "visible_tile_count": len(self.state.visible),
             "explored_tile_count": len(self.state.explored),
             "nearby_entities": nearby_entities,
+            # Place/faction/world semantic notes in scope for this cast. Entity-attached
+            # traits already ride along inside nearby_entities. See wildmagic/semantics.py.
+            "scene_notes": self.collect_scene_notes(
+                self.scene_anchors_around(
+                    player.x, player.y, self.state.fov_radius, include=[player]
+                )
+            ),
             "spell_anchors": self.nearby_spell_anchors(spell),
             "floor_items": floor_items,
             "nearby_map": self.nearby_map_strings(radius=9),

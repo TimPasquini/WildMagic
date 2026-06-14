@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .models import MECHANICAL_STATUSES
+from .semantics import SEMANTIC_PREAMBLE
 
 
 SUPPORTED_STATUS_TEXT = ", ".join(sorted(MECHANICAL_STATUSES))
@@ -148,7 +149,13 @@ Guidelines:
   a warning, a place worth seeing - anchor it loosely in the world the way locals do:
   "north of town", "east along the road", "out in the marshes", "at the old windmill".
   Vague is fine; placeless is not. Skip this for abstractions and things close at hand.
-"""
+- The player and objects may carry "traits", and "scene_notes" may hold facts about this
+  place, the factions here, and the world. React to them the way a person would notice
+  something striking - a stranger wearing an obviously goblin-cursed hat, a room everyone
+  says is haunted - without reciting them or treating them as game rules.
+
+{semantic_preamble}
+""".replace("{semantic_preamble}", SEMANTIC_PREAMBLE)
 
 
 TRADE_SYSTEM_PROMPT = """You are reading a snippet of conversation between a player and an NPC in

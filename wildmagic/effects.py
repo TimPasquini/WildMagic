@@ -32,6 +32,7 @@ from .normalize import (
     tile_from_name,
 )
 from .promises import Objective, WorldPromise, parse_spatial_hint
+from .semantics import entity_anchor
 from .spell_contract import STATUS_FLAVOR_ALIASES, validate_resolution
 from .templates import creature_template, item_template
 
@@ -856,6 +857,8 @@ class _EffectsMixin:
             return self._apply_animate_object(effect)
         if effect_type == "aura":
             return self._apply_aura_effect(effect)
+        if effect_type == "add_trait":
+            return self._apply_add_trait(effect)
         if effect_type == "message":
             text = str(effect.get("text") or "").strip()
             return [text] if text else []
@@ -1197,6 +1200,35 @@ class _EffectsMixin:
         elif owner is not None and owner.id == player_id:
             names = ", ".join(victim.name for victim in victims)
             self.state.add_message(f"Your {label} washes over {names}.")
+
+    def _apply_add_trait(self, effect: dict[str, Any]) -> list[str]:
+        """Mint a narrative trait onto an entity: a descriptive fact with no fixed rule that
+        the LLM consumers will weigh later (the resolver when the thing is involved, an NPC
+        who notices it, the AI when it acts). The semantic-effects write path -- see
+        wildmagic/semantics.py and docs/SEMANTIC_EFFECTS.md. Stored on the entity (so it rides
+        into prompts for free) AND in the ledger (so place/faction queries can find it)."""
+        target = self.resolve_target(str(effect.get("target") or "nearest_enemy"))
+        if target is None or target.kind in {"item"} and not getattr(target, "alive", True):
+            target = None
+        if target is None:
+            target = self.resolve_target("nearest_enemy") or self.state.player
+        text = " ".join(str(effect.get("text") or effect.get("trait") or "").split())[:120]
+        if not text:
+            return ["The trait has no shape to take, and fades."]
+        # De-dupe on the entity, cap the narrative channel so it never silts up.
+        if text.lower() not in {t.lower() for t in target.traits}:
+            target.traits.append(text)
+            target.traits[:] = target.traits[-8:]
+        salience = effect.get("salience")
+        self.record_note(
+            entity_anchor(target.id),
+            text,
+            kind="trait",
+            source="spell:add_trait",
+            salience=int(salience) if isinstance(salience, (int, float)) else 4,
+        )
+        who = "you" if target.id == self.state.player_id else target.name
+        return [f"Something about {who} is changed, and the world will remember it."]
 
     def _create_spoken_promise(self, effect: dict[str, Any]) -> list[str]:
         """Prophecy: the player speaks a future into the ledger. The spoken claim goes

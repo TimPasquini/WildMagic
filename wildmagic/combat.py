@@ -7,6 +7,7 @@ from .game_data import EQUIPMENT_SPECS
 from .geometry import sign
 from .models import FIRE, FLOOR, POISON_CLOUD, RUBBLE, SLICK_ICE, WALL, WATER, Entity
 from .normalize import clamp_int, normalize_id, status_duration
+from .semantics import place_anchor
 
 
 class _CombatMixin:
@@ -182,6 +183,19 @@ class _CombatMixin:
                 entity.char = "%"
                 entity.ai = None
                 entity.statuses.clear()
+                if entity.id != self.state.player_id:
+                    # Write-back: the ground remembers a death. A later divination, an NPC
+                    # who lives here, or a spell cast on this spot can weigh it. The loop
+                    # that turns mechanical events into future semantic context.
+                    slayer = source.name if source is not None else "something unseen"
+                    self.record_note(
+                        place_anchor(entity.x, entity.y),
+                        f"{entity.name} was slain here by {slayer}.",
+                        kind="event",
+                        source="combat",
+                        salience=3,
+                        ttl=400,
+                    )
                 if entity.id == self.state.player_id:
                     self.state.game_over = True
                     self.state.victory = False

@@ -27,6 +27,7 @@ SUPPORTED_EFFECTS = {
     "edit_memory",
     "animate_object",
     "aura",
+    "add_trait",
     "change_faction",
     "possess",
     "add_tag",
