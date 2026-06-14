@@ -158,23 +158,52 @@ Wild magic resolution and every effect/cost handler:
 ## LLM layer
 
 ### `wildmagic/wild_magic.py`
-The LLM provider layer. Defines Protocol classes and concrete implementations for four
-provider kinds, each returning a typed resolution object:
+The LLM provider layer. This file once held all four provider subsystems; dialogue,
+trade, and town generation have since been split into their own modules (below), so
+`wild_magic.py` now owns the **wild-magic spell** subsystem proper:
 
 - `WildMagicProvider` / `OllamaWildMagicProvider` / `MockWildMagicProvider` → `MagicResolution`
-- `DialogueProvider` / `OllamaDialogueProvider` / `MockDialogueProvider` → `DialogueResolution`
-- `TradeProvider` / `OllamaTradeProvider` / `MockTradeProvider` → `TradeResolution`
-- `TownProvider` / `OllamaTownProvider` / `MockTownProvider` → `TownSpec`
 
-Factory functions `make_provider`, `make_dialogue_provider`, `make_trade_provider`,
-`make_town_provider` use `wildmagic.config` to select the active backend. Ollama-backed
-providers carry a purpose label (`wild`, `dialogue`, `trade`, `town`) so config can
-route urgent and background requests to different Ollama hosts.
+`make_provider` uses `wildmagic.config` to select the active backend. Ollama-backed
+providers carry a purpose label (here, `wild`) so config can route urgent and background
+requests to different Ollama hosts.
 
-Also contains `resolve_spell`, `resolve_dialogue`, `resolve_trade_proposal`,
-`_effect_from_text` (regex-based fallback parser), and the audit log writers.
+Owns **orchestration**: `resolve_spell` (prompt build → provider call → retry → audit),
+`_wild_prompt_messages` (input/prompt assembly), and the wild-magic audit log writer. The
+**output parsing** that turns the model's raw text into a normalized resolution dict was
+split into `resolution_parsing.py` (below); `resolve_spell` calls `parse_resolution_json`
+from there. For backward compatibility `wild_magic.py` re-exports the dialogue/trade/town
+symbols from their new homes, so existing `from .wild_magic import ...` call sites keep
+working.
+
 Spell operation constants, status flavor aliases, structural validation, and the
 JSON Schema used for constrained spell decoding live in `spell_contract.py`.
+
+### `wildmagic/resolution_parsing.py`
+The spell-resolution **output parser**: a pure `str → dict` transform with no I/O or
+network dependency. `parse_resolution_json` strips `<think>` text, extracts the JSON, and
+runs `_normalize_resolution` — a large defensive normalizer that reconciles the many
+shapes a local model emits (singular vs. plural effects/costs, nested `outcome`/`details`,
+element-name and flavor-status aliases, trigger/schedule restructuring, natural-language
+effect inference via `_effect_from_text` / `_infer_effect_from_fields`) into the exact
+shape `spell_contract.validate_resolution` expects. Also home to `_nearest_enemy_id`
+(target resolution helper used by the Ollama provider).
+
+### `wildmagic/dialogue.py`
+NPC dialogue provider stack (`DialogueProvider` / `Ollama` / `Mock` / `Auto` →
+`DialogueResolution`), `make_dialogue_provider`, `resolve_dialogue`, and the degenerate-reply
+guards (`_is_degenerate_echo`, `_is_self_repetition`). Replies are plain prose — no JSON
+schema — and the model is swappable independently of spell resolution.
+
+### `wildmagic/trade.py`
+Trade provider stack (`TradeProvider` / `Ollama` / `Mock` / `Auto` → `TradeResolution`),
+`make_trade_provider`, `parse_trade_json`, `validate_trade_resolution`, and
+`resolve_trade_proposal`. A small structured-JSON surface decoupled from dialogue prose.
+
+### `wildmagic/town_gen.py`
+Town generation provider (`TownProvider` / `Ollama` / `Mock` / `Auto` → `TownSpec`),
+`make_town_provider`, the `BuildingSpec` / `NpcSpec` / `TownSpec` dataclasses, and
+`_parse_town_spec`. One JSON call produces a full settlement spec.
 
 ### `wildmagic/lore.py`
 Dialogue-derived lore extraction. Defines `LoreExtractionProvider` plus Ollama/mock/auto
@@ -392,12 +421,16 @@ main.py / cli.py
             │       ├── ai.py       (_AIMixin)
             │       ├── generation.py (_GenerationMixin)
             │       └── effects.py  (_EffectsMixin)
-            ├── wild_magic.py (spell/dialogue/trade/town providers + resolution)
+            ├── wild_magic.py (spell provider + resolve_spell orchestration)
+            │       ├── resolution_parsing.py (raw LLM text -> normalized effect dict)
             │       ├── llm_client.py   (Ollama HTTP)
             │       ├── llm_resolver.py (audit + retry)
             │       ├── prompts.py      (system prompts)
             │       ├── spell_contract.py (spell schema + validation)
             │       └── fallbacks.py    (regex fallback)
+            ├── dialogue.py (NPC dialogue provider + resolution)
+            ├── trade.py    (trade provider + resolution)
+            ├── town_gen.py (town generation provider)
             └── lore.py (dialogue promise extraction)
                     ├── llm_client.py
                     ├── llm_resolver.py
