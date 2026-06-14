@@ -379,8 +379,7 @@ class _EffectsMixin:
             target = self.resolve_target(str(effect.get("target") or "player"))
             if not target:
                 return []
-            x = clamp_int(effect.get("x"), 0, self.state.width - 1)
-            y = clamp_int(effect.get("y"), 0, self.state.height - 1)
+            x, y = self._teleport_destination(effect)
             if self.teleport_entity(target, x, y):
                 return [
                     f"{target.name} {self._verb(target, 'snap', 'snaps')} to another tile."
@@ -1436,17 +1435,47 @@ class _EffectsMixin:
 
         return []
 
+    def _teleport_destination(self, effect: dict[str, Any]) -> tuple[int, int]:
+        """Where a teleport lands. A teleport with no coordinate used to clamp to
+        (0,0) and dump the caster in the map corner; instead, resolve a real
+        destination: explicit x/y if given (including a nested destination object),
+        else the player's marked square, else a random visible floor tile. Never the
+        accidental origin."""
+        if "x" in effect and "y" in effect:
+            return (
+                clamp_int(effect.get("x"), 0, self.state.width - 1),
+                clamp_int(effect.get("y"), 0, self.state.height - 1),
+            )
+        for key in ("destination", "to", "position", "dest"):
+            dest = effect.get(key)
+            if isinstance(dest, dict) and "x" in dest and "y" in dest:
+                return (
+                    clamp_int(dest.get("x"), 0, self.state.width - 1),
+                    clamp_int(dest.get("y"), 0, self.state.height - 1),
+                )
+        marked = self.selected_target_tile()
+        if marked is not None:
+            return marked
+        return self.random_visible_floor()
+
     def effect_position(self, effect: dict[str, Any]) -> tuple[int, int]:
         if "x" in effect and "y" in effect:
             return (
                 clamp_int(effect.get("x"), 0, self.state.width - 1),
                 clamp_int(effect.get("y"), 0, self.state.height - 1),
             )
-        target = self.resolve_target(
-            str(effect.get("target") or effect.get("center") or "")
-        )
+        target_ref = str(effect.get("target") or effect.get("center") or "")
+        target = self.resolve_target(target_ref)
         if target:
             return target.x, target.y
+        # A bare-tile player mark has no occupant, so resolve_target returns None;
+        # honor the clicked square rather than defaulting to the player's feet.
+        marked = self.selected_target_tile()
+        if marked is not None and (
+            self.references_selected_target(target_ref)
+            or self.references_selected_target(effect.get("placement"))
+        ):
+            return marked
         player = self.state.player
         return player.x, player.y
 
@@ -1575,6 +1604,24 @@ class _EffectsMixin:
             if not prefer_unblocked or self.can_occupy(x, y):
                 return x, y
             return self.find_open_tile_near(x, y)
+
+        # An explicit player mark on an empty square: resolve_target finds no occupant,
+        # so anchor placement on the clicked tile directly (e.g. "conjure a wall there").
+        # A live occupant falls through to the normal target path so its current
+        # position (not the stale mark) is used.
+        marked = self.selected_target_tile()
+        if (
+            marked is not None
+            and self.selected_target_entity() is None
+            and (
+                self.references_selected_target(placement)
+                or self.references_selected_target(effect.get("target"))
+            )
+        ):
+            mx, my = marked
+            if not prefer_unblocked or self.can_occupy(mx, my):
+                return mx, my
+            return self.find_open_tile_near(mx, my)
 
         target = self.resolve_target(str(effect.get("target") or "nearest_enemy"))
         player = self.state.player

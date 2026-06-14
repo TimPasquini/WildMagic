@@ -203,6 +203,14 @@ class GameState:
     pending_trade: dict[str, Any] | None = None
     flags: dict[str, Any] = field(default_factory=dict)
     last_talked_npc_name: str | None = None
+    # Explicit player-chosen spell target (a clicked square or its occupant). The
+    # word "target"/"there"/"that square" in a wild spell resolves here; the resolver
+    # context advertises it. tile coords persist (so "teleport to target" works);
+    # target_entity_id snapshots whoever stood there so a moving creature stays "the
+    # target". Cleared on zone change (coords become meaningless). See set_target.
+    target_x: int | None = None
+    target_y: int | None = None
+    target_entity_id: str | None = None
     tile_tags: dict[str, list[str]] = field(default_factory=dict)
     tile_durations: dict[str, int] = field(default_factory=dict)
     # Standing auras anchored to ground rather than to a creature, keyed by "x,y"
@@ -1614,6 +1622,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         else:
             self._generate_dungeon_floor(preserve_player=True)
 
+        self.clear_target()
         self.state.turn += 1
         self.update_fov()
         self.state.add_message(f"You descend to dungeon floor {self.state.depth}.")
@@ -1630,6 +1639,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
 
         # Save current dungeon floor
         self._save_dungeon_floor(self.state.depth)
+        self.clear_target()
 
         self.state.depth -= 1
 
@@ -1723,6 +1733,19 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         self.update_fov()
         return [f"Your soul tears free and pours into {target.name}."]
 
+    def _aimed_enemy(self, max_distance: int) -> Entity | None:
+        """Target for a standard offensive spell: the player's explicitly marked
+        creature when one is set and in range, otherwise the nearest enemy. Lets a
+        player focus-fire a specific foe instead of always hitting the closest."""
+        marked = self.selected_target_entity()
+        if (
+            marked is not None
+            and marked.id != self.state.player_id
+            and self.distance(self.state.player, marked) <= max_distance
+        ):
+            return marked
+        return self.nearest_enemy(max_distance=max_distance)
+
     def cast_standard_bolt(self) -> bool:
         if self.state.game_over:
             return False
@@ -1730,7 +1753,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         if player.mana < 2:
             self.state.add_message("The safe spell fizzles. You need 2 mana.")
             return False
-        target = self.nearest_enemy(max_distance=8)
+        target = self._aimed_enemy(max_distance=8)
         if target is None:
             self.state.add_message("No enemy is close enough for a spark bolt.")
             return False
@@ -1747,7 +1770,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         if player.mana < 2:
             self.state.add_message("The safe spell fizzles. You need 2 mana.")
             return False
-        target = self.nearest_enemy(max_distance=6)
+        target = self._aimed_enemy(max_distance=6)
         if target is None:
             self.state.add_message("No enemy is close enough for a frost shard.")
             return False
@@ -2456,9 +2479,89 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         if self.state.turn % 5 == 0 and player.mana < player.max_mana:
             player.mana += 1
 
+    # Strings the resolver (or the engine internals) may use to mean "the square the
+    # player explicitly marked". When a target is set, these resolve to its occupant;
+    # when none is set they fall through to the nearest-enemy aliases below, preserving
+    # the old auto-aim behavior.
+    _SELECTED_TARGET_KEYWORDS = frozenset(
+        {
+            "target",
+            "selected",
+            "selected_target",
+            "selected_tile",
+            "there",
+            "that_tile",
+            "that_square",
+            "marked",
+            "marked_tile",
+            "reticle",
+            "cursor",
+        }
+    )
+
+    def has_target(self) -> bool:
+        return self.state.target_x is not None and self.state.target_y is not None
+
+    def references_selected_target(self, value: Any) -> bool:
+        """True when an effect's target/center/placement string names the marked square."""
+        return normalize_id(str(value or "")) in self._SELECTED_TARGET_KEYWORDS
+
+    def selected_target_tile(self) -> tuple[int, int] | None:
+        if self.state.target_x is None or self.state.target_y is None:
+            return None
+        return self.state.target_x, self.state.target_y
+
+    def selected_target_entity(self) -> Entity | None:
+        """The live creature standing on the marked square, if it is still alive.
+        Returns None for a bare-tile target (or once the snapshotted occupant dies)."""
+        target_id = self.state.target_entity_id
+        if not target_id:
+            return None
+        entity = self.state.entities.get(target_id)
+        if entity is not None and entity.alive:
+            return entity
+        return None
+
+    def _target_entity_at(self, x: int, y: int) -> Entity | None:
+        """Pick the creature to bind a target to: a living actor/npc on the tile,
+        preferring a non-player so clicking your own square still lets you self-cast
+        only when nothing else is there."""
+        occupants = [
+            e
+            for e in self.state.entities.values()
+            if e.x == x and e.y == y and e.alive and e.kind in {"actor", "npc"}
+        ]
+        if not occupants:
+            return None
+        for entity in occupants:
+            if entity.id != self.state.player_id:
+                return entity
+        return occupants[0]
+
+    def set_target(self, x: int, y: int) -> bool:
+        """Mark a square as the explicit spell target. Snapshots its current occupant
+        (if any) so a moving creature stays bound. No turn is consumed by the caller."""
+        if not self.in_bounds(x, y):
+            return False
+        self.state.target_x = x
+        self.state.target_y = y
+        occupant = self._target_entity_at(x, y)
+        self.state.target_entity_id = occupant.id if occupant is not None else None
+        return True
+
+    def clear_target(self) -> None:
+        self.state.target_x = None
+        self.state.target_y = None
+        self.state.target_entity_id = None
+
     def resolve_target(self, target_id: str | None) -> Entity | None:
         if not target_id or target_id in {"player", "self", "@", "you", "me"}:
             return self.state.player
+        # An explicit player-marked target overrides the nearest-enemy auto-aim. For a
+        # bare-tile mark this returns None (no occupant); callers that need a position
+        # fall back to selected_target_tile() via effect_position/resolve_placement.
+        if self.has_target() and self.references_selected_target(target_id):
+            return self.selected_target_entity()
         if target_id in {
             "nearest_enemy",
             "nearest enemy",
@@ -2822,6 +2925,16 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             "depth": self.state.depth,
             "max_depth": self.state.max_depth,
             "player": player.to_public_dict(),
+            # The square the player explicitly clicked/marked, if any. Present only when
+            # set; the resolver is told (in the system prompt) that "target"/"there"/
+            # "that square" refer to it. None of this is required — the engine resolves
+            # the same keywords deterministically — but it lets the model reason about
+            # range, line of sight, and what is actually standing there.
+            **(
+                {"selected_target": self._selected_target_context()}
+                if self.has_target()
+                else {}
+            ),
             "inventory": self.state.inventory,
             "curses": [curse.to_public_dict() for curse in self.state.curses.values()],
             "world_flags": self.state.flags,
@@ -2902,6 +3015,24 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 "cost_timing": "effects happen first, then costs are revealed and applied",
                 "environment": "fire+water=mist, water extinguishes burning, vines snare on entry, ice slides movement",
             },
+        }
+
+    def _selected_target_context(self) -> dict[str, Any]:
+        """Compact description of the marked square for the resolver. Always called
+        behind has_target(), so the coordinates are real."""
+        tx, ty = self.state.target_x, self.state.target_y
+        player = self.state.player
+        occupant = self.selected_target_entity()
+        tile = self.tile_at(tx, ty)
+        return {
+            "x": tx,
+            "y": ty,
+            "tile": TILE_NAMES.get(tile, tile),
+            "distance": max(abs(tx - player.x), abs(ty - player.y)),
+            "has_line_of_sight": self.has_line_of_sight(player.x, player.y, tx, ty),
+            "entity_id": occupant.id if occupant is not None else None,
+            "entity_name": occupant.name if occupant is not None else None,
+            "occupied": occupant is not None,
         }
 
     def nearby_map_strings(self, radius: int = 9) -> list[str]:

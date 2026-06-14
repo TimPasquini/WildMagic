@@ -305,6 +305,31 @@ class GameSession:
                 action = "journal"
                 success = True
                 explicit_messages = describe_journal(self.engine)
+            elif verb in {"target", "mark", "aim"}:
+                # Free action (no turn): mark a square as the explicit spell target.
+                # The wild-magic resolver and the standard spells then aim there.
+                action = "target"
+                try:
+                    tx, ty = int(tokens[1]), int(tokens[2])
+                except (IndexError, ValueError):
+                    explicit_messages = [
+                        "Target where? Use 'target <x> <y>' (or click a square)."
+                    ]
+                else:
+                    if self.engine.set_target(tx, ty):
+                        success = True
+                        occupant = self.engine.selected_target_entity()
+                        label = occupant.name if occupant is not None else "that square"
+                        self.engine.state.add_message(f"Target marked: {label}.")
+                    else:
+                        explicit_messages = [f"Can't target ({tx}, {ty}) - out of bounds."]
+            elif verb in {"untarget", "cleartarget", "clear_target", "unmark"}:
+                action = "untarget"
+                had_target = self.engine.has_target()
+                self.engine.clear_target()
+                success = True
+                if had_target:
+                    self.engine.state.add_message("Target cleared.")
             elif verb in {"examine", "study", "observe"}:
                 action = "examine"
                 success, technical_failure, canon_record, explicit_messages = (
@@ -2342,7 +2367,8 @@ def command_argument(command: str, tokens: list[str]) -> str:
 
 def command_help() -> list[str]:
     return [
-        "Commands: move north/south/east/west, open, descend, ascend, wait (recover 1 MP), cast <spell>, talk <message>, possess [name], examine, read [book], use <item>, equip <item>, unequip <slot>, drop <item>, pickup, inspect (or inventory), journal (or rumors), wares (or browse), quit.",
+        "Commands: move north/south/east/west, open, descend, ascend, wait (recover 1 MP), cast <spell>, target <x> <y>, talk <message>, possess [name], examine, read [book], use <item>, equip <item>, unequip <slot>, drop <item>, pickup, inspect (or inventory), journal (or rumors), wares (or browse), quit.",
+        "Targeting: click a square (or 'target <x> <y>') to mark it - a free action, no turn. Then 'cast fireball at target', 'teleport to target', etc. aim there, and the standard spark/frost spells hit your marked foe. Click it again, 'untarget', or Esc to clear.",
         "Possessing: 'possess' (or 'swap'/'inhabit') leaps your soul into the nearest body - or 'possess <name>' for a specific one. You become that body entirely: its stats, its hit points, its inventory. The body you leave drops as an inert husk. Costs a turn.",
         "Reading: stand on or next to a book and 'read' (or 'read <name>' to pick one). The first reading takes a turn and fixes the book's title and pages forever; rereading is free. What books claim about the world is hearsay - but the world has a way of honoring what gets written down.",
         "Investigating: 'investigate' (or 'search') studies the room - it costs 1-3 turns while the world keeps moving, and what you learn is permanent. If something here is hidden, careful search turns up a clue; investigate the thing the clue points at ('investigate <name>') to see what it was protecting.",

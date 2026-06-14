@@ -74,6 +74,15 @@ split into mixins, leaving engine.py with the infrastructure that everything els
   materialized canon (`nearby_canon`) so future richness prompts and wild magic share
   the same world facts.
 - Turn bookkeeping: `finish_player_turn`, `_regenerate_player`, `resolve_target`, `resolve_target_group`, `nearest_enemy`, `_verb`
+- Explicit targeting: `set_target`, `clear_target`, `has_target`, `selected_target_entity`,
+  `selected_target_tile`, `references_selected_target`, `_aimed_enemy`. A player-marked
+  square (clicked in the UI or set via the free `target <x> <y>` command) is stored on
+  `GameState` (`target_x/target_y/target_entity_id`). `resolve_target` resolves
+  "target"/"there"/"that square" to its occupant; `effect_position`/`resolve_placement`
+  (effects.py) and the `teleport` handler honor a bare-tile mark by coordinates; the
+  standard spark/frost spells aim at it. `context_for_llm` advertises it as
+  `selected_target` so the resolver can reason about range/LOS. Cleared on zone change
+  and stair transitions (coordinates become meaningless).
 - Environment tick: `_tick_environment`, `_tick_fire_spread`, `_tick_poison_spread`, `_apply_tile_entry`, `_ambient_sounds`, `_tick_simple_statuses`, `_tick_tile_durations`, `_tick_event_timers`
 - Trigger system: `_trigger_event`, `_tick_triggers`, `_fire_triggers`, `_fire_damage_triggers`, `_fire_death_triggers`, `_trigger_matches_target`, `_fill_trigger_effect_defaults`
 

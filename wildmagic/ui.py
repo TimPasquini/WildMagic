@@ -859,6 +859,9 @@ class GameUI:
             if self.inspect_tile is not None:
                 self.inspect_tile = None
                 return
+            if self.engine.has_target():
+                self.execute_command("untarget")
+                return
             if self.input_mode == "control":
                 self.input_mode = "spell"
                 self.input_active = True
@@ -894,6 +897,16 @@ class GameUI:
             return
         self._handle_control_key(event)
         self.provider_label = self.session.provider_label
+
+    def _toggle_target(self, tx: int, ty: int) -> None:
+        """Click a map square to mark it as the spell target; click the marked square
+        again to clear. Both are free actions routed through the command path so they
+        record and replay like any other command."""
+        state = self.engine.state
+        if (state.target_x, state.target_y) == (tx, ty):
+            self.execute_command("untarget")
+        else:
+            self.execute_command(f"target {tx} {ty}")
 
     def handle_mouse(self, event: pygame.event.Event) -> None:
         scene = self._active_scene()
@@ -936,6 +949,15 @@ class GameUI:
                         self.execute_command(command)
                         return
             self.inspect_tile = None
+            mx, my = event.pos
+            if (
+                MAP_OFFSET_X <= mx < MAP_OFFSET_X + MAP_PIXEL_WIDTH
+                and 0 <= my < MAP_PIXEL_HEIGHT
+            ):
+                tx = (mx - MAP_OFFSET_X) // TILE_SIZE
+                ty = my // TILE_SIZE
+                self._toggle_target(tx, ty)
+                return
             if (
                 self.log_scrollbar_thumb_rect
                 and self.log_scrollbar_thumb_rect.collidepoint(event.pos)
@@ -1789,6 +1811,15 @@ class GameUI:
                 buttons.append((len(lines), f"investigate {entity.id}"))
                 lines.append(("  [ Investigate ]", (130, 185, 225)))
 
+        # Targeting affordance: mark this square (or clear it if already marked).
+        lines.append(("", MUTED))
+        if (state.target_x, state.target_y) == (tx, ty):
+            buttons.append((len(lines), "untarget"))
+            lines.append(("  [ Clear target ]", (225, 175, 130)))
+        else:
+            buttons.append((len(lines), f"target {tx} {ty}"))
+            lines.append(("  [ + Target this ]", (130, 185, 225)))
+
         if not lines:
             self.inspect_button_rects = []
             return
@@ -2478,6 +2509,29 @@ class GameUI:
             if revealed and not visible:
                 color = dim_color(color)
             self.draw_glyph(entity.char, entity.x, entity.y, color)
+        self.draw_target_reticle()
+
+    def draw_target_reticle(self) -> None:
+        """A bright corner-bracket reticle on the explicitly marked spell target."""
+        state = self.engine.state
+        if state.target_x is None or state.target_y is None:
+            return
+        tx, ty = state.target_x, state.target_y
+        px = MAP_OFFSET_X + tx * TILE_SIZE
+        py = ty * TILE_SIZE
+        color = (255, 120, 90)
+        seg = max(4, TILE_SIZE // 3)
+        rect = pygame.Rect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2)
+        # Four L-shaped corner brackets (a clean reticle, never hides the glyph beneath).
+        corners = (
+            (rect.left, rect.top, 1, 1),
+            (rect.right, rect.top, -1, 1),
+            (rect.left, rect.bottom, 1, -1),
+            (rect.right, rect.bottom, -1, -1),
+        )
+        for cx, cy, sx, sy in corners:
+            pygame.draw.line(self.screen, color, (cx, cy), (cx + sx * seg, cy), 2)
+            pygame.draw.line(self.screen, color, (cx, cy), (cx, cy + sy * seg), 2)
 
     def draw_glyph(
         self, glyph: str, x: int, y: int, color: tuple[int, int, int]

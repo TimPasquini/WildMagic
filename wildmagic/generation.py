@@ -1947,6 +1947,7 @@ class _GenerationMixin:
         entry_y = max(0, min(height - 1, entry_y))
 
         self._save_current_zone()
+        self.clear_target()
         state.zone_x, state.zone_y = new_zx, new_zy
         new_region_id = region_for_zone(new_zx, new_zy)
         region_changed = new_region_id != state.region_id
