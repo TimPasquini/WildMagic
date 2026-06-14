@@ -274,7 +274,8 @@ MECHANICAL_TAGS_PROMPT: tuple[str, ...] = (
 )
 
 
-PROPS_SYSTEM_PROMPT = """You dress one room of a vivid fantasy roguelike with small set-piece objects (props) -- the still, touchable clutter a place accumulates: furniture, ruins, relics, growths, remnants of old magic. The world is a colorful patchwork of folk traditions (blood, bone, crystal, song) under the Grand Empire, a polite cold power that outlaws wild magic. Never generic grimdark; strangeness is welcome if the world treats it as ordinary.
+PROPS_SYSTEM_PROMPT = (
+    """You dress one room of a vivid fantasy roguelike with small set-piece objects (props) -- the still, touchable clutter a place accumulates: furniture, ruins, relics, growths, remnants of old magic. The world is a colorful patchwork of folk traditions (blood, bone, crystal, song) under the Grand Empire, a polite cold power that outlaws wild magic. Never generic grimdark; strangeness is welcome if the world treats it as ordinary.
 Return ONLY a JSON object, no prose, no markdown, no <think> text:
 {"props": [{"name": "2-4 words", "description": "one vivid present-tense sentence", "char": "single ASCII glyph", "blocks": true_or_false, "tags": ["tag", ...]}]}
 The user message gives: region (and its voice), room (room_type, era, condition, topics, tags), wildness (0 calm .. 8 dreamlike), depth, count, avoid (names already in this room -- do NOT repeat or echo these), and mechanical_tags.
@@ -282,8 +283,11 @@ Generate exactly `count` props, each distinct from the others and from `avoid`. 
 description: one concrete sentence, in the region's voice, that a player could act on -- imply what it's made of and how it might be used, broken, or burned.
 char: one printable ASCII character suggesting the shape (e.g. a chair x, a statue S, a pool ~, mushrooms p). Distinct chars within the batch when you can.
 blocks: true only for large, solid objects that fill their tile (statues, altars, vats); false for small or flat things (candles, bones, spills, markings).
-tags: 2-5 short lowercase tags. PREFER these mechanical tags whenever they apply, so the prop behaves in play: """ + ", ".join(MECHANICAL_TAGS_PROMPT) + """. Add free-form flavor tags as you like, but a wooden thing must be tagged wood+flammable, a watery thing water, and so on.
+tags: 2-5 short lowercase tags. PREFER these mechanical tags whenever they apply, so the prop behaves in play: """
+    + ", ".join(MECHANICAL_TAGS_PROMPT)
+    + """. Add free-form flavor tags as you like, but a wooden thing must be tagged wood+flammable, a watery thing water, and so on.
 Keep it brief and surprising."""
+)
 
 
 LORE_EXTRACTION_SYSTEM_PROMPT = """You extract persistent story material from one NPC dialogue exchange - or one passage of in-world writing the player reads - in a fantasy roguelike.

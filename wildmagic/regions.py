@@ -437,8 +437,26 @@ _SALTMARKET = Region(
     imperial_presence=0.25,
     floor_themes=(
         (2, {"furniture": 4, "infrastructure": 3, "imperial": 2, "alchemical": 1}),
-        (4, {"alchemical": 3, "arcane": 3, "furniture": 2, "traditions": 2, "imperial": 1}),
-        (999, {"arcane": 4, "traditions": 3, "alchemical": 2, "religious": 2, "natural": 1}),
+        (
+            4,
+            {
+                "alchemical": 3,
+                "arcane": 3,
+                "furniture": 2,
+                "traditions": 2,
+                "imperial": 1,
+            },
+        ),
+        (
+            999,
+            {
+                "arcane": 4,
+                "traditions": 3,
+                "alchemical": 2,
+                "religious": 2,
+                "natural": 1,
+            },
+        ),
     ),
     ambient_by_tag={
         **_COMMON_SOUNDS_BY_TAG,
@@ -595,7 +613,10 @@ _WARREN = Region(
     floor_themes=(
         (2, {"ruined": 4, "furniture": 3, "infrastructure": 2, "natural": 1}),
         (4, {"ruined": 3, "traditions": 3, "furniture": 2, "natural": 2, "arcane": 1}),
-        (999, {"traditions": 4, "arcane": 3, "ruined": 2, "religious": 2, "natural": 1}),
+        (
+            999,
+            {"traditions": 4, "arcane": 3, "ruined": 2, "religious": 2, "natural": 1},
+        ),
     ),
     ambient_by_tag={
         **_COMMON_SOUNDS_BY_TAG,
@@ -746,8 +767,26 @@ _STACKS = Region(
     imperial_presence=0.2,
     floor_themes=(
         (2, {"furniture": 4, "arcane": 2, "imperial": 2, "religious": 1}),
-        (4, {"arcane": 3, "furniture": 3, "traditions": 2, "religious": 1, "imperial": 1}),
-        (999, {"arcane": 4, "traditions": 3, "religious": 2, "furniture": 2, "alchemical": 1}),
+        (
+            4,
+            {
+                "arcane": 3,
+                "furniture": 3,
+                "traditions": 2,
+                "religious": 1,
+                "imperial": 1,
+            },
+        ),
+        (
+            999,
+            {
+                "arcane": 4,
+                "traditions": 3,
+                "religious": 2,
+                "furniture": 2,
+                "alchemical": 1,
+            },
+        ),
     ),
     ambient_by_tag={
         **_COMMON_SOUNDS_BY_TAG,

@@ -1,0 +1,9 @@
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.17
+    hooks:
+      # Lint (reads config from pyproject.toml [tool.ruff.lint])
+      - id: ruff
+        args: [--fix]
+      # Format
+      - id: ruff-format

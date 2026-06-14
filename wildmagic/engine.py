@@ -637,11 +637,26 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
 
     _PROP_MAX_PENDING = 3  # cap concurrent room calls; nearest rooms go first
     _PROP_GLYPH_BY_TAG = {
-        "water": "~", "liquid": "~", "acid": "~", "oil": "~",
-        "plant": "p", "fungus": "p", "web": "w", "silk": "w",
-        "bone": ";", "ash": ".", "paper": "~", "cloth": "|",
-        "glass": "o", "crystal": "*", "light": "*", "magic": "*",
-        "metal": "=", "stone": "n", "wood": "n", "sharp": "/",
+        "water": "~",
+        "liquid": "~",
+        "acid": "~",
+        "oil": "~",
+        "plant": "p",
+        "fungus": "p",
+        "web": "w",
+        "silk": "w",
+        "bone": ";",
+        "ash": ".",
+        "paper": "~",
+        "cloth": "|",
+        "glass": "o",
+        "crystal": "*",
+        "light": "*",
+        "magic": "*",
+        "metal": "=",
+        "stone": "n",
+        "wood": "n",
+        "sharp": "/",
     }
 
     def _setup_prop_generation(

@@ -310,7 +310,9 @@ class CharacterCreationScene:
         self._draw_left(left_x, left_w, top, focus)
         self._draw_middle(mid_x, mid_w, top, focus)
         self._draw_right(right_x, right_w, top, focus)
-        self._draw_zone_strip(margin, screen.get_height() - 108, width - 2 * margin, focus)
+        self._draw_zone_strip(
+            margin, screen.get_height() - 108, width - 2 * margin, focus
+        )
 
         hint = (
             "Tab/Arrows: move  ·  Left/Right: adjust  ·  type to edit  ·  Enter: begin"
@@ -345,7 +347,10 @@ class CharacterCreationScene:
             surf = host.ui_font.render(name, True, label_color)
             host.screen.blit(
                 surf,
-                (rect.centerx - surf.get_width() // 2, rect.centery - surf.get_height() // 2),
+                (
+                    rect.centerx - surf.get_width() // 2,
+                    rect.centery - surf.get_height() // 2,
+                ),
             )
             self.hitboxes[f"zone_{i}"] = rect
         blurb = START_ZONES[self.s["zone_index"]][2]

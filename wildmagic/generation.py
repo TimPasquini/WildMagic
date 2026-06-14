@@ -1105,9 +1105,7 @@ class _GenerationMixin:
             placed.append(room)
         return placed
 
-    def _place_hub_player_and_stair(
-        self, stair_room: Room
-    ) -> tuple[int, int]:
+    def _place_hub_player_and_stair(self, stair_room: Room) -> tuple[int, int]:
         """Drop the player at the open center of the zone and sink the down-stair
         into the given building. Returns the player's tile."""
         state = self.state
@@ -1253,7 +1251,7 @@ class _GenerationMixin:
             if spec.get("memory"):
                 self.state.npc_profiles[npc.id].remember(spec["memory"])
 
-        self._populate_hub_vendors(zone_rng, stalls[len(named):], occupied)
+        self._populate_hub_vendors(zone_rng, stalls[len(named) :], occupied)
         self._place_books_in_labeled_rooms()
         state.add_message(
             "The Saltmarket opens around you -- a riot of awnings, spice-smoke, and "
@@ -1272,10 +1270,26 @@ class _GenerationMixin:
     ) -> None:
         """Procedural peddlers to flesh out the bazaar beyond the named anchors."""
         pool = [
-            ("Reedwhistle the Peddler", "rope-and-tin trader", {"trinket": 3, "smoke vial": 1, "gold": 12}),
-            ("Coppin Slate", "salt-fish monger", {"dried herbs": 3, "healing potion": 1, "gold": 10}),
-            ("The Veiled Vendor", "incense seller", {"grave salt": 2, "mana crystal": 1, "gold": 14}),
-            ("Old Pelf", "rag-and-bone dealer", {"bone charm": 2, "trinket": 2, "gold": 8}),
+            (
+                "Reedwhistle the Peddler",
+                "rope-and-tin trader",
+                {"trinket": 3, "smoke vial": 1, "gold": 12},
+            ),
+            (
+                "Coppin Slate",
+                "salt-fish monger",
+                {"dried herbs": 3, "healing potion": 1, "gold": 10},
+            ),
+            (
+                "The Veiled Vendor",
+                "incense seller",
+                {"grave salt": 2, "mana crystal": 1, "gold": 14},
+            ),
+            (
+                "Old Pelf",
+                "rag-and-bone dealer",
+                {"bone charm": 2, "trinket": 2, "gold": 8},
+            ),
         ]
         zone_rng.shuffle(pool)
         for room, (name, role, wares) in zip(rooms, pool):
@@ -1492,7 +1506,12 @@ class _GenerationMixin:
                     "hair, a stub of red chalk always behind one ear."
                 ),
                 traits=["exacting", "kind", "endlessly curious"],
-                wares={"healing potion": 1, "mana potion": 1, "grave salt": 1, "gold": 20},
+                wares={
+                    "healing potion": 1,
+                    "mana potion": 1,
+                    "grave salt": 1,
+                    "gold": 20,
+                },
                 wanted_item="Imperial Campaign Map",
                 reward_gold=25,
                 reward_item="mana potion",
@@ -1565,7 +1584,10 @@ class _GenerationMixin:
                 self.state.npc_profiles[npc.id].remember(spec["memory"])
 
         # A procedural reader or two, and the Censorate's standing notice for flavor.
-        for name, role in (("Quire the Copyist", "copyist"), ("Sister Vellum", "annotator")):
+        for name, role in (
+            ("Quire the Copyist", "copyist"),
+            ("Sister Vellum", "annotator"),
+        ):
             room = zone_rng.choice(rooms)
             spot = self._random_unoccupied_open_tile_in_room(room, occupied)
             if spot is None:

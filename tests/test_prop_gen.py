@@ -68,7 +68,11 @@ def test_mock_provider_is_deterministic_and_valid() -> None:
     provider = MockPropProvider()
     ctx = {
         "region": "the Warren",
-        "room": {"room_type": "ossuary", "era": "pre_charter", "condition": "ransacked"},
+        "room": {
+            "room_type": "ossuary",
+            "era": "pre_charter",
+            "condition": "ransacked",
+        },
         "count": 3,
     }
     first = [s.__dict__ for s in provider.generate(ctx)]
@@ -125,11 +129,7 @@ def test_disabled_by_default_offline() -> None:
 def test_swap_replaces_unseen_set_dressing_in_place() -> None:
     engine = GameEngine(seed=7, scenario="warren", prop_provider=MockPropProvider())
     engine.state.explored.clear()  # nothing seen -> everything eligible
-    before = {
-        e.id: (e.x, e.y)
-        for e in _props(engine)
-        if "set_dressing" in e.tags
-    }
+    before = {e.id: (e.x, e.y) for e in _props(engine) if "set_dressing" in e.tags}
     assert before, "warren should place ambient set-dressing props"
     _drive_prop_gen(engine)
     generated = [p for p in _props(engine) if "llm_generated" in p.tags]
