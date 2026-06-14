@@ -92,7 +92,7 @@ For `qwen3:8b`, `PROCESSOR` should ideally show `100% GPU`.
 
 ### Split Ollama Routing
 
-Wild magic, dialogue, trade, and background town generation can use different Ollama endpoints. By default they all fall through to `WILDMAGIC_OLLAMA_HOST`, then `OLLAMA_HOST`, then `http://localhost:11434`.
+Wild magic, dialogue, trade, and background town generation can use different Ollama endpoints. By default they all fall through to `WILDMAGIC_OLLAMA_HOST`, then `OLLAMA_HOST`, then `http://127.0.0.1:11434` (use the IPv4 literal, not `localhost` — see [MODEL_CONFIG.md](MODEL_CONFIG.md)).
 
 For a two-server playtest, route urgent calls to the GPU server and background town generation to a CPU server:
 

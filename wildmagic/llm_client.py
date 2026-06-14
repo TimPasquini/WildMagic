@@ -51,7 +51,7 @@ def ensure_ollama_running(base_url: str) -> bool:
     from urllib.parse import urlparse
 
     parsed = urlparse(base_url)
-    host = parsed.hostname or "localhost"
+    host = parsed.hostname or "127.0.0.1"
     port = parsed.port or 11434
 
     try:

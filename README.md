@@ -82,7 +82,7 @@ The model name must match an installed Ollama tag, such as `qwen3:8b`, `qwen3.6`
 
 ## Ollama Routing
 
-By default, every Ollama-backed system uses the same endpoint: `WILDMAGIC_OLLAMA_HOST`, then `OLLAMA_HOST`, then `http://localhost:11434`.
+By default, every Ollama-backed system uses the same endpoint: `WILDMAGIC_OLLAMA_HOST`, then `OLLAMA_HOST`, then `http://127.0.0.1:11434`. (Prefer the `127.0.0.1` literal over `localhost` — on Windows `localhost` adds ~2s per request via an IPv6 stall; see [docs/MODEL_CONFIG.md](docs/MODEL_CONFIG.md).)
 
 You can route urgent calls and background calls separately:
 

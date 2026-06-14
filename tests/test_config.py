@@ -136,7 +136,7 @@ def test_scoped_ollama_routing_precedence(monkeypatch) -> None:
     for key in OLLAMA_ROUTE_KEYS:
         monkeypatch.delenv(key, raising=False)
 
-    assert config.ollama_host("wild") == "http://localhost:11434"
+    assert config.ollama_host("wild") == "http://127.0.0.1:11434"
 
     monkeypatch.setenv("OLLAMA_HOST", "127.0.0.1:11430")
     monkeypatch.setenv("WILDMAGIC_OLLAMA_HOST", "127.0.0.1:11431")

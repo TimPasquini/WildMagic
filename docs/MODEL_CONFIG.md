@@ -95,7 +95,7 @@ ignoring the spell contract in creative ways.
 
 | Variable | Scoped | Default (clamp) | Meaning |
 |---|---|---|---|
-| `WILDMAGIC_*_OLLAMA_HOST` / `OLLAMA_HOST` | yes | `http://localhost:11434` | endpoint per purpose; bare `OLLAMA_HOST` is the final fallback |
+| `WILDMAGIC_*_OLLAMA_HOST` / `OLLAMA_HOST` | yes | `http://127.0.0.1:11434` | endpoint per purpose; bare `OLLAMA_HOST` is the final fallback. **Use the IPv4 literal, not `localhost`** — see latency note below |
 | `WILDMAGIC_*_OLLAMA_TIMEOUT` | yes | 180s (5–1800) | HTTP timeout |
 | `WILDMAGIC_*_OLLAMA_NUM_CTX` | yes | 16384 (2048–32768) | context window. **Load-time option** — see thrash warning below |
 | `WILDMAGIC_*_OLLAMA_NUM_GPU` | yes | 999; **0 for `LORE`** | GPU layer offload. 999 = everything on GPU, 0 = pure CPU. **Load-time option** |
@@ -115,6 +115,16 @@ ignoring the spell contract in creative ways.
 | `WILDMAGIC_LORE_NUM_PREDICT` | no | 700 (64–2048) | lore/flesh budget |
 | `WILDMAGIC_CANON_NUM_PREDICT` | no | 2048 (64–4096) | examine/study/investigate/read budget; sized for compressed book pages and close-study prose. Truncation past the cap is recovered by the canon JSON salvage. This is a blocking call, and on slow backends a bigger cap risks blowing the timeout (empty result) instead of just truncating — raise with care |
 | `WILDMAGIC_OLLAMA_RESOLUTION_ATTEMPTS` | no | 2 (1–4) | wild-magic retries on malformed JSON |
+
+**Use `127.0.0.1`, not `localhost`, for the host (especially on Windows).** `localhost`
+resolves to IPv6 `::1` first; if the Ollama server is bound to IPv4 (the common case), the
+`::1` connection stalls on a retransmit backoff — measured at **~2.0 s of dead time per
+request** — before falling back to `127.0.0.1`. That cost is paid on *every* call
+(resolve, dialogue, trade, canon), so it is the dominant latency on the short calls.
+Measured 2026-06-13 (warm `qwen3.5:9b`, identical payload, Ollama's own `total_duration`
+~0.22 s both ways): `localhost` → **2.28 s** wall vs `127.0.0.1` → **0.25 s** wall. The
+default is now `http://127.0.0.1:11434`; only set `WILDMAGIC_OLLAMA_HOST` if you point at a
+different host/port, and prefer an IP literal there too.
 
 For `--agent ollama`, keep `WILDMAGIC_AGENT_OLLAMA_NUM_CTX` aligned with the foreground
 resolver's `num_ctx` when both use the same model tag. The command prompt is compact, but
@@ -186,7 +196,7 @@ Per-purpose `OLLAMA_HOST` means purposes can use entirely separate servers, e.g.
 server for play and a CPU-only server for background work:
 
 ```dotenv
-WILDMAGIC_LORE_OLLAMA_HOST=http://localhost:11435
+WILDMAGIC_LORE_OLLAMA_HOST=http://127.0.0.1:11435
 ```
 
 Start the second server with `OLLAMA_HOST=127.0.0.1:11435 ollama serve`. Two servers
@@ -262,6 +272,11 @@ visible there in one minute.
     sit stale from an earlier manual/tray launch. To actually read GPU discovery, start
     `ollama serve` yourself in a terminal (it logs to the console), or just trust
     `ollama ps` plus cast latency.
+- **Every call is ~2 s slower than `ollama ps`/the audit timings say it should be
+  (Windows).** The `localhost`→IPv6 `::1` connection stall described above. Compare the
+  request's wall-clock to Ollama's reported `total_duration`; a steady ~2 s gap that does
+  not depend on prompt or generation length is the signature. Fix: use `127.0.0.1` (now
+  the default) rather than `localhost` for `WILDMAGIC_OLLAMA_HOST` / `OLLAMA_HOST`.
 - **VRAM fills and empties repeatedly; periodic long stalls.** Model thrash — same model
   tag requested with different `num_gpu`/`num_ctx`, or more models than
   `OLLAMA_MAX_LOADED_MODELS` allows. See the thrash warning above.

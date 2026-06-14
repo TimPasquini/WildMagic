@@ -11,7 +11,11 @@ ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 DEFAULT_MODEL = "qwen3.5:9b-q4_K_M"
 DEFAULT_LORE_MODEL = "qwen3:1.7b"
 DEFAULT_PROVIDER = "ollama"
-DEFAULT_OLLAMA_HOST = "http://localhost:11434"
+# Use the IPv4 literal, not "localhost". On Windows "localhost" resolves to IPv6 ::1
+# first; if Ollama is bound to IPv4 the ::1 connect stalls ~2s on a retransmit backoff
+# before falling back to 127.0.0.1 — paid on EVERY request (measured 2026-06-13:
+# localhost 2.28s vs 127.0.0.1 0.25s wall for the same warm call). See docs/MODEL_CONFIG.md.
+DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
 
 _FALSE_VALUES = {"0", "false", "no", "off"}
 _TRUE_VALUES = {"1", "true", "yes", "on"}
