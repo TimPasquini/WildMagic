@@ -141,8 +141,8 @@ def build_profile(
     signature: str | None = None,
 ) -> CharacterProfile:
     """Construct a profile from an origin baseline plus a small point spend, validating
-    the per-stat cap and total pool. `name` is accepted for the creation flow's
-    convenience but is stored on the entity, not the profile."""
+    the per-stat cap and total pool. `name` is the character's proper name (used
+    externally by NPCs/warrants, not the log)."""
     origin = ORIGINS.get(origin_id)
     if origin is None:
         raise ValueError(f"unknown origin: {origin_id}")
@@ -159,6 +159,8 @@ def build_profile(
         if new_value > STAT_CAP:
             raise ValueError(f"{stat} {new_value} exceeds cap {STAT_CAP}")
         setattr(profile, stat, new_value)
+    if name is not None:
+        profile.name = name.strip()
     if appearance is not None:
         profile.appearance = appearance
     if backstory is not None:

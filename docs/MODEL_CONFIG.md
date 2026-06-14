@@ -288,3 +288,49 @@ visible there in one minute.
 - **`.env` changes seem ignored.** A shell-exported variable overrides `.env` (by
   design). For server-side variables, the running Ollama predates your edit — quit it
   and let the game restart it.
+
+## Character portraits (image generation)
+
+Portraits are a **separate subsystem from the LLM stack** — not Ollama. The character
+creation screen can generate a portrait from the typed physical description using
+**SDXL** (Stable Diffusion XL) via PyTorch-XPU on the Intel Arc. The heavy
+`torch`/`diffusers` stack lives in its **own venv**, and the game talks to a long-lived
+**worker subprocess** over stdin/stdout, so torch never enters the game process and the
+model loads once (not per portrait). See `tools/portraits/README.md` for the venv setup
+and `tools/portraits/generate_portrait.py` / `worker.py` for the code.
+
+Key implementation facts:
+- **bfloat16, not fp16.** On Arc XPU the SDXL UNet overflows fp16 to NaN → solid black
+  images. bf16 has fp32's range at fp16's memory, so it's the default on XPU. (CUDA uses
+  fp16 + the `madebyollin/sdxl-vae-fp16-fix` VAE; CPU uses fp32.)
+- **int8 weight quantization (default).** Unquantized bf16 SDXL pins all 8GB of dedicated
+  VRAM and spills ~25GB into shared system memory. int8 weight-only quantization (torchao)
+  on the UNet + second text encoder drops peak VRAM to **~5.3GB** at the **same speed and
+  ~same quality** — so it fits dedicated VRAM with no spill. Falls back to bf16 if torchao
+  can't apply it. See `WILDMAGIC_PORTRAIT_QUANT`.
+- **Shared-GPU contention.** SDXL and a resident Ollama LLM cannot both fit the 8GB Arc:
+  overcommit causes silent black images and then a driver device-loss (`DEVICE_LOST`). The
+  worker therefore **unloads resident Ollama models before generating** (it reloads on the
+  next spell). See `WILDMAGIC_PORTRAIT_FREE_VRAM`. A degenerate (black) result is detected
+  and surfaced as an error rather than saved.
+- **~16–18s per 768² portrait** on the A750; the worker preloads the model (~a few seconds
+  warm, much longer the very first time as files copy into the HF cache).
+- **Graceful when absent.** If the portrait venv/python isn't found, portraits are simply
+  disabled — the creation screen still works, just without the button.
+- **Not Qwen-Image.** Qwen-Image (~20B + a 7B text encoder) overflows 8GB even quantized
+  and needs CPU offload (minutes/image) on the A750; SDXL fits in VRAM and stays fast.
+
+Configuration (read through `config.py`):
+
+| Variable | Required | Default | Notes |
+|---|---|---|---|
+| `WILDMAGIC_PORTRAIT_PYTHON` | no | `C:\Games\wm_image_venv\Scripts\python.exe` | Python interpreter of the image venv. If it doesn't exist, portraits are disabled. |
+| `WILDMAGIC_PORTRAIT_ENABLED` | no | auto | `1`/`0` to force; `auto` enables it iff the python above exists. |
+| `WILDMAGIC_PORTRAIT_DIR` | no | `tools/portraits/out` | Where generated PNGs are written (gitignored). |
+| `WILDMAGIC_PORTRAIT_STEPS` | no | `28` | Diffusion steps. Lower = faster, rougher. |
+| `WILDMAGIC_PORTRAIT_SIZE` | no | `768` | Square portrait edge in px. 1024 is sharper but tighter on 8GB. |
+| `WILDMAGIC_PORTRAIT_QUANT` | no | `int8` | Weight quantization: `int8` (fits 8GB, recommended), `fp8` (needs hw support; experimental on Arc), or `none` (bf16, overflows 8GB). Auto-falls back to bf16 if torchao can't apply it. |
+| `WILDMAGIC_PORTRAIT_FREE_VRAM` | no | `1` | Unload resident Ollama models before generating so SDXL gets the GPU. The LLM reloads on the next spell. |
+
+Speed note: an SDXL-Lightning/Turbo LoRA can drop generation to ~2–4 steps (near-instant)
+if the default ~18s feels slow; not wired in yet.

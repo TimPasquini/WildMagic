@@ -162,6 +162,79 @@ def region_prompt_block(region_style: dict | None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def caster_prompt_block(caster_profile: dict | None) -> str:
+    """Per-caster addendum appended to SYSTEM_PROMPT, derived from the controlled
+    entity's stats and free-form fields. This is how character stats reach the wild
+    magic: rather than a separate mechanical pass, the stats *shift the anchors* we
+    hand the model — Attunement scales the magnitude bands, Composure scales how hard
+    the wild bites back, Vigor steers what kind of costs land — and the appearance /
+    signature tint the prose. See docs/CHARACTER_CREATION.md.
+
+    Stats run ~1–6; only off-center values emit guidance, so a middling 3/3/3 caster
+    adds nothing and the prompt stays lean."""
+    if not caster_profile:
+        return ""
+    vigor = int(caster_profile.get("vigor", 3))
+    attunement = int(caster_profile.get("attunement", 3))
+    composure = int(caster_profile.get("composure", 3))
+
+    lines = ["", "Caster attunement to the wild (shift your anchors accordingly):"]
+
+    # Attunement → effect magnitude. Pushes the severity-band numbers up or down.
+    if attunement >= 5:
+        lines.append(
+            "- Strongly attuned: lean effect magnitudes (damage, healing, radius, "
+            "duration) to the HIGH end of each severity band, and you may exceed the "
+            "listed numbers by up to ~25%. Their wild magic lands hard."
+        )
+    elif attunement <= 2:
+        lines.append(
+            "- Weakly attuned: keep effect magnitudes at the LOW end of each severity "
+            "band; results are thinner than the wording suggests. Their grip is loose."
+        )
+
+    # Composure → volatility / how readily costs and backfires attach.
+    if composure <= 2:
+        lines.append(
+            "- Low composure: the wild answers chaotically. Attach costs and backfires "
+            "more readily and make them surprising and gorgeous (a curse, a strange "
+            "status, a scheduled reckoning); severity may overshoot what they intended. "
+            "Wild magic does not entirely love them."
+        )
+    elif composure >= 5:
+        lines.append(
+            "- High composure: the wild answers cleanly. Backfires are rarer and "
+            "gentler, costs stay proportionate, and effects land close to intent."
+        )
+
+    # Vigor → which costs the body can shoulder.
+    if vigor >= 5:
+        lines.append(
+            "- Hardy: health and other physical costs are fair game — this body can "
+            "shoulder them."
+        )
+    elif vigor <= 2:
+        lines.append(
+            "- Frail: steer costs away from raw health toward mana, items, or curses."
+        )
+
+    signature = (caster_profile.get("signature") or "").strip()
+    if signature:
+        lines.append(
+            f"- Casting signature (let it lightly tint outcome_text, never dominate): {signature}"
+        )
+    appearance = (caster_profile.get("appearance") or "").strip()
+    if appearance:
+        lines.append(
+            f"- The caster's appearance, if it matters to the scene: {appearance}"
+        )
+
+    # Nothing off-center and no flavor → no point spending tokens on a bare header.
+    if len(lines) <= 2:
+        return ""
+    return "\n".join(lines) + "\n"
+
+
 DIALOGUE_SYSTEM_PROMPT = """You are voicing a single non-player character (NPC) in a turn-based tile roguelike.
 You will receive a JSON object describing who you are, what you have personally witnessed
 recently, your conversation so far, and what the player just said to you.

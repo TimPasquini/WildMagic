@@ -294,9 +294,13 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         seed: int | None = None,
         scenario: str = "dungeon",
         provider_name: str | None = None,
+        character: CharacterProfile | None = None,
     ) -> None:
         self.rng = random.Random(seed)
         self.state = GameState(rng_seed=seed, scenario=scenario)
+        # A profile from character creation, stamped onto the starting player by
+        # _make_player. Set before generation runs. None → a random default profile.
+        self.state.character = character
         self._next_entity_number = 1
         self._conducting_lightning = False
         self._npc_perception_message_count = 0
@@ -1262,17 +1266,31 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
     def dialogue_context_for_llm(self, npc: Entity, message: str) -> dict[str, Any]:
         profile = self.state.npc_profiles[npc.id]
         player = self.state.player
+        # How the NPC refers to the player: their chosen name if they gave one,
+        # otherwise the body they're in (its name, or "a wandering stranger" for the
+        # nameless default player whose entity name is the second-person "You").
+        player_profile = player.profile
+        player_name = (player_profile.name if player_profile else "") or player.name
+        if player_name == "You":
+            player_name = "a wandering stranger"
+        # What the NPC sees of the player — physical description, not magical signature.
+        player_appearance = player.description or (
+            player_profile.appearance if player_profile else ""
+        )
+        player_block: dict[str, Any] = {
+            "name": player_name,
+            "hp": player.hp,
+            "max_hp": player.max_hp,
+            "statuses": sorted(player.statuses),
+            "equipment": {
+                slot: item for slot, item in player.equipment.items() if item
+            },
+        }
+        if player_appearance:
+            player_block["appearance"] = player_appearance
         return {
             "npc": profile.to_dialogue_context(),
-            "player": {
-                "name": player.name,
-                "hp": player.hp,
-                "max_hp": player.max_hp,
-                "statuses": sorted(player.statuses),
-                "equipment": {
-                    slot: item for slot, item in player.equipment.items() if item
-                },
-            },
+            "player": player_block,
             "scene": {
                 "turn": self.state.turn,
                 "depth": self.state.depth,

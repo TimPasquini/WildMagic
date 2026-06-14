@@ -195,6 +195,17 @@ class CharacterProfile:
     appearance: str = ""
     backstory: str = ""
     signature: str = ""
+    # The character's proper name, used where *others* refer to them (NPC dialogue,
+    # imperial warrants) — never the message log, which stays second-person "You".
+    # Empty for most NPCs/enemies (they fall back to the entity name); on body-swap an
+    # inhabited body's empty name means NPCs call you by that body's name.
+    name: str = ""
+    # Self-described gender ("Male"/"Female"/custom), or "" if unspecified. Fed as the
+    # first word of the portrait description; otherwise free-form.
+    gender: str = ""
+    # Filesystem path to a generated character portrait (PNG), if one was made at
+    # creation. Empty when none. See wildmagic/portraits.py.
+    portrait_path: str = ""
 
     def composure_band(self) -> str:
         """Coarse label fed to the resolver as a volatility dial."""
@@ -203,6 +214,22 @@ class CharacterProfile:
         if self.composure >= 5:
             return "high"
         return "steady"
+
+    # Stat → combat derivation. Stats run ~1–6 (origin baselines 2–5, cap 6), so the
+    # spread is deliberately noticeable: a high-Vigor body is meaningfully tankier.
+    # vigor 3 / attunement 3 reproduce the old fixed 24 HP / 14 MP baseline, so a
+    # middling character is unchanged. See docs/CHARACTER_CREATION.md.
+    def derive_max_hp(self) -> int:
+        return 12 + 4 * self.vigor
+
+    def derive_max_mana(self) -> int:
+        return 5 + 3 * self.attunement
+
+    def derive_attack(self) -> int:
+        return 3 + self.vigor // 3
+
+    def derive_defense(self) -> int:
+        return 1
 
     def to_public_dict(self) -> dict[str, Any]:
         return {

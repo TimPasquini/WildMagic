@@ -18,7 +18,11 @@ from .config import (
     get_wild_magic_model,
     get_wild_magic_provider,
 )
-from .fallbacks import fallback_resolution_from_spell, fallbacks_enabled
+from .fallbacks import (
+    bias_resolution_for_profile,
+    fallback_resolution_from_spell,
+    fallbacks_enabled,
+)
 from .llm_client import (
     _post_ollama_chat,
     strip_thinking,
@@ -49,20 +53,26 @@ from .prompts import (
     DIALOGUE_SYSTEM_PROMPT,
     TRADE_SYSTEM_PROMPT,
     TOWN_SYSTEM_PROMPT,
+    caster_prompt_block,
     region_prompt_block,
 )
 
 
 def _wild_prompt_messages(context: dict[str, Any]) -> list[dict[str, str]]:
-    """Assemble the wild-magic chat messages. The engine rides the region's
-    voice along in context["region_style"]; it belongs in the system prompt,
-    not the user-message JSON, so it is split out here."""
+    """Assemble the wild-magic chat messages. The engine rides the region's voice and
+    the caster's stat-derived anchors along in context; both belong in the system
+    prompt, not the user-message JSON, so they are split out here."""
     region_style = context.get("region_style")
-    payload_context = {k: v for k, v in context.items() if k != "region_style"}
+    caster_profile = context.get("caster_profile")
+    payload_context = {
+        k: v for k, v in context.items() if k not in {"region_style", "caster_profile"}
+    }
     return [
         {
             "role": "system",
-            "content": SYSTEM_PROMPT + region_prompt_block(region_style),
+            "content": SYSTEM_PROMPT
+            + region_prompt_block(region_style)
+            + caster_prompt_block(caster_profile),
         },
         {"role": "user", "content": json.dumps(payload_context, ensure_ascii=True)},
     ]
@@ -1429,6 +1439,10 @@ def resolve_spell(
             fallback = (
                 fallback_resolution_from_spell(spell) if fallbacks_enabled() else None
             )
+            if fallback is not None:
+                fallback = bias_resolution_for_profile(
+                    fallback, context.get("caster_profile")
+                )
             if fallback is not None and resolved_provider_name == "ollama":
                 audit_path = write_audit_log(
                     provider,

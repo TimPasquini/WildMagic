@@ -366,4 +366,61 @@ def audit_dir() -> Path:
     return Path(get_config_value("WILDMAGIC_AUDIT_DIR", "logs") or "logs")
 
 
+# --- Character portraits (image generation; see docs/MODEL_CONFIG.md) ---------
+# A separate subsystem from the LLM stack: SDXL runs in its own venv, driven by a
+# worker subprocess, so torch never enters the game process.
+
+_DEFAULT_PORTRAIT_PYTHON = r"C:\Games\wm_image_venv\Scripts\python.exe"
+
+
+def portrait_python() -> Path:
+    """Path to the image venv's Python interpreter."""
+    return Path(
+        get_config_value("WILDMAGIC_PORTRAIT_PYTHON", _DEFAULT_PORTRAIT_PYTHON)
+        or _DEFAULT_PORTRAIT_PYTHON
+    )
+
+
+def portrait_enabled() -> bool:
+    """Portraits are on when explicitly enabled, or (auto) when the venv python exists.
+    Missing python -> disabled, so the creation screen degrades gracefully."""
+    value = get_config_value("WILDMAGIC_PORTRAIT_ENABLED", "auto")
+    if value and value.lower() in _TRUE_VALUES:
+        return True
+    if value and value.lower() in _FALSE_VALUES:
+        return False
+    return portrait_python().exists()
+
+
+def portrait_dir() -> Path:
+    return Path(
+        get_config_value("WILDMAGIC_PORTRAIT_DIR", "tools/portraits/out")
+        or "tools/portraits/out"
+    )
+
+
+def portrait_steps() -> int:
+    return _int_value("WILDMAGIC_PORTRAIT_STEPS", 28, 1, 80)
+
+
+def portrait_size() -> int:
+    return _int_value("WILDMAGIC_PORTRAIT_SIZE", 768, 256, 1280)
+
+
+def portrait_quant() -> str:
+    """Weight quantization for the portrait model: 'int8' (default), 'fp8', or 'none'.
+    int8 halves SDXL's big modules so it fits the Arc's 8GB without spilling to shared
+    memory; falls back to bf16 automatically if torchao can't apply it."""
+    value = (get_config_value("WILDMAGIC_PORTRAIT_QUANT", "int8") or "int8").lower()
+    return value if value in {"int8", "fp8", "none"} else "int8"
+
+
+def portrait_free_vram() -> bool:
+    """Whether the portrait worker should evict resident Ollama models before
+    generating. On a small (e.g. 8GB) shared GPU, SDXL and a resident LLM overcommit
+    VRAM -> black images or a driver device-loss; freeing the GPU first avoids that.
+    The LLM reloads on the next spell. Default on."""
+    return _bool_value("WILDMAGIC_PORTRAIT_FREE_VRAM", True)
+
+
 load_environment()

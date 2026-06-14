@@ -22,6 +22,17 @@ Wild Magic should handle arbitrary inputs gracefully by growing general systems:
 - Make every feature playable through the headless CLI so agents can test it without manual UI work.
 - Consider adding new features for spell resolution when the existing resolutions are not satisfactory, and the new feature is general enough to unlock a huge number of possibilities.
 
+## Two Interfaces — Keep Them Exactly Synced
+
+The game has **two front ends, and you must remember both exist**:
+
+- **GUI** (`main.py` → `wildmagic/ui.py`): the Pygame client humans actually play.
+- **CLI** (`wildmagic/cli.py`): the headless, scriptable interface agents use to playtest. See `docs/AGENT_PLAYTESTING.md`.
+
+Both drive the same shared session/action layer (`wildmagic/actions.py`), so they must stay **exactly in sync at all times** — every player-facing capability and flow (new commands, character creation, menus, prompts, screens) has to be reachable and behave identically through *both*. When you add or change one, update the other in the same change. A feature that only works in one interface is a bug.
+
+Common mistakes to avoid: building a feature in the CLI and forgetting the GUI screen for it (or vice versa); assuming "there's no GUI" because you only see the CLI, or "there's no CLI" because you only ran `main.py`.
+
 ## Design Principles
 
 - Stable world, unstable magic: persist consequences, relationships, and world facts without making future spell outcomes deterministic.
@@ -60,7 +71,9 @@ Examples to avoid:
 - `wildmagic/wild_magic.py`: LLM prompt, provider calls, JSON parsing, normalization, validation, audit logging.
 - `wildmagic/fallbacks.py`: quarantined replacement-resolution fallbacks. Keep this isolated and optional.
 - `wildmagic/templates.py`: template-backed arbitrary item and creature creation.
-- `wildmagic/ui.py`: Pygame renderer and input handling.
+- `wildmagic/ui.py`: Pygame renderer and input handling (the in-game HUD/map/panels).
+- `wildmagic/ui_theme.py`: shared UI palette + pure render helpers (`wrap_text`, `blend_color`), imported by both `ui.py` and scene modules to avoid an import cycle.
+- `wildmagic/scenes/`: self-contained full-screen scenes (e.g. `character_creation_scene.py`). Each owns its state/input/draw and is driven by the host `GameUI`. Add new full-screen modes here rather than growing `ui.py`.
 - `wildmagic/cli.py`: headless agent-playable interface.
 - `wildmagic/replay.py`: deterministic replay runner.
 - `docs/ARCHITECTURE.md`: full map of every module — what it contains, what it imports, and how the layers fit together. Read this first when orienting to the codebase.

@@ -4,6 +4,7 @@ import concurrent.futures
 from datetime import datetime, timezone
 import json
 import os
+import random
 import textwrap
 import time
 from typing import Any
@@ -13,6 +14,13 @@ os.environ.setdefault("PYGAME_HIDE_SUPPORT_PROMPT", "1")
 import pygame
 
 from .actions import ActionResult, GameSession, describe_state
+from .character import (
+    CREATION_POINTS,
+    ORIGINS,
+    STAT_CAP,
+    STATS,
+    build_profile,
+)
 from .autoplay import (
     AgentObservation,
     OllamaAgent,
@@ -29,6 +37,28 @@ from .config import DEFAULT_MODEL, audit_dir, get_config_value, set_config_value
 from .game_data import _TOWN_GEN_TIMEOUT, EQUIPMENT_SPECS
 from .items import infer_equipment_slot
 from .normalize import normalize_id
+from .portraits import PortraitClient
+from .scenes.character_creation_scene import CharacterCreationScene
+from .scenes.character_view_scene import CharacterViewScene
+from .ui_theme import (
+    ACCENT,
+    BACKGROUND,
+    DANGER,
+    GOLD,
+    MANA,
+    MODE_COLORS,
+    MODE_GREEN,
+    MODE_ORANGE,
+    MODE_PURPLE,
+    MODE_YELLOW,
+    MUTED,
+    PANEL,
+    PANEL_EDGE,
+    SELECTED,
+    TEXT,
+    blend_color,
+    wrap_text,
+)
 from .wild_magic import fetch_ollama_models
 from .models import (
     DOOR,
@@ -59,31 +89,12 @@ LLM_PANEL_WIDTH = 520
 MAP_OFFSET_X = LLM_PANEL_WIDTH
 WINDOW_WIDTH = LLM_PANEL_WIDTH + MAP_PIXEL_WIDTH + PANEL_WIDTH
 WINDOW_HEIGHT = 800
-BACKGROUND = (13, 14, 18)
-PANEL = (27, 29, 34)
-PANEL_EDGE = (62, 66, 76)
-TEXT = (224, 223, 214)
-MUTED = (151, 153, 160)
-ACCENT = (120, 202, 174)
-SELECTED = (58, 90, 112)
-DANGER = (232, 105, 85)
-MANA = (102, 168, 255)
-GOLD = (224, 177, 92)
-MODE_PURPLE = (160, 124, 226)
-MODE_YELLOW = (226, 198, 92)
-MODE_GREEN = (118, 208, 130)
-MODE_ORANGE = (228, 146, 74)
-MODE_COLORS = {
-    "spell": MODE_PURPLE,
-    "talk": MODE_YELLOW,
-    "control": MODE_GREEN,
-    "confirm_trade": MODE_ORANGE,
-}
 
 CONTROLS_HINT = (
     "Keyboard controls active - arrows/WASD/keypad move, > descend, < ascend, o open, "
-    "g pick up, f cast spark, x investigate, j journal, q quests, i inventory, "
-    "period or keypad-5 to wait, F8 watch AI, F9 pause AI, F10 step AI, Esc back to Wild Spell."
+    "g pick up, f cast spark, x investigate, c character, j journal, q quests, i inventory, "
+    "period or keypad-5 to wait, F8 watch AI, F9 pause AI, F10 step AI, Esc back to Wild Spell. "
+    "Tab switches Wild Spell / Controls / Talk; hold Ctrl for a quick control key (Ctrl+c = character)."
 )
 
 _MOVE_KEY_MAP: dict[int, str] = {
@@ -290,7 +301,9 @@ class VisualAutoplayController:
         self.command_history.append(command)
         self.ui.input_text = command
         self.ui.input_active = False
-        result = self.ui.execute_command(command)
+        # Autoplay drives the loop itself and needs the result synchronously, so it
+        # uses the blocking path rather than the responsive worker-thread one.
+        result = self.ui.execute_command_blocking(command)
         if result is not None:
             summary = result_summary(result)
             self.last_result = summary
@@ -572,6 +585,31 @@ class GameUI:
         self.menu_models: list[str] = []  # populated when model page opens
         self.autoplay = VisualAutoplayController(self, enabled=autoplay)
 
+        # Urgent (player-issued) LLM commands run on a worker thread so the UI stays
+        # responsive while one resolves — you can scroll the LLM panel, open the
+        # inventory/journal, inspect tiles, etc. New game-actions a player triggers
+        # while one is in flight are discarded, not queued.
+        self._command_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="wm-command"
+        )
+        self._command_future: concurrent.futures.Future | None = None
+        self._command_label: str = ""
+
+        # Out-of-process character-portrait generator (SDXL in its own venv). Lazily
+        # spawns a worker on first request; absent venv -> available() is False.
+        self.portraits = PortraitClient()
+
+        # Character creation runs as a modal scene at startup (see
+        # scenes/character_creation_scene.py). The session above already holds a random
+        # default player; finishing creation restamps that player in place
+        # (GameEngine.restamp_player), so no world is regenerated. Autoplay skips it.
+        self.creation_scene = CharacterCreationScene(self)
+        # In-game character sheet, opened with `c` (or Ctrl+c). A modal scene like
+        # creation; both are checked via _active_scene().
+        self.character_view_scene = CharacterViewScene(self)
+        if not autoplay:
+            self.creation_scene.start()
+
     def _config_value(self, spec: dict) -> str:
         """Current display value for a config spec entry."""
         raw = get_config_value(spec["key"], spec["default"]) or spec["default"]
@@ -586,6 +624,14 @@ class GameUI:
 
     def _close_menu(self) -> None:
         self.menu_active = False
+
+    def finish_creation(self, profile) -> None:
+        """Apply the chosen profile to the already-built player and dismiss the creation
+        scene. profile=None ('Random') keeps the default player the session rolled."""
+        if profile is not None:
+            self.engine.restamp_player(profile)
+        self.creation_scene.active = False
+        self.input_active = True
 
     def run(self) -> None:
         running = True
@@ -604,16 +650,123 @@ class GameUI:
                         self.handle_mouse_wheel(event)
                     elif event.type == pygame.KEYDOWN:
                         self.handle_key(event)
-                self.autoplay.update()
-                self.draw()
+                self._poll_command_future()
+                scene = self._active_scene()
+                if scene is not None:
+                    scene.update()
+                else:
+                    self.autoplay.update()
+                try:
+                    self.draw()
+                except RuntimeError:
+                    # An urgent command is mutating engine state on its worker thread
+                    # while we render; skip this frame rather than crash. Tolerated
+                    # only while one is actually in flight — otherwise it's a real bug.
+                    if self._command_future is None:
+                        raise
                 pygame.display.flip()
                 self.clock.tick(30)
         finally:
             self.autoplay.close()
+            self._command_executor.shutdown(wait=False, cancel_futures=True)
+            self.portraits.close()
             self.session.close()
             pygame.quit()
 
+    def _awaiting_command(self) -> bool:
+        """True while a player-issued LLM command is still resolving on the worker."""
+        return self._command_future is not None
+
+    def _poll_command_future(self) -> None:
+        """Finalize an urgent command once its worker thread finishes. The state
+        mutation happened on the worker; the post-processing (LLM debug refresh, book
+        popups, provider label) runs here on the main thread."""
+        future = self._command_future
+        if future is None or not future.done():
+            return
+        self._command_future = None
+        self._command_label = ""
+        try:
+            result = future.result()
+        except Exception as exc:  # surface, don't crash the UI
+            self.engine.state.add_message(f"(the spell unravels: {exc})")
+            result = None
+        self._after_command(result)
+
+    def _active_scene(self):
+        """The modal full-screen scene currently capturing input, or None."""
+        for scene in (self.creation_scene, self.character_view_scene):
+            if scene.active:
+                return scene
+        return None
+
+    def _cycle_input_mode(self) -> None:
+        """Tab steps Wild Spell -> Controls -> Talk (when an NPC is in range) -> ..."""
+        order = ["spell", "control"]
+        if self.engine.find_talk_target() is not None:
+            order.append("talk")
+        current = self.input_mode if self.input_mode in order else "spell"
+        self.input_mode = order[(order.index(current) + 1) % len(order)]
+        # Controls mode frees the letter keys for hotkeys; the others take typed text.
+        self.input_active = self.input_mode != "control"
+
+    def _handle_control_key(self, event: pygame.event.Event) -> bool:
+        """Letter/movement hotkeys (active in Controls mode or while Ctrl is held).
+        Returns True if the key was consumed."""
+        key = event.key
+        move_dir = _MOVE_KEY_MAP.get(key)
+        if move_dir is not None:
+            zone_before = (self.engine.state.zone_x, self.engine.state.zone_y)
+            self.execute_command(f"move {move_dir}")
+            if (self.engine.state.zone_x, self.engine.state.zone_y) != zone_before:
+                pygame.event.clear((pygame.KEYDOWN, pygame.KEYUP))
+            return True
+        if key == pygame.K_KP5:
+            self.execute_command("wait")
+        elif key == pygame.K_GREATER or (
+            key == pygame.K_PERIOD and event.mod & pygame.KMOD_SHIFT
+        ):
+            self.execute_command("descend")
+        elif key == pygame.K_LESS or (
+            key == pygame.K_COMMA and event.mod & pygame.KMOD_SHIFT
+        ):
+            self.execute_command("ascend")
+        elif key == pygame.K_PERIOD:
+            self.execute_command("wait")
+        elif key == pygame.K_o:
+            self.execute_command("open")
+        elif key == pygame.K_g:
+            self.execute_command("pickup")
+        elif key == pygame.K_f:
+            self.execute_command("spark")
+        elif key == pygame.K_x:
+            self.execute_command(self._investigate_command())
+        elif key == pygame.K_c:
+            self.character_view_scene.start()
+        elif key == pygame.K_q:
+            self.menu_active = True
+            self.menu_page = "quests"
+            self.menu_cursor = 0
+        elif key == pygame.K_j:
+            self.menu_active = True
+            self.menu_page = "journal"
+            self.menu_cursor = 0
+        elif key == pygame.K_i:
+            self.menu_active = True
+            self.menu_page = "inventory"
+            self.menu_cursor = 0
+            self.inventory_pane = 0
+            self.inventory_left_cursor = 0
+            self.inventory_right_cursor = 0
+        else:
+            return False
+        return True
+
     def handle_key(self, event: pygame.event.Event) -> None:
+        scene = self._active_scene()
+        if scene is not None:
+            scene.handle_key(event)
+            return
         if event.key == pygame.K_F8:
             self.autoplay.toggle()
             return
@@ -629,21 +782,36 @@ class GameUI:
             return
 
         if event.mod & pygame.KMOD_CTRL:
+            # Ctrl acts as a temporary Controls modifier so letter hotkeys (incl. Ctrl+c
+            # for the character sheet) work without leaving Wild Spell mode. Copy still
+            # works, but only when text is actually selected; Ctrl+A select-all stays.
             hovering_llm = self.llm_content_rect.collidepoint(pygame.mouse.get_pos())
             if event.key == pygame.K_c:
-                if hovering_llm:
+                if (
+                    self.llm_selection_anchor is not None
+                    and self.llm_selection_focus is not None
+                ):
                     self.copy_llm_selection()
-                else:
+                    return
+                if (
+                    self.log_selection_anchor is not None
+                    and self.log_selection_focus is not None
+                ):
                     self.copy_log_selection()
-                return
-            if event.key == pygame.K_a:
+                    return
+                # No selection: fall through so Ctrl+c opens the character sheet.
+            elif event.key == pygame.K_a:
                 if hovering_llm and self._llm_lines_cache:
                     self.llm_selection_anchor = 0
                     self.llm_selection_focus = len(self._llm_lines_cache) - 1
-                elif self.log_line_rects:
+                    return
+                if self.log_line_rects:
                     self.log_selection_anchor = 0
                     self.log_selection_focus = len(self.log_line_rects) - 1
+                    return
+            if self._handle_control_key(event):
                 return
+            return
 
         if self.book_popup is not None:
             if event.key == pygame.K_ESCAPE:
@@ -702,15 +870,17 @@ class GameUI:
             self._open_menu()
             return
 
+        # Tab cycles input modes (Wild Spell / Controls / Talk) in any mode.
+        if event.key == pygame.K_TAB:
+            self._cycle_input_mode()
+            return
+
         if self.input_active and self.input_mode != "control":
             if event.key == pygame.K_RETURN:
                 self.submit_input()
                 return
             if event.key == pygame.K_BACKSPACE:
                 self.input_text = self.input_text[:-1]
-                return
-            if event.key == pygame.K_TAB:
-                self.input_active = False
                 return
             if event.unicode and event.unicode.isprintable():
                 self.input_text += event.unicode
@@ -722,50 +892,15 @@ class GameUI:
         }:
             self.input_active = True
             return
-        _move_dir = _MOVE_KEY_MAP.get(event.key)
-        if _move_dir is not None:
-            _zone_before = (self.engine.state.zone_x, self.engine.state.zone_y)
-            self.execute_command(f"move {_move_dir}")
-            if (self.engine.state.zone_x, self.engine.state.zone_y) != _zone_before:
-                pygame.event.clear((pygame.KEYDOWN, pygame.KEYUP))
-        elif event.key in {pygame.K_KP5}:
-            self.execute_command("wait")
-        elif event.key == pygame.K_GREATER or (
-            event.key == pygame.K_PERIOD and event.mod & pygame.KMOD_SHIFT
-        ):
-            self.execute_command("descend")
-        elif event.key == pygame.K_LESS or (
-            event.key == pygame.K_COMMA and event.mod & pygame.KMOD_SHIFT
-        ):
-            self.execute_command("ascend")
-        elif event.key == pygame.K_PERIOD:
-            self.execute_command("wait")
-        elif event.key == pygame.K_o:
-            self.execute_command("open")
-        elif event.key == pygame.K_g:
-            self.execute_command("pickup")
-        elif event.key == pygame.K_f:
-            self.execute_command("spark")
-        elif event.key == pygame.K_x:
-            self.execute_command(self._investigate_command())
-        elif event.key == pygame.K_q:
-            self.menu_active = True
-            self.menu_page = "quests"
-            self.menu_cursor = 0
-        elif event.key == pygame.K_j:
-            self.menu_active = True
-            self.menu_page = "journal"
-            self.menu_cursor = 0
-        elif event.key == pygame.K_i:
-            self.menu_active = True
-            self.menu_page = "inventory"
-            self.menu_cursor = 0
-            self.inventory_pane = 0
-            self.inventory_left_cursor = 0
-            self.inventory_right_cursor = 0
+        self._handle_control_key(event)
         self.provider_label = self.session.provider_label
 
     def handle_mouse(self, event: pygame.event.Event) -> None:
+        scene = self._active_scene()
+        if scene is not None:
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                scene.handle_mouse(event.pos)
+            return
         if self.book_popup is not None:
             if event.type == pygame.MOUSEBUTTONDOWN and event.button in (1, 3):
                 # Click left half = page back, right half = page forward/close.
@@ -1140,12 +1275,62 @@ class GameUI:
             self.menu_page = "config"
             self.menu_cursor = 0
 
-    def execute_command(self, command: str) -> ActionResult:
+    # Verbs whose resolution makes a blocking LLM call. These run on a worker thread
+    # so the UI stays responsive; everything else (move, wait, equip, ...) is instant
+    # and runs inline.
+    _BLOCKING_VERBS = frozenset(
+        {
+            "cast",
+            "wild",
+            "talk",
+            "speak",
+            "say",
+            "examine",
+            "study",
+            "observe",
+            "investigate",
+            "search",
+            "read",
+            "peruse",
+        }
+    )
+
+    def execute_command(self, command: str) -> ActionResult | None:
+        """Player-issued command entry point. Discards the command if an urgent LLM
+        command is already resolving (we don't queue actions). Blocking verbs run on a
+        worker thread and return None now (finalized later in _poll_command_future);
+        instant commands run inline and return their result."""
+        if self._awaiting_command():
+            return None
+        self.log_scroll_offset = 0
+        verb = command.strip().split(maxsplit=1)[0].lower() if command.strip() else ""
+        if verb in self._BLOCKING_VERBS:
+            self._command_label = command.strip()
+            self._command_future = self._command_executor.submit(
+                self.session.execute_command, command
+            )
+            return None
+        return self.execute_command_blocking(command)
+
+    def execute_command_blocking(self, command: str) -> ActionResult:
+        """Run a command synchronously (blocking on any LLM call) and post-process.
+        Used for instant commands and by autoplay, which drives the loop itself."""
         self.log_scroll_offset = 0
         result = self.session.execute_command(command)
+        self._after_command(result)
+        return result
+
+    def _after_command(self, result: ActionResult | None) -> None:
+        """Main-thread post-processing shared by inline and worker-resolved commands."""
         self._refresh_llm_debug_entries()
         self._llm_lines_cache = None
         self.llm_autoscroll = True
+        if result is None:
+            return
+        if result.wild_magic:
+            self.provider_label = str(
+                result.wild_magic.get("provider") or self.session.provider_label
+            )
         if result.action == "read" and result.success and result.canon_materialization:
             record = result.canon_materialization.get("record")
             if isinstance(record, dict) and record.get("kind") == "book":
@@ -1161,7 +1346,6 @@ class GameUI:
                     "page": 0,
                     "page_count": 1,
                 }
-        return result
 
     # ------------------------------------------------------------------
 
@@ -1402,36 +1586,53 @@ class GameUI:
         text = self.input_text.strip()
         if not text:
             return
+        if self._awaiting_command():
+            return  # discard the submit while an urgent command resolves; keep the text
         self.input_text = ""
         self.input_active = True
         self.log_scroll_offset = 0
-        if self.input_mode == "talk":
-            self.execute_command(f"talk {text}")
-            return
-        result = self.session.cast_wild(text)
-        if result.wild_magic:
-            self.provider_label = str(
-                result.wild_magic.get("provider") or self.session.provider_label
-            )
-        self._record_llm_debug_entry(result)
-
-    def _record_llm_debug_entry(self, result: ActionResult) -> None:
-        self._refresh_llm_debug_entries()
-        self._llm_lines_cache = None
-        self.llm_autoscroll = True
+        command = f"talk {text}" if self.input_mode == "talk" else f"cast {text}"
+        self.execute_command(command)
 
     def draw(self) -> None:
+        scene = self._active_scene()
+        if scene is not None:
+            scene.draw()
+            return
         self.screen.fill(BACKGROUND)
         self.draw_llm_panel()
         self.draw_map()
         self.draw_panel()
         self.draw_autoplay_overlay()
+        if self._awaiting_command():
+            self.draw_resolving_indicator()
         if self.inspect_tile is not None:
             self.draw_inspect_tooltip()
         if self.menu_active:
             self.draw_menu()
         if self.book_popup is not None:
             self.draw_book_popup()
+
+    def draw_resolving_indicator(self) -> None:
+        """A small banner over the map while an urgent command resolves, so the player
+        knows the wild magic is listening (and that new actions are being ignored)."""
+        label = self._command_label or "the wild magic"
+        if len(label) > 48:
+            label = label[:45] + "..."
+        text = f"Resolving: {label}  -  the wild listens"
+        surface = self.small_font.render(text, True, TEXT)
+        pad = 10
+        width = surface.get_width() + pad * 2
+        height = surface.get_height() + pad * 2
+        x = MAP_OFFSET_X + (MAP_PIXEL_WIDTH - width) // 2
+        y = 14
+        box = pygame.Surface((width, height), pygame.SRCALPHA)
+        box.fill((20, 22, 28, 235))
+        self.screen.blit(box, (x, y))
+        pygame.draw.rect(
+            self.screen, ACCENT, (x, y, width, height), width=1, border_radius=6
+        )
+        self.screen.blit(surface, (x + pad, y + pad))
 
     def draw_autoplay_overlay(self) -> None:
         lines = self.autoplay.overlay_lines()
@@ -3210,6 +3411,8 @@ class GameUI:
         return lines
 
     def handle_mouse_wheel(self, event: pygame.event.Event) -> None:
+        if self._active_scene() is not None:
+            return
         pos = pygame.mouse.get_pos()
         if self.llm_content_rect.collidepoint(pos):
             self.llm_scroll_offset -= event.y * 3
@@ -3255,28 +3458,6 @@ class GameUI:
         surface = font.render(text, True, color)
         self.screen.blit(surface, (x, y))
         return y + surface.get_height() + 2
-
-
-def blend_color(
-    a: tuple[int, int, int],
-    b: tuple[int, int, int],
-    t: float,
-) -> tuple[int, int, int]:
-    return (
-        int(a[0] * (1 - t) + b[0] * t),
-        int(a[1] * (1 - t) + b[1] * t),
-        int(a[2] * (1 - t) + b[2] * t),
-    )
-
-
-def wrap_text(text: str, width: int) -> list[str]:
-    if not text:
-        return [""]
-    lines: list[str] = []
-    for raw_line in text.splitlines():
-        wrapped = textwrap.wrap(raw_line, width=width, replace_whitespace=False) or [""]
-        lines.extend(wrapped)
-    return lines
 
 
 def dim_color(color: tuple[int, int, int]) -> tuple[int, int, int]:

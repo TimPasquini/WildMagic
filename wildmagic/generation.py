@@ -313,6 +313,11 @@ class _GenerationMixin:
             if self.state.character
             else default_profile(self.rng)
         )
+        # Combat numbers are derived from the profile's stats (vigor→HP/attack,
+        # attunement→MP), so creation choices produce a noticeable spread. A 3/3/3
+        # character reproduces the old fixed 24 HP / 14 MP baseline.
+        max_hp = profile.derive_max_hp()
+        max_mana = profile.derive_max_mana()
         return Entity(
             id="player",
             name="You",
@@ -320,18 +325,37 @@ class _GenerationMixin:
             x=x,
             y=y,
             char="@",
-            hp=24,
-            max_hp=24,
-            mana=14,
-            max_mana=14,
-            attack=4,
-            defense=1,
+            hp=max_hp,
+            max_hp=max_hp,
+            mana=max_mana,
+            max_mana=max_mana,
+            attack=profile.derive_attack(),
+            defense=profile.derive_defense(),
             blocks=True,
             faction="player",
             description=profile.appearance or None,
             profile=profile,
             inventory=starting_inventory_for(profile),
         )
+
+    def restamp_player(self, profile) -> None:
+        """Apply a chosen character profile to the *already-generated* player entity,
+        in place. The UI builds a world (with a random default player) before the
+        character screen finishes; rather than regenerate the whole world, we restamp
+        the player once they confirm — valid because nothing has happened yet (turn 0,
+        no moves). Re-derives combat stats, appearance, and starting inventory."""
+        cloned = clone_profile(profile)
+        player = self.state.player
+        player.profile = cloned
+        player.max_hp = cloned.derive_max_hp()
+        player.hp = player.max_hp
+        player.max_mana = cloned.derive_max_mana()
+        player.mana = player.max_mana
+        player.attack = cloned.derive_attack()
+        player.defense = cloned.derive_defense()
+        player.description = cloned.appearance or None
+        player.inventory = starting_inventory_for(cloned)
+        self.state.character = cloned
 
     def _generate_new_run(self) -> None:
         state = self.state

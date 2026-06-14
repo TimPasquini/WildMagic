@@ -35,7 +35,7 @@ from .lore import (
     resolve_lore_extraction,
 )
 from .normalize import normalize_id
-from .models import CanonRecord
+from .models import CanonRecord, CharacterProfile
 from .secrets import (
     choose_anchor,
     choose_reward,
@@ -159,6 +159,7 @@ class GameSession:
         flesh_provider_name: str | None = None,
         canon_provider: CanonProvider | None = None,
         canon_provider_name: str | None = None,
+        character: CharacterProfile | None = None,
         replay_mode: bool = False,
     ) -> None:
         self.seed = seed
@@ -167,6 +168,7 @@ class GameSession:
             seed=seed,
             scenario=scenario,
             provider_name=provider_name,
+            character=character,
         )
         self.provider = provider or make_provider(provider_name)
         self.provider_label = getattr(self.provider, "name", "unknown")

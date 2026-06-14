@@ -2,10 +2,129 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import random
 import sys
 
 from .actions import GameSession
+from .character import CREATION_POINTS, ORIGINS, STAT_CAP, STATS, build_profile
+from .models import CharacterProfile
 from .replay import save_replay
+
+
+def _parse_point_spend(raw: str) -> dict[str, int]:
+    """Parse a 'vigor 2 composure 1' style allocation into {stat: points}. Forgiving:
+    unrecognized tokens are skipped; validation happens in build_profile."""
+    tokens = raw.replace(",", " ").split()
+    spend: dict[str, int] = {}
+    i = 0
+    while i < len(tokens) - 1:
+        stat = tokens[i].lower()
+        try:
+            spend[stat] = spend.get(stat, 0) + int(tokens[i + 1])
+            i += 2
+        except ValueError:
+            i += 1
+    return spend
+
+
+def _match_origin(origins: list, raw: str):
+    """Resolve a menu entry (a number, or a substring of the origin's name) to an
+    Origin, or None if nothing matches."""
+    raw = raw.strip()
+    if not raw:
+        return None
+    try:
+        return origins[int(raw) - 1]
+    except (ValueError, IndexError):
+        matches = [o for o in origins if raw.lower() in o.name.lower()]
+        return matches[0] if matches else None
+
+
+def _print_origin_menu(origins: list) -> None:
+    """The roster of ready-made characters, each with its derived HP/MP and baseline
+    stats, so a player can pick one to play as-is."""
+    for index, origin in enumerate(origins, 1):
+        base = origin.to_profile()
+        print(
+            f"  {index}. {origin.name} ({origin.tradition}) — "
+            f"HP {base.derive_max_hp()}, MP {base.derive_max_mana()} | "
+            f"vigor {base.vigor} / attunement {base.attunement} / "
+            f"composure {base.composure}"
+        )
+        print(f"       {origin.blurb}")
+
+
+def _customize_character(origins: list) -> CharacterProfile:
+    """The guided build: pick an origin, spend points, fill in the free-form fields."""
+    raw = input("Origin (number, or Enter for a random one)> ").strip()
+    origin = _match_origin(origins, raw) or random.choice(origins)
+    print(f"  -> {origin.name}")
+
+    base = origin.to_profile()
+    print(
+        f"\n{CREATION_POINTS} points to add across {', '.join(STATS)} "
+        f"(cap {STAT_CAP} each)."
+    )
+    print(
+        f"Baseline — vigor {base.vigor}, attunement {base.attunement}, "
+        f"composure {base.composure}."
+    )
+    print("Enter like 'vigor 2 composure 1', or blank to keep the baseline.")
+    spend: dict[str, int] = {}
+    while True:
+        raw = input("points> ").strip()
+        if not raw:
+            spend = {}
+            break
+        spend = _parse_point_spend(raw)
+        try:
+            build_profile(origin.id, spend)  # validate the spend only
+            break
+        except ValueError as exc:
+            print(f"  {exc}. Try again.")
+
+    print("\nFree-form (Enter to accept the origin's default):")
+    name = input("Name (what others call you): ").strip()
+    gender = input("Gender (Male/Female/anything, or blank): ").strip()
+    appearance = input("Physical description: ").strip()
+    backstory = input("Backstory: ").strip()
+    signature = input("Magical signature: ").strip()
+
+    profile = build_profile(
+        origin.id,
+        spend,
+        name=name or None,
+        appearance=appearance or None,
+        backstory=backstory or None,
+        signature=signature or None,
+    )
+    profile.gender = gender
+    return profile
+
+
+def prompt_character_creation() -> CharacterProfile | None:
+    """The new-game character screen. Shows the ready-made characters and lets the
+    player pick one by number, 'customize' to build their own, or Enter for a random
+    wild mage (returns None so the engine rolls a default)."""
+    origins = list(ORIGINS.values())
+    print("\n=== Character Creation ===")
+    print("Your wild mage — pick one to play, or shape your own:\n")
+    _print_origin_menu(origins)
+    print(
+        "\nEnter a number to play that character as-is, 'customize' to adjust "
+        "stats and details,\nor press Enter for a random wild mage."
+    )
+    choice = input("creation> ").strip()
+    if not choice:
+        return None
+    if choice.lower() in {"customize", "custom", "c"}:
+        return _customize_character(origins)
+    origin = _match_origin(origins, choice)
+    if origin is None:
+        print("  (unrecognized choice — rolling a random wild mage)")
+        return None
+    print(f"  -> {origin.name}")
+    return origin.to_profile()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -32,15 +151,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--no-render", action="store_true", help="Only print command results."
     )
+    parser.add_argument(
+        "--quickstart",
+        action="store_true",
+        help="Skip character creation and begin as a random wild mage.",
+    )
     args = parser.parse_args(argv)
 
+    commands = load_commands(args)
+    interactive = not commands and sys.stdin.isatty()
+
+    # Character creation runs only for an interactive new game; scripted/piped runs
+    # and --quickstart fall through to a random default profile so nothing blocks.
+    character = None
+    if interactive and not args.quickstart:
+        character = prompt_character_creation()
+
     session = GameSession(
-        seed=args.seed, scenario=args.scenario, provider_name=args.provider
+        seed=args.seed,
+        scenario=args.scenario,
+        provider_name=args.provider,
+        character=character,
     )
     try:
-        commands = load_commands(args)
-        interactive = not commands and sys.stdin.isatty()
-
         if interactive and not args.no_render:
             print(render_screen(session))
 

@@ -16,6 +16,35 @@ def fallback_resolution_from_spell(spell: str) -> dict[str, Any] | None:
     return None
 
 
+def bias_resolution_for_profile(
+    resolution: dict[str, Any] | None, caster_profile: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Apply the caster's stats to a *non-LLM* resolution so character stats still bite
+    when no model shaped the result. The LLM path gets the same intent through
+    prompts.caster_prompt_block instead — only deterministic resolutions (local
+    fallbacks) are biased here, to avoid double-counting.
+
+    Attunement scales effect magnitudes; low Composure makes the wild bite back with an
+    extra strain cost. Deliberately light — see docs/CHARACTER_CREATION.md."""
+    if not resolution or not caster_profile:
+        return resolution
+    attunement = int(caster_profile.get("attunement", 3))
+    composure = int(caster_profile.get("composure", 3))
+
+    factor = 1.25 if attunement >= 5 else 0.8 if attunement <= 2 else 1.0
+    if factor != 1.0:
+        for effect in resolution.get("effects", []):
+            amount = effect.get("amount") if isinstance(effect, dict) else None
+            if isinstance(amount, (int, float)) and not isinstance(amount, bool):
+                effect["amount"] = max(1, round(amount * factor))
+
+    if composure <= 2:
+        costs = resolution.setdefault("costs", [])
+        if len(costs) < 8:
+            costs.append({"type": "status", "status": "strained", "duration": 3})
+    return resolution
+
+
 def _delayed_arrival_fallback_from_spell(spell: str) -> dict[str, Any] | None:
     effect = _delayed_arrival_effect_from_text(spell)
     if effect is None:

@@ -187,7 +187,9 @@ earns its place (an imperial containment site, a tradition's ossuary), it must b
   the client kingdom, the clerk, the emperor.
 - Who/what is the emperor? (A person? An office? Something stranger?)
 - Geography sketch: how regions, runs, and the overworld relate.
-- The full roster of origins and which tradition each ties to.
+- The full roster of origins and which tradition each ties to. (v1 shipped: four —
+  bone-singer/bone, deserter charter mage/charter, desert nomad/sound, merfolk
+  exile/water. See docs/CHARACTER_CREATION.md. More origins/traditions still open.)
 - How the geopolitical victory path works mechanically.
 - Music/audio direction (sound magic and musical desert nomads suggest audio
   should eventually be a first-class aesthetic citizen).
