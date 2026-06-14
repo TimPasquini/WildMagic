@@ -58,7 +58,11 @@ class _CombatMixin:
             if ("berserk" in attacker.statuses or "empowered" in attacker.statuses)
             else 0
         )
-        amount = base + bonus
+        # weakened is the mirror of empowered: a maimed/withered limb lands feebler
+        # blows. Clamp so a weakened attacker still scratches for at least 1.
+        if "weakened" in attacker.statuses:
+            bonus -= 2
+        amount = max(1, base + bonus)
         actual = self.calculate_actual_damage(defender, amount, "physical")
 
         # Log combat message only if player is involved or either entity is visible

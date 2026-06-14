@@ -2622,6 +2622,7 @@ class GameUI:
             "webbed": (200, 200, 150),
             "berserk": (220, 80, 80),
             "empowered": (255, 180, 50),
+            "weakened": (150, 120, 110),
             "warded": (120, 180, 255),
             "invisible": (170, 170, 200),
             "regenerating": (100, 220, 150),

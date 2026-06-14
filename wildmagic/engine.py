@@ -196,6 +196,10 @@ class GameState:
     last_talked_npc_name: str | None = None
     tile_tags: dict[str, list[str]] = field(default_factory=dict)
     tile_durations: dict[str, int] = field(default_factory=dict)
+    # Standing auras anchored to ground rather than to a creature, keyed by "x,y"
+    # -- a hexed circle that bleeds anyone standing on it, a warded floor that
+    # steadies allies. Resolved alongside entity-borne auras in _tick_auras.
+    tile_auras: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     event_timers: list[dict[str, Any]] = field(default_factory=list)
     triggers: list[dict[str, Any]] = field(default_factory=list)
     game_over: bool = False
@@ -344,6 +348,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         tags: set[str] | None = None,
         resistances: dict[str, int] | None = None,
         weaknesses: dict[str, int] | None = None,
+        auras: list[dict[str, Any]] | None = None,
     ) -> Entity:
         faction = normalize_faction(faction, default="ally")
         actor_tags = {
@@ -376,6 +381,8 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 composure=3,
             ),
         )
+        if auras:
+            entity.auras = [dict(aura) for aura in auras]
         self.state.entities[entity.id] = entity
         return entity
 
@@ -1838,6 +1845,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         self.state.turn += 1
         self._tick_environment()
         self._tick_tile_durations()
+        self._tick_auras()
         self._tick_event_timers()
         self._tick_triggers()
         self.update_fov()
@@ -2144,6 +2152,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             "silenced",
             "berserk",
             "empowered",
+            "weakened",
             "cursed",
         ]:
             if status not in entity.statuses:

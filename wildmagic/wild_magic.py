@@ -46,10 +46,10 @@ from .llm_client import (
     ollama_keep_alive,
     ollama_resolution_attempts,
 )
+from .capabilities import assemble_resolver_system_prompt
 from .llm_resolver import _write_jsonl_audit, should_retry_resolution, retry_context
 from .models import MECHANICAL_STATUSES, TILE_ALIASES
 from .prompts import (
-    SYSTEM_PROMPT,
     DIALOGUE_SYSTEM_PROMPT,
     TRADE_SYSTEM_PROMPT,
     TOWN_SYSTEM_PROMPT,
@@ -58,22 +58,25 @@ from .prompts import (
 )
 
 
-def _wild_prompt_messages(context: dict[str, Any]) -> list[dict[str, str]]:
+def _wild_prompt_messages(spell: str, context: dict[str, Any]) -> list[dict[str, str]]:
     """Assemble the wild-magic chat messages. The engine rides the region's voice and
     the caster's stat-derived anchors along in context; both belong in the system
-    prompt, not the user-message JSON, so they are split out here."""
+    prompt, not the user-message JSON, so they are split out here.
+
+    The system prompt is assembled from the always-on core plus only the capability cards
+    this spell routes to (wildmagic/capabilities.py) — hence the explicit spell argument."""
     region_style = context.get("region_style")
     caster_profile = context.get("caster_profile")
     payload_context = {
         k: v for k, v in context.items() if k not in {"region_style", "caster_profile"}
     }
+    system_content = assemble_resolver_system_prompt(
+        spell,
+        region_block=region_prompt_block(region_style),
+        caster_block=caster_prompt_block(caster_profile),
+    )
     return [
-        {
-            "role": "system",
-            "content": SYSTEM_PROMPT
-            + region_prompt_block(region_style)
-            + caster_prompt_block(caster_profile),
-        },
+        {"role": "system", "content": system_content},
         {"role": "user", "content": json.dumps(payload_context, ensure_ascii=True)},
     ]
 
@@ -129,7 +132,7 @@ class OllamaWildMagicProvider:
             "model": self._model_override or get_wild_magic_model(),
             "stream": False,
             "think": ollama_thinking_enabled(self.purpose),
-            "messages": _wild_prompt_messages(context),
+            "messages": _wild_prompt_messages(spell, context),
             "options": {
                 "temperature": ollama_temperature(),
                 "top_p": 0.9,
@@ -2546,7 +2549,7 @@ def write_audit_log(
     resolved_provider_name: str,
 ) -> str | None:
     audit_path = audit_dir() / "wild_magic_audit.jsonl"
-    prompt_messages = _wild_prompt_messages(context)
+    prompt_messages = _wild_prompt_messages(spell, context)
     record = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "spell": spell,

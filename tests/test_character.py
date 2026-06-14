@@ -77,7 +77,7 @@ def test_wild_prompt_strips_caster_profile_into_the_system_prompt() -> None:
         "spell": "a bright unraveling",
         "caster_profile": CharacterProfile(composure=1).to_public_dict(),
     }
-    messages = _wild_prompt_messages(context)
+    messages = _wild_prompt_messages("a bright unraveling", context)
     system, user = messages[0]["content"], messages[1]["content"]
     assert "chaotically" in system.lower()  # spliced into the system prompt
     assert "caster_profile" not in user  # stripped from the user JSON payload

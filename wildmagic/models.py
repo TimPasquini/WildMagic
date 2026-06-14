@@ -172,6 +172,7 @@ MECHANICAL_STATUSES = {
     "regenerating",
     "berserk",
     "empowered",
+    "weakened",
     "cursed",
 }
 
@@ -270,6 +271,11 @@ class Entity:
     tags: set[str] = field(default_factory=set)
     resistances: dict[str, int] = field(default_factory=dict)
     weaknesses: dict[str, int] = field(default_factory=dict)
+    # Standing emanations this entity radiates each turn -- a hound whose shadow
+    # burns nearby foes, a totem that steadies allies' nerve. Every aura is always
+    # backed by a concrete mechanical effect (damage, or a status that buffs or
+    # debuffs); resolved once per turn in GameEngine._tick_auras.
+    auras: list[dict[str, Any]] = field(default_factory=list)
     equipment: dict[str, str | None] = field(
         default_factory=lambda: {
             "weapon": None,
@@ -319,6 +325,8 @@ class Entity:
             data["description"] = self.description
         if self.status_display:
             data["status_display"] = self.status_display
+        if self.auras:
+            data["auras"] = self.auras
         if self.kind != "item":
             data.update(
                 {

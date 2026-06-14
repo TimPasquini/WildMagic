@@ -564,6 +564,9 @@ class _EffectsMixin:
                 for tag in coerce_list(effect.get("tags"))
                 if str(tag).strip()
             )
+            summon_auras = self._normalize_auras(
+                effect.get("aura") or effect.get("auras")
+            )
             spawned = 0
             for attempt in range(count):
                 x, y = (
@@ -590,6 +593,7 @@ class _EffectsMixin:
                     tags=tags,
                     resistances=normalize_numeric_map(effect.get("resistances"), 0, 95),
                     weaknesses=normalize_numeric_map(effect.get("weaknesses"), 0, 200),
+                    auras=summon_auras,
                 )
                 spawned += 1
             if spawned == 0:
@@ -846,10 +850,353 @@ class _EffectsMixin:
             if not target or target.kind in {"item", "prop"}:
                 return ["The possession finds no one to inhabit."]
             return self.swap_control_to(target.id)
+        if effect_type == "edit_memory":
+            return self._apply_edit_memory(effect)
+        if effect_type == "animate_object":
+            return self._apply_animate_object(effect)
+        if effect_type == "aura":
+            return self._apply_aura_effect(effect)
         if effect_type == "message":
             text = str(effect.get("text") or "").strip()
             return [text] if text else []
         return []
+
+    def _nearest_npc(self) -> "Entity | None":
+        player = self.state.player
+        npcs = [e for e in self.state.entities.values() if e.kind == "npc" and e.hp > 0]
+        if not npcs:
+            return None
+        return min(npcs, key=lambda e: self.distance(player, e))
+
+    def _apply_edit_memory(self, effect: dict[str, Any]) -> list[str]:
+        """Bend a mind: add, remove, or alter what an NPC remembers. Operates on the NPC's
+        NPCProfile.memory (the 'things_i_have_noticed' the dialogue model sees). Forgetting
+        the caster from a hostile NPC also calms it -- 'make the guard forget me' should
+        actually end the pursuit, not just change small talk."""
+        target = self.resolve_target(str(effect.get("target") or "nearest_enemy"))
+        if target is None or target.kind != "npc":
+            target = self._nearest_npc()
+        if target is None:
+            return ["The spell reaches for a mind, but finds no one here who keeps one."]
+        profile = self.state.npc_profiles.get(target.id)
+        if profile is None:
+            return [f"{target.name} has nothing the spell can take hold of."]
+
+        op = normalize_id(str(effect.get("op") or "alter"))
+        text = " ".join(str(effect.get("text") or "").split())[:200]
+        subject = " ".join(str(effect.get("subject") or "").split())[:80]
+        subject_lower = subject.lower()
+        player_name = (self.state.player.name or "").lower()
+        caster_aliases = {
+            "the caster", "caster", "me", "you", "the player", "the stranger",
+            "my face", "the spellcaster", "the intruder",
+        }
+        refers_to_caster = (
+            subject_lower in caster_aliases
+            or (bool(player_name) and player_name in subject_lower)
+            or not subject
+        )
+
+        def _mentions(mem: str) -> bool:
+            padded = f" {mem.lower()} "
+            if subject_lower and subject_lower in padded:
+                return True
+            if refers_to_caster and (
+                (player_name and player_name in padded) or " you " in padded or " your " in padded
+            ):
+                return True
+            return False
+
+        if op in {"remove", "erase", "forget", "wipe"}:
+            kept = [m for m in profile.memory if not _mentions(m)]
+            profile.memory = kept
+            calmed = False
+            if refers_to_caster and target.faction not in {"ally", "player", "neutral"}:
+                target.faction = "neutral"
+                target.ai = None
+                calmed = True
+            if calmed:
+                return [
+                    f"{target.name} blinks, the hunt draining out of their face — whatever they "
+                    f"were chasing, the memory of it is simply gone."
+                ]
+            return [f"A patch of {target.name}'s memory goes smooth and blank."]
+
+        if op in {"add", "implant", "plant", "insert"}:
+            if not text:
+                return ["The false memory has no shape to take, and slips away."]
+            profile.remember(text)
+            return [f"A memory that never happened settles into {target.name}'s mind as if it always lived there."]
+
+        # alter (default): drop what matched, then plant the new recollection.
+        if subject_lower or refers_to_caster:
+            profile.memory = [m for m in profile.memory if not _mentions(m)]
+        if text:
+            profile.remember(text)
+        return [f"{target.name}'s memory rewrites itself quietly around your words."]
+
+    def _resolve_prop_target(self, effect: dict[str, Any]) -> "Entity | None":
+        tid = str(
+            effect.get("target")
+            or effect.get("object")
+            or effect.get("anchor")
+            or effect.get("prop")
+            or ""
+        ).strip()
+        ent = self.state.entities.get(tid)
+        if ent is not None and ent.kind == "prop":
+            return ent
+        props = [
+            e
+            for e in self.state.entities.values()
+            if e.kind == "prop" and getattr(e, "alive", True)
+        ]
+        if not props:
+            return None
+        player = self.state.player
+        return min(props, key=lambda e: self.distance(player, e))
+
+    def _apply_animate_object(self, effect: dict[str, Any]) -> list[str]:
+        """Bring an existing object/prop to life as a creature. The prop stops being
+        scenery (it is removed) and a new actor stands in its place. Falls back to spawning
+        near the player if no prop is present, so the spell never simply fizzles."""
+        prop = self._resolve_prop_target(effect)
+        faction = normalize_faction(
+            effect.get("faction"), default="ally", neutral_is_ally=True
+        )
+        base = prop.name if prop is not None else "object"
+        name = (str(effect.get("name") or f"animated {base}")).strip()[:40] or f"animated {base}"
+        hp = clamp_int(effect.get("hp") or 8, 1, 30)
+        attack = clamp_int(effect.get("attack") or 3, 0, 12)
+        defense = clamp_int(effect.get("defense") or 1, 0, 8)
+        tags = {
+            normalize_id(str(tag))
+            for tag in coerce_list(effect.get("tags"))
+            if str(tag).strip()
+        }
+        if prop is not None:
+            x, y = prop.x, prop.y
+            char = str(effect.get("char") or prop.char or "")[:1] or (
+                "a" if faction == "ally" else "e"
+            )
+            self.state.entities.pop(prop.id, None)
+        else:
+            x, y = self.find_open_tile_near(self.state.player.x, self.state.player.y)
+            char = str(effect.get("char") or ("a" if faction == "ally" else "e"))[:1]
+        if not self.can_occupy(x, y):
+            x, y = self.find_open_tile_near(x, y)
+        self.spawn_actor(
+            name,
+            char,
+            x,
+            y,
+            hp,
+            attack,
+            defense,
+            faction,
+            "simple" if faction == "enemy" else None,
+            tags=tags,
+        )
+        where = prop.name if prop is not None else "a nearby object"
+        where = where[:1].upper() + where[1:]
+        return [f"{where} shudders, tears loose of its place, and rises as {name}."]
+
+    # ------------------------------------------------------------------ auras
+    def _normalize_auras(self, raw: Any) -> list[dict[str, Any]]:
+        """Coerce model-emitted aura specs into the canonical, validated form the
+        tick loop understands. Every aura MUST carry a real mechanical effect --
+        damage, or a status that buffs/debuffs/slows. Anything that resolves to no
+        mechanic is dropped, so an aura is never pure narration."""
+        if isinstance(raw, dict):
+            specs = [raw]
+        elif isinstance(raw, list):
+            specs = [a for a in raw if isinstance(a, dict)]
+        else:
+            return []
+        out: list[dict[str, Any]] = []
+        for a in specs:
+            kind = normalize_id(str(a.get("kind") or a.get("mode") or "").strip())
+            if kind not in {"damage", "status"}:
+                # Infer from the fields the model actually supplied.
+                if a.get("amount") is not None or a.get("damage_type") or a.get("element"):
+                    kind = "damage"
+                elif a.get("status"):
+                    kind = "status"
+                else:
+                    continue  # no mechanic to anchor -> not a real aura
+            spec: dict[str, Any] = {
+                "kind": kind,
+                "radius": clamp_int(a.get("radius", 2), 1, 8),
+                "affects": normalize_id(str(a.get("affects") or "enemies")),
+                "label": " ".join(str(a.get("label") or a.get("name") or "").split())[:40],
+            }
+            if spec["affects"] not in {"enemies", "allies", "all"}:
+                spec["affects"] = "enemies"
+            if kind == "damage":
+                spec["amount"] = clamp_int(a.get("amount", 1), 1, 12)
+                spec["damage_type"] = normalize_id(
+                    str(a.get("damage_type") or a.get("element") or "force")
+                )
+            else:
+                status = normalize_id(str(a.get("status") or ""))
+                if status not in MECHANICAL_STATUSES:
+                    status = STATUS_FLAVOR_ALIASES.get(status, "")
+                if not status:
+                    continue  # an unusable status is no mechanic -> drop
+                spec["status"] = status
+                spec["duration"] = clamp_int(a.get("duration", 2), 1, 8)
+                display = " ".join(
+                    str(a.get("display_name") or a.get("label") or a.get("name") or "").split()
+                )
+                if display:
+                    spec["display_name"] = display[:40]
+            ttl = a.get("turns") or a.get("turns_left") or a.get("lifetime")
+            if ttl is not None:
+                spec["turns_left"] = clamp_int(ttl, 1, 99)
+            out.append(spec)
+        return out[:4]
+
+    def _apply_aura_effect(self, effect: dict[str, Any]) -> list[str]:
+        """Standalone `aura` effect: anchor a standing emanation to an entity (the
+        caster by default) or to a patch of ground. Lets a spell wreathe the player
+        in a searing corona, or hex the floor so anyone who lingers there bleeds."""
+        auras = self._normalize_auras(
+            effect.get("aura") or effect.get("auras") or effect
+        )
+        if not auras:
+            return ["The aura has no real bite to anchor it, and gutters out."]
+        if "turns" not in effect and "turns_left" not in effect:
+            # A self-cast/ground aura should fade; a creature's aura (handled at
+            # spawn) lasts as long as the creature. Default a finite life here.
+            ttl = clamp_int(effect.get("duration", 5), 1, 99)
+            for aura in auras:
+                aura.setdefault("turns_left", ttl)
+        target_key = normalize_id(str(effect.get("target") or "").strip())
+        wants_tile = (
+            target_key in {"tile", "here", "ground", "floor", "the_floor", "underfoot"}
+            or effect.get("anchor") in {"tile", "ground", "floor"}
+            or ("x" in effect and "y" in effect and not effect.get("target"))
+        )
+        if wants_tile:
+            x, y = self.effect_position(effect)
+            key = f"{x},{y}"
+            self.state.tile_auras.setdefault(key, []).extend(auras)
+            return ["The ground takes on a charged, waiting hush."]
+        target = self.resolve_target(str(effect.get("target") or "player"))
+        if target is None or target.kind in {"item"} or not getattr(target, "alive", True):
+            target = self.state.player
+        target.auras.extend(auras)
+        who = "you" if target.id == self.state.player_id else target.name
+        return [f"A standing aura settles around {who}."]
+
+    def _tick_auras(self) -> None:
+        """Resolve every standing aura once per turn -- entity-borne (creatures,
+        items, props) and ground-anchored alike. Auras with a finite life count
+        down and are pruned when spent."""
+        for owner in list(self.state.entities.values()):
+            auras = getattr(owner, "auras", None)
+            if not auras or not owner.alive:
+                continue
+            survivors: list[dict[str, Any]] = []
+            for aura in auras:
+                self._apply_aura_tick(owner.x, owner.y, owner, aura)
+                if self._aura_survives(aura):
+                    survivors.append(aura)
+            owner.auras = survivors
+        for key, auras in list(self.state.tile_auras.items()):
+            try:
+                tx, ty = (int(part) for part in key.split(","))
+            except (ValueError, TypeError):
+                self.state.tile_auras.pop(key, None)
+                continue
+            survivors = []
+            for aura in auras:
+                self._apply_aura_tick(tx, ty, None, aura)
+                if self._aura_survives(aura):
+                    survivors.append(aura)
+            if survivors:
+                self.state.tile_auras[key] = survivors
+            else:
+                self.state.tile_auras.pop(key, None)
+
+    def _aura_survives(self, aura: dict[str, Any]) -> bool:
+        ttl = aura.get("turns_left")
+        if ttl is None:
+            return True  # tied to its owner's existence, not a clock
+        ttl = int(ttl) - 1
+        aura["turns_left"] = ttl
+        return ttl > 0
+
+    def _resolve_aura_victims(
+        self, ox: int, oy: int, owner: "Entity | None", affects: str, radius: int
+    ) -> list["Entity"]:
+        victims: list[Entity] = []
+        owner_has_side = owner is not None and owner.faction in {"player", "ally", "enemy"}
+        for ent in self.entities_in_radius(ox, oy, radius):
+            if ent.kind in {"item", "prop"} or ent.hp <= 0:
+                continue
+            if owner is not None and ent.id == owner.id:
+                continue
+            if affects == "all":
+                victims.append(ent)
+                continue
+            if owner_has_side:
+                hostile = self.is_hostile_to(owner, ent)
+                if (affects == "enemies" and hostile) or (
+                    affects == "allies" and not hostile
+                ):
+                    victims.append(ent)
+            else:
+                # Ground/neutral source has no side: "allies" means the player's
+                # camp, anything else reaches every combatant in range.
+                if affects == "allies":
+                    if ent.faction in {"player", "ally"}:
+                        victims.append(ent)
+                else:
+                    victims.append(ent)
+        return victims
+
+    def _apply_aura_tick(
+        self, ox: int, oy: int, owner: "Entity | None", aura: dict[str, Any]
+    ) -> None:
+        affects = str(aura.get("affects") or "enemies")
+        radius = clamp_int(aura.get("radius", 2), 1, 8)
+        victims = self._resolve_aura_victims(ox, oy, owner, affects, radius)
+        if not victims:
+            return
+        label = str(aura.get("label") or "").strip()
+        if aura.get("kind") == "damage":
+            amount = clamp_int(aura.get("amount", 1), 1, 12)
+            dtype = normalize_id(str(aura.get("damage_type") or "force"))
+            for victim in victims:
+                self.damage_entity(victim, amount, dtype, source=owner)
+            self._announce_aura(owner, label or f"{dtype} aura", victims)
+        else:
+            status = normalize_id(str(aura.get("status") or ""))
+            if status not in MECHANICAL_STATUSES:
+                return
+            duration = clamp_int(aura.get("duration", 2), 1, 8)
+            display = str(aura.get("display_name") or "").strip()
+            for victim in victims:
+                current = victim.statuses.get(status)
+                current_turns = current if isinstance(current, int) else 0
+                victim.statuses[status] = max(current_turns, duration)
+                if display and display != status.replace("_", " "):
+                    victim.status_display[status] = display
+            self._announce_aura(owner, label or display or status.replace("_", " "), victims)
+
+    def _announce_aura(
+        self, owner: "Entity | None", label: str, victims: list["Entity"]
+    ) -> None:
+        """Keep aura chatter quiet unless it touches the player -- these fire every
+        turn, so creature-on-creature emanations stay off the log to avoid spam."""
+        player_id = self.state.player_id
+        if any(victim.id == player_id for victim in victims):
+            source = owner.name if owner is not None else "the charged ground"
+            self.state.add_message(f"{source}'s {label} bites into you.", is_danger=True)
+        elif owner is not None and owner.id == player_id:
+            names = ", ".join(victim.name for victim in victims)
+            self.state.add_message(f"Your {label} washes over {names}.")
 
     def _create_spoken_promise(self, effect: dict[str, Any]) -> list[str]:
         """Prophecy: the player speaks a future into the ledger. The spoken claim goes
@@ -1158,6 +1505,7 @@ class _EffectsMixin:
         resistances.update(normalize_numeric_map(effect.get("resistances"), 0, 95))
         weaknesses = dict(template.weaknesses)
         weaknesses.update(normalize_numeric_map(effect.get("weaknesses"), 0, 200))
+        auras = self._normalize_auras(effect.get("aura") or effect.get("auras"))
         spawned = 0
         for index in range(count):
             x, y = self.resolve_placement(effect, prefer_unblocked=True, attempt=index)
@@ -1176,6 +1524,7 @@ class _EffectsMixin:
                 tags=tags,
                 resistances=resistances,
                 weaknesses=weaknesses,
+                auras=auras,
             )
             spawned += 1
         if spawned == 0:
