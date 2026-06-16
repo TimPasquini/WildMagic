@@ -15,6 +15,16 @@ dev = [
     "ruff>=0.14",
 ]
 
+portraits = [
+    "diffusers>=0.31",
+    "transformers",
+    "accelerate",
+    "safetensors",
+    "pillow",
+    "huggingface-hub",
+    "torchao",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [

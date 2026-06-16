@@ -227,6 +227,14 @@ Commands also work in the CLI. Use `cast <spell>` for wild magic when playing he
 - `pickup` / `get` — pick up items at your feet
 - `talk <message>` (or `speak`/`say`) — stand next to an NPC and say something; costs a turn like any other action
 
+## Optional: Character Portraits
+
+Portrait generation is experimental and intentionally isolated from the main game environment because it depends on the heavy `torch`/`diffusers` SDXL stack.
+
+The main game does not require portrait dependencies. To enable portraits, create a separate image-generation environment, set `WILDMAGIC_PORTRAIT_PYTHON` to that environment's Python executable, and set `WILDMAGIC_PORTRAITS_ENABLED=1`.
+
+See `tools/portraits/README.md`.
+
 ## Smoke Test
 
 ```powershell
