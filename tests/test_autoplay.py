@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from wildmagic.actions import ActionResult, GameSession
+from wildmagic.actions import ActionResult, GameSession, describe_state
 from wildmagic.autoplay import (
     AgentObservation,
     CampaignConfig,
@@ -108,6 +108,58 @@ def test_invariant_checker_contract_violations() -> None:
         session.close()
 
 
+def test_rest_turn_jump_is_not_flagged_but_other_jumps_are() -> None:
+    """Resting/investigating legitimately advance many turns (a full day for "rest until
+    dawn"). Those must not register the Tier-1 ``turn_counter_jump`` bug, or wiring the
+    autoplay agent to rest (the only way to reach the daily Simulator) would flood the
+    overnight report with false confirmed bugs. Genuine jumps must still be caught."""
+    session = GameSession(seed=7, scenario="test_chamber", provider_name="mock")
+    checker = InvariantChecker()
+    try:
+        rest = ActionResult(
+            command="rest until dawn",
+            action="rest",
+            success=True,
+            consumed_turn=True,
+            turn_before=0,
+            turn_after=1440,
+            messages=["You make camp and rest."],
+        )
+        bad_jump = ActionResult(
+            command="move north",
+            action="move",
+            success=True,
+            consumed_turn=True,
+            turn_before=0,
+            turn_after=5,
+            messages=["moved"],
+        )
+        backward = ActionResult(
+            command="wait",
+            action="wait",
+            success=True,
+            consumed_turn=True,
+            turn_before=10,
+            turn_after=3,
+            messages=["waited"],
+        )
+
+        assert not any(
+            f.kind == "turn_counter_jump"
+            for f in checker.check(session, rest, episode=1)
+        )
+        assert any(
+            f.kind == "turn_counter_jump"
+            for f in checker.check(session, bad_jump, episode=1)
+        )
+        assert any(
+            f.kind == "turn_counter_jump"
+            for f in checker.check(session, backward, episode=1)
+        )
+    finally:
+        session.close()
+
+
 def test_invariant_checker_finds_actor_on_blocking_tile() -> None:
     session = GameSession(seed=7, scenario="test_chamber", provider_name="mock")
     checker = InvariantChecker()
@@ -127,6 +179,36 @@ def test_invariant_checker_finds_actor_on_blocking_tile() -> None:
         findings = checker.check(session, result, episode=1)
 
         assert any(f.kind == "blocking_actor_on_blocking_tile" for f in findings)
+    finally:
+        session.close()
+
+
+def test_describe_state_surfaces_bound_captives_floor_wide() -> None:
+    """Captives are listed regardless of visibility (like enemies), so the agent — and a
+    player reading the same readout — can know they are held here and go free them. Without
+    this the agent had no signal captives existed and never sought them."""
+    session = GameSession(seed=7, scenario="test_chamber", provider_name="mock")
+    try:
+        engine = session.engine
+        player = engine.state.player
+        engine.spawn_npc(
+            "a captive",
+            "p",
+            player.x,
+            player.y + 4,
+            role="captured poacher",
+            backstory="",
+            traits=["downtrodden"],
+            tags={"captive", "bound", "human"},
+        )
+        lines = describe_state(engine)
+        captive_line = next(
+            (line for line in lines if line.startswith("Captives:")), ""
+        )
+        npc_line = next((line for line in lines if line.startswith("NPCs:")), "")
+        assert "a captive" in captive_line and "freed" in captive_line
+        # Bound captives are not double-listed under NPCs.
+        assert "a captive" not in npc_line
     finally:
         session.close()
 

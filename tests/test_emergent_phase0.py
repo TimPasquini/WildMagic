@@ -35,9 +35,10 @@ def test_witnessed_imperial_kill_records_a_deed() -> None:
     player = engine.state.player
     player.attack = 99  # guarantee a one-hit kill regardless of derived stats
     foe = _spawn_imperial(engine, player.x, player.y + 1)
-    # An NPC standing right there will witness it (and remember it).
+    # An NPC a few tiles off witnesses it (within WITNESS_RADIUS) but is far enough from the
+    # slain imperial (beyond DEFEND_RADIUS) that this reads as a kill, not a rescue.
     witness = engine.spawn_npc(
-        "road drover", "d", player.x, player.y + 2, role="drover", backstory=""
+        "road drover", "d", player.x, player.y + 5, role="drover", backstory=""
     )
 
     engine.attack(player, foe)

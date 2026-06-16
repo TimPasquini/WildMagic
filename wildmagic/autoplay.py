@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 import json
@@ -148,6 +149,17 @@ Coverage goals:
   choose a different useful system command such as inspect, examine, investigate, talk, read,
   pickup, a standard spell, or a wild spell. If the last few commands were mostly spells and
   no enemy or urgent object remains, stop casting and return to exploration.
+- Exercise the living-world systems. Your deeds (killing imperial soldiers, raising the dead,
+  razing buildings, freeing or harming townsfolk) build a legend the world reacts to - but the
+  world only updates once per day at 05:00. Periodically "rest until dawn" to let a day pass so
+  consequences land, then check "standing" (how the powers regard you, and whether the Empire's
+  defenses are weakening) and "followers" (who has come to follow you). On empire_compound,
+  fight the imperial soldiers to build a defiant legend and pressure the Empire. Once you have a
+  notable legend, "found" an organization of your own (e.g. found the Ashen Hand) and rest more
+  to see who pledges to it. Do not rest many times in a row with nothing changing between rests.
+- Descend (downstairs) into the dungeon to explore it. If you find people locked in cells,
+  stand beside one and "free" them - freeing captives is a memorable deed; some take up arms
+  and come to follow you, and a grateful captive may tell you where something worth finding lies.
 
 Command meanings:
 - inspect/status/inventory: free state summary; use when unsure what is nearby or what changed.
@@ -158,6 +170,10 @@ Command meanings:
 - talk/speak/say your own message: converse with an adjacent NPC; can create lore or trade opportunities.
 - wares/browse/shop: inspect merchant goods when near a trading NPC.
 - pickup/drop/use/equip/unequip: exercise inventory, consumable, and equipment systems.
+- standing/followers: free readouts of your reputation, legend, Empire pressure, and retinue.
+- found a name: raise your own organization; followers who believe in your cause may pledge to it.
+- rest / rest until dawn: pass time and let the world's daily 05:00 events run (deeds become
+  consequences, the Empire and resistance react, bonds shift). Rest, then read standing/followers.
 - spark/frost/heal/ward/reveal: deterministic standard spells for combat and survival.
 - Wild magic command: begin with the word cast, then continue with a specific original
   spell in plain English. Use the current spell_focus as inspiration, but do not reuse
@@ -188,6 +204,13 @@ Known commands: inspect, journal, wait (recover 1 MP), open, descend, ascend, mo
 north, south, east, west, spark, frost, heal, ward, reveal, pickup, drop an item name,
 use an item name, equip an item name, unequip a slot or item name, read a nearby target,
 examine, investigate a target or area, wares, accept, reject,
+standing (how the Empire and the resistance regard you, your legend, and how close the
+Empire's defenses are to breaking - free, no turn),
+followers (who follows you and the organizations you have founded - free, no turn),
+found a name (raise your own banner/organization, e.g. found the Ashen Hand),
+free (stand next to someone held in a cell and free/release them - some will join you),
+rest (camp to pass time; "rest" is 8 hours, "rest until dawn" sleeps to the next 05:00 -
+the world's daily events only happen at 05:00, so resting is how you let the world react),
 wild magic: command must start with cast and continue with specific original spell wording,
 talk: command must start with talk and continue with your message to an adjacent NPC.
 The words "spell idea", "message", "target", "item", and "slot" are descriptions, not
@@ -252,6 +275,23 @@ EXACT_VERBS = {
     "get",
     "take",
     "grab",
+    # Free a bound captive on an adjacent tile (costs a turn).
+    "free",
+    "release",
+    "liberate",
+    "unbind",
+    "untie",
+    # Emergent-world readouts + the daily-tick controls (all free actions, no turn cost).
+    "standing",
+    "reputation",
+    "rep",
+    "factions",
+    "followers",
+    "retinue",
+    "bonds",
+    "tick",
+    "simulate",
+    "daytick",
     "quit",
     "exit",
 }
@@ -277,6 +317,13 @@ TAIL_VERBS = {
     "unequip",
     "unwield",
     "remove",
+    # Pass time so the world's daily Simulator runs (rest), and raise your own banner
+    # (found). Optional tail: "rest until dawn" / "found the Ashen Hand", or bare.
+    "rest",
+    "camp",
+    "sleep",
+    "found",
+    "establish",
 }
 REQUIRES_TAIL = {"cast", "wild", "talk", "speak", "say"}
 
@@ -895,9 +942,14 @@ class InvariantChecker:
                     **base,
                 )
             )
-        if (
-            result.turn_after < result.turn_before
-            or result.turn_after - result.turn_before > 1
+        # A backward turn counter is always a bug. A forward jump of more than one turn is a
+        # bug too, EXCEPT for actions that legitimately consume many turns: resting/camping
+        # skips hours (a full day = TURNS_PER_DAY turns) and investigating costs 1-3 turns.
+        # Without this exemption, wiring the agent to "rest" (the only way to reach the daily
+        # Simulator) would flag a confirmed bug on every rest.
+        multi_turn_action = result.action in {"rest", "investigate"}
+        if result.turn_after < result.turn_before or (
+            not multi_turn_action and result.turn_after - result.turn_before > 1
         ):
             findings.append(
                 Finding(
@@ -989,10 +1041,12 @@ class EpisodeRunner:
         session = GameSession(
             seed=self.seed, scenario=self.scenario, provider_name=self.config.provider
         )
-        completion_reason = "max_turns"
+        completion_reason = "max_steps"
         start = time.time()
         last_messages = ["Episode started."]
         recent_results: list[dict[str, Any]] = []
+        self._recent_positions: deque[tuple[int, int]] = deque(maxlen=12)
+        self._last_autorest_step = -25
         nudge: str | None = None
         parse_failures = 0
         repeated_command = ""
@@ -1003,12 +1057,14 @@ class EpisodeRunner:
         canon_technical_failures = 0
         rejected_casts = 0
         command_counts: dict[str, int] = {}
-        max_steps = self.config.max_steps or max(1, self.config.max_turns * 3)
+        # Agent steps (decisions) are the per-episode budget, not in-game turns: a single
+        # "rest until dawn" advances the turn counter by a full day (TURNS_PER_DAY), so a
+        # turn-based cap would end the episode on the first rest — and resting is exactly how
+        # the agent reaches the daily 05:00 Simulator. ``--max-turns`` sets the step budget
+        # (1 step == 1 turn for ordinary play); ``--max-steps`` overrides it explicitly.
+        max_steps = self.config.max_steps or max(1, self.config.max_turns)
         try:
             while self.step_count < max_steps:
-                if session.engine.state.turn >= self.config.max_turns:
-                    completion_reason = "max_turns"
-                    break
                 if time.time() - start >= self.config.episode_minutes * 60:
                     completion_reason = "episode_wall_clock"
                     break
@@ -1017,6 +1073,20 @@ class EpisodeRunner:
                     break
                 if self.config.drain_background:
                     self._drain_background(session)
+                # Surface a concrete in-reach opportunity (chiefly captives the agent can't
+                # otherwise know to seek) unless a higher-priority nudge already stands.
+                if nudge is None:
+                    nudge = self._opportunity_nudge(session)
+                # Periodically steer toward resting so the daily Simulator (and the whole
+                # backlash/bonds/standing layer) actually gets exercised.
+                if nudge is None and self.step_count % 12 == 0:
+                    nudge = self._rest_nudge(session)
+                # When captives are held here, point the episode's exploration drift along the
+                # *pathfound* route to them (the agent already follows expedition_direction) so
+                # it stops pulling the agent into walls; otherwise keep the seeded direction.
+                effective_expedition = (
+                    self._captive_step_dir(session) or self.expedition_direction
+                )
                 observation = AgentObservation(
                     episode=self.episode_index,
                     seed=self.seed,
@@ -1038,13 +1108,25 @@ class EpisodeRunner:
                         repeated_command,
                         repeated_count,
                     ),
-                    expedition_direction=self.expedition_direction,
+                    expedition_direction=effective_expedition,
                     spell_focus=self.spell_focus,
                     nudge=nudge,
                 )
                 nudge = None
                 agent_started = time.perf_counter()
-                decision = self._choose(observation)
+                # Harness auto-rest: the agent reliably ignores the "rest" nudge (LLMs don't
+                # act on meta-pleas), so the whole daily Simulator layer (deed application,
+                # Empire pressure, backlash minting, bond drift) would never run. Periodically
+                # rest *for* it when it's safe and deeds are pending — a deliberate coverage
+                # action to actually exercise (and find bugs in) that layer.
+                if self._should_autorest(session):
+                    decision = AgentDecision(
+                        command="rest until dawn",
+                        note="auto-rest (harness): exercise the daily Simulator",
+                    )
+                    self._last_autorest_step = self.step_count
+                else:
+                    decision = self._choose(observation)
                 agent_seconds = time.perf_counter() - agent_started
                 parse_failures = parse_failures + 1 if decision.parse_failure else 0
                 if parse_failures >= 3:
@@ -1102,6 +1184,59 @@ class EpisodeRunner:
                     split_command(command)[0].lower() if split_command(command) else ""
                 )
                 command_counts[verb] = command_counts.get(verb, 0) + 1
+                # No-progress stall: an agent thrashing against a wall varies its move
+                # direction, so it slips past the repeated-command softlock check yet goes
+                # nowhere. Flag it (tier 2) when many recent steps occupy ≤2 tiles.
+                self._recent_positions.append(
+                    (session.engine.state.player.x, session.engine.state.player.y)
+                )
+                if (
+                    len(self._recent_positions) == self._recent_positions.maxlen
+                    and len(set(self._recent_positions)) <= 2
+                ):
+                    self.findings.append(
+                        Finding(
+                            tier=2,
+                            kind="movement_stall",
+                            episode=self.episode_index,
+                            seed=self.seed,
+                            scenario=self.scenario,
+                            turn=session.engine.state.turn,
+                            evidence={
+                                "positions": list(self._recent_positions),
+                                "last_command": command,
+                            },
+                        )
+                    )
+                    self._recent_positions.clear()
+                    # Break the loop *physically*, not just with words (the agent tends to
+                    # ignore a plain "you're stuck" plea and keep oscillating into a dead end
+                    # under its fixed expedition_direction). Re-point exploration at a genuinely
+                    # open adjacent direction other than the one it has been repeating.
+                    adj = adjacent_options(session)
+                    open_dirs = [
+                        d
+                        for d in EXPEDITION_DIRECTIONS
+                        if adj.get(d, {}).get("status") in ("open", "door")
+                    ]
+                    repeated_dir = next(
+                        (d for d in EXPEDITION_DIRECTIONS if d in command.lower()), None
+                    )
+                    choices = [d for d in open_dirs if d != repeated_dir] or open_dirs
+                    if choices:
+                        self.expedition_direction = choices[
+                            self.step_count % len(choices)
+                        ]
+                        nudge = (
+                            "You are stuck repeating moves in a dead end. Go "
+                            f"{self.expedition_direction} now and keep heading that way to "
+                            "reach new ground - stop going back the way you came."
+                        )
+                    else:
+                        nudge = (
+                            "You are boxed in - stop moving and do something different here "
+                            "(inspect, cast a spell, or open/clear an adjacent obstacle)."
+                        )
                 if result.technical_failure:
                     # Casting failures (the wild resolver) and read/investigate
                     # failures (canon materialization) have different causes, so
@@ -1259,6 +1394,133 @@ class EpisodeRunner:
         self.command_path.write_text(
             "\n".join(self.command_history) + ("\n" if self.command_history else ""),
             encoding="utf-8",
+        )
+
+    def _nearest_captive(self, session: GameSession):
+        """The nearest living bound captive to the player, or None."""
+        engine = session.engine
+        player = engine.state.player
+        captives = [
+            e
+            for e in engine.state.entities.values()
+            if e.kind == "npc" and "bound" in e.tags and e.hp > 0
+        ]
+        if not captives:
+            return None
+        return min(
+            captives, key=lambda c: max(abs(c.x - player.x), abs(c.y - player.y))
+        )
+
+    _VEC_TO_CARDINAL = {
+        (0, -1): "north",
+        (0, 1): "south",
+        (1, 0): "east",
+        (-1, 0): "west",
+    }
+
+    def _compass_to(self, session: GameSession, target) -> str:
+        """Straight-line 8-way compass word from the player to a target, for prose."""
+        player = session.engine.state.player
+        dx, dy = target.x - player.x, target.y - player.y
+        ns = "south" if dy > 0 else "north" if dy < 0 else ""
+        ew = "east" if dx > 0 else "west" if dx < 0 else ""
+        return (ns + ew) or "nearby"
+
+    def _captive_step_dir(self, session: GameSession) -> str | None:
+        """The cardinal move (n/s/e/w) that makes real progress toward the nearest captive —
+        computed with the engine's BFS pathfinder, so it routes *around* walls and through
+        unlocked doors instead of walking the agent into stone (fix #1). Returns None when
+        there is no captive, one is already adjacent, OR no open path exists yet (e.g. the
+        cell block is behind a locked door / not yet connected). The no-path case must NOT
+        fall back to a straight-line bearing — that points the agent into a wall and it
+        thrashes (the cycle-2 finding). With None, exploration falls back to its normal drift
+        until a route opens and the pathfinder starts returning real steps again."""
+        nearest = self._nearest_captive(session)
+        if nearest is None:
+            return None
+        engine = session.engine
+        player = engine.state.player
+        if max(abs(nearest.x - player.x), abs(nearest.y - player.y)) <= 1:
+            return None
+        step = engine.next_path_step(player, nearest.x, nearest.y)
+        if step is None:
+            return None
+        delta = (step[0] - player.x, step[1] - player.y)
+        return self._VEC_TO_CARDINAL.get(delta)
+
+    def _opportunity_nudge(self, session: GameSession) -> str | None:
+        """Point the agent at a concrete in-reach opportunity it would otherwise walk past —
+        chiefly captives, which it cannot purposefully seek without being told where they are.
+        An adjacent captive prompts an immediate free; a distant one gets a *pathfound*
+        directional instruction (the open route around walls), which also realigns the
+        episode's exploration drift (see the expedition override)."""
+        nearest = self._nearest_captive(session)
+        if nearest is None:
+            return None
+        player = session.engine.state.player
+        if max(abs(nearest.x - player.x), abs(nearest.y - player.y)) <= 1:
+            return (
+                "Someone is bound in a cell right beside you. 'free' them now - freeing "
+                "captives is a memorable deed and some will take up arms and follow you."
+            )
+        step_dir = self._captive_step_dir(session)
+        compass = self._compass_to(session, nearest)
+        if step_dir is None:
+            # Captives exist but no open path leads there yet (locked/disconnected). Don't
+            # name a direction (it would point into a wall); just note it occasionally so the
+            # agent keeps exploring for a route rather than fixating.
+            if self.step_count % 5 != 0:
+                return None
+            return (
+                f"People are held in cells to the {compass}, but no open path leads there "
+                "from here yet - keep exploring to find a way around (a door or passage)."
+            )
+        return (
+            f"People are held in cells to the {compass} (e.g. {nearest.name} at "
+            f"{nearest.x},{nearest.y}). The open path runs {step_dir} from here - move "
+            f"{step_dir} now, then 'free' them when you are beside one."
+        )
+
+    def _should_autorest(self, session: GameSession) -> bool:
+        """Whether the harness should rest *for* the agent this step to exercise the daily
+        Simulator: at least ~25 steps since the last auto-rest, deeds awaiting the 05:00 tick,
+        the game still live, and no enemy within 3 tiles (don't camp in a fight)."""
+        if (self.step_count - self._last_autorest_step) < 25:
+            return False
+        state = session.engine.state
+        if state.game_over:
+            return False
+        if not any(not d.applied for d in state.deed_ledger.deeds):
+            return False
+        player = state.player
+        return not any(
+            e.faction == "enemy"
+            and e.hp > 0
+            and max(abs(e.x - player.x), abs(e.y - player.y)) <= 3
+            for e in state.entities.values()
+        )
+
+    def _rest_nudge(self, session: GameSession) -> str | None:
+        """Nudge the agent to `rest until dawn` when it has deeds the daily 05:00 Simulator
+        hasn't reckoned with yet and it's safe to camp. Without this the agent never rests, so
+        the whole emergent *daily* layer (standing shifts, backlash, bond drift, posters) goes
+        unexercised by autoplay — deeds are recorded but never applied."""
+        engine = session.engine
+        state = engine.state
+        if not any(not d.applied for d in state.deed_ledger.deeds):
+            return None
+        player = state.player
+        if any(
+            e.faction == "enemy"
+            and e.hp > 0
+            and max(abs(e.x - player.x), abs(e.y - player.y)) <= 2
+            for e in state.entities.values()
+        ):
+            return None  # not while enemies are close
+        return (
+            "You have done deeds the world has not yet reckoned with. Find a safe spot and "
+            "'rest until dawn' to let a day pass - then read 'standing' and 'followers' to "
+            "see how the Empire and the people have reacted to what you've done."
         )
 
     def _drain_background(self, session: GameSession) -> None:

@@ -63,6 +63,35 @@ def test_spark_kill_is_attributed_and_records_a_deed() -> None:
     assert "defiant" in engine.legend_words(engine.state.player_soul_id)
 
 
+def test_killing_imperial_near_civilian_also_defends_the_folk() -> None:
+    """One act, two deeds: cutting down an imperial standing over a townsperson reads as
+    both a strike on the Empire and a defense of the folk — so the protector legend (and the
+    'people's champion' arc) can actually arise in play, not just on paper."""
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    player = engine.state.player
+    player.attack = 99
+    engine.spawn_npc(
+        "weaver", "n", player.x + 1, player.y + 1, role="weaver", backstory=""
+    )
+    foe = _spawn_imperial(engine, player.x + 1, player.y)
+    engine.attack(player, foe)
+    types = [d.type for d in engine.state.deed_ledger.deeds]
+    assert "killed_imperials" in types
+    assert "defended_townsfolk" in types
+    engine.run_world_tick()
+    assert "protector" in engine.legend_words(engine.state.player_soul_id)
+
+
+def test_killing_imperial_with_no_civilian_near_does_not_defend() -> None:
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    player = engine.state.player
+    player.attack = 99
+    foe = _spawn_imperial(engine, player.x + 1, player.y)
+    engine.attack(player, foe)
+    types = [d.type for d in engine.state.deed_ledger.deeds]
+    assert types == ["killed_imperials"]
+
+
 def test_killing_civilians_costs_legitimacy_and_brands_a_butcher() -> None:
     engine = GameEngine(seed=7, scenario="test_chamber")
     player = engine.state.player

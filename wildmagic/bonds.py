@@ -65,6 +65,123 @@ _TRAIT_AVERSION: dict[str, float] = {
     "fearful": 1.5,
 }
 
+# Disposition derivation (content workstream B): the affinity/aversion vocab above only bites
+# if NPCs actually carry one of those traits — but seeded NPCs carry open-ended *flavor*
+# traits ("shrewd", "quietly subversive"). Rather than hand-author a lean onto every NPC, we
+# derive one disposition from role/trait/tag keywords, so the SAME legend lands differently on
+# a priest, a tax-clerk, and a beggar — and every current and future NPC is covered for free.
+# This is a starting distribution; tune the keyword sets freely. First match wins (most
+# specific leanings before the broad "downtrodden" common-folk bucket).
+_DISPOSITION_KEYWORDS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "loyalist",
+        (
+            "official",
+            "clerk",
+            "magistrate",
+            "collector",
+            "taxman",
+            "tax",
+            "reeve",
+            "warden",
+            "constable",
+            "informant",
+            "governor",
+            "bailiff",
+            "loyalist",
+            "imperial",
+            "quisling",
+            "collaborat",
+        ),
+    ),
+    (
+        "pious",
+        (
+            "priest",
+            "cleric",
+            "monk",
+            "nun",
+            "acolyte",
+            "shrine",
+            "temple",
+            "saint",
+            "devout",
+            "pious",
+            "votary",
+            "friar",
+            "abbot",
+        ),
+    ),
+    (
+        "rebel",
+        (
+            "subversive",
+            "smuggler",
+            "outlaw",
+            "dissident",
+            "rebel",
+            "insurgent",
+            "agitator",
+            "fence",
+            "seditious",
+            "partisan",
+            "saboteur",
+        ),
+    ),
+    (
+        "downtrodden",
+        (
+            "beggar",
+            "peasant",
+            "laborer",
+            "labourer",
+            "farmer",
+            "miner",
+            "dock",
+            "serf",
+            "refugee",
+            "orphan",
+            "destitute",
+            "rag",
+            "poor",
+            "urchin",
+            "widow",
+            "cripple",
+            "drudge",
+        ),
+    ),
+)
+
+
+def disposition_inclination(traits: list[str]) -> str:
+    """Coarse read of how an NPC's disposition inclines toward a sympathetic (rebel-ish)
+    player: 'affinity' (the downtrodden/rebel who rally to a liberator), 'aversion'
+    (loyalist/pious who recoil), or 'neutral'. Used to seed first-contact bonds — e.g. a
+    freed captive whose nature inclines them tips from gratitude into following, while a
+    wary one merely thanks you. The *follow* outcome thus emerges from disposition, not a
+    hard-coded flag."""
+    has_affinity = any(t in _TRAIT_AFFINITY for t in traits)
+    has_aversion = any(t in _TRAIT_AVERSION for t in traits)
+    if has_affinity and not has_aversion:
+        return "affinity"
+    if has_aversion and not has_affinity:
+        return "aversion"
+    return "neutral"
+
+
+def derive_disposition(
+    role: str, traits: list[str], tags: set[str] | None = None
+) -> str | None:
+    """Return one disposition trait (affinity or aversion vocab) for an NPC from its role,
+    flavor traits, and tags — or None when nothing leans (the NPC then drifts at base rate,
+    e.g. a mercenary merchant). General by design: one table classifies every NPC."""
+    haystack = " ".join([role or "", *(traits or []), *sorted(tags or set())]).lower()
+    for disposition, needles in _DISPOSITION_KEYWORDS:
+        if any(needle in haystack for needle in needles):
+            return disposition
+    return None
+
+
 _POSITIVE_AXES = ("loyalty", "admiration", "ideology")
 _NEGATIVE_AXES = ("fear", "resentment")
 

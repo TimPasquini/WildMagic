@@ -299,6 +299,21 @@ _PROP_SCENES: list[tuple[str, str]] = [
 ]
 
 
+# Captives held in the Empire's cells (content workstream A). (name, role, traits, knows):
+# `traits` carry the disposition the bond system reads (a downtrodden farmhand or a defiant
+# insurgent rallies to a liberator and tends to follow; a wary deserter or anxious scribe
+# merely thanks you), so *who joins* emerges from nature, not a flag. `knows` marks the
+# archetypes who might carry a cache lead (the wild-wise, the bookish, the well-travelled).
+_CAPTIVE_ARCHETYPES: tuple[tuple[str, str, tuple[str, ...], bool], ...] = (
+    ("a half-starved farmhand", "captured farmhand", ("gaunt", "downtrodden"), False),
+    ("a captured rebel runner", "captured insurgent", ("wiry", "defiant"), False),
+    ("an old hedge-witch", "captured hedge-witch", ("knowing", "downtrodden"), True),
+    ("a poacher of the fells", "captured poacher", ("weathered", "solitary"), True),
+    ("a debt-bound scribe", "imprisoned scribe", ("bookish", "anxious"), True),
+    ("a deserter of the line", "captured deserter", ("hard-eyed", "wary"), True),
+)
+
+
 class _GenerationMixin:
     """Generation methods extracted from GameEngine."""
 
@@ -488,6 +503,10 @@ class _GenerationMixin:
                 self.spawn_item(gear_name, glyph, x, y, gear_name)
             self._spawn_props_in_room(room, self.state.depth)
 
+        # A literal dungeon: the Empire's cells, holding people you can free (content
+        # workstream A). Reliably present on the first level down, rarer in the deep.
+        self._populate_prison_block(rooms)
+
         down_x, down_y = rooms[-1].center
         state.tiles[down_y][down_x] = STAIRS_DOWN
         self._place_doors()
@@ -508,6 +527,64 @@ class _GenerationMixin:
                     break
 
         self._place_books_in_labeled_rooms()
+
+    def _populate_prison_block(self, rooms: list[Room]) -> None:
+        """Make the dungeon a *literal* dungeon: a cell block of bound captives. Freeing one
+        is a general `freed_captive` deed; whether they then follow you emerges from their
+        nature (disposition + the legend you earn), and a captive who knows where a cache
+        lies may repay you with its location — a real item already in the world, pointed to
+        by a rough direction. All emergent: nothing here forces a follower or a reward."""
+        if len(rooms) < 3:
+            return
+        depth = self.state.depth
+        if self.rng.random() > (0.85 if depth <= 2 else 0.3):
+            return
+        cell_room = self.rng.choice(rooms[1:-1])  # not the entry or the stair room
+        archetypes = list(_CAPTIVE_ARCHETYPES)
+        self.rng.shuffle(archetypes)
+        count = self.rng.randint(2, min(4, len(archetypes)))
+        captives: list[tuple[Entity, bool]] = []
+        for name, role, traits, knows in archetypes[:count]:
+            cx, cy = self._random_open_tile_in_room(cell_room)
+            entity = self.spawn_npc(
+                name,
+                "p",
+                cx,
+                cy,
+                role=role,
+                backstory=(
+                    "Held in the Empire's cells, waiting for a door that never opens."
+                ),
+                traits=list(traits),
+                tags={"captive", "bound", "human"},
+                hp=10,
+                attack=2,
+                defense=0,
+                faction="neutral",
+            )
+            captives.append((entity, knows))
+        self.state.add_message(
+            "Cramped iron cells line this room - there are people locked inside."
+        )
+        # A real cache elsewhere in the dungeon, that a knowledgeable captive can point to.
+        # Seeded sparingly (and only if a knower is among them) so it lands sometimes and
+        # whiffs others — no forcing.
+        knowers = [e for e, knows in captives if knows]
+        if knowers and self.rng.random() < 0.6:
+            other_rooms = [r for r in rooms if r is not cell_room] or [cell_room]
+            cache_room = self.rng.choice(other_rooms)
+            ix, iy = self._random_open_tile_in_room(cache_room)
+            gear_name = self.rng.choice(list(EQUIPMENT_SPECS))
+            glyph = {"weapon": "/", "charm": "*"}.get(
+                EQUIPMENT_SPECS[gear_name]["slot"], "["
+            )
+            self.spawn_item(gear_name, glyph, ix, iy, gear_name)
+            knower = self.rng.choice(knowers)
+            self.state.npc_profiles[knower.id].lead = {
+                "item": gear_name,
+                "x": ix,
+                "y": iy,
+            }
 
     def _generate_test_chamber(self) -> None:
         state = self.state

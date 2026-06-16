@@ -92,8 +92,10 @@ WINDOW_HEIGHT = 800
 
 CONTROLS_HINT = (
     "Keyboard controls active - arrows/WASD/keypad move, > descend, < ascend, o open, "
-    "g pick up, f cast spark, x investigate, c character, j journal, q quests, i inventory, "
-    "period or keypad-5 to wait, F8 watch AI, F9 pause AI, F10 step AI, Esc back to Wild Spell. "
+    "g pick up, f cast spark, x investigate, e examine, r read, u free, z rest, "
+    "b wares, p possess, l inspect, t standing, n followers, h help, c character, "
+    "j journal, q quests, i inventory, period or keypad-5 to wait, F8 watch AI, "
+    "F9 pause AI, F10 step AI, Esc back to Wild Spell. "
     "Tab switches Wild Spell / Controls / Talk; hold Ctrl for a quick control key (Ctrl+c = character)."
 )
 
@@ -747,6 +749,26 @@ class GameUI:
             self.execute_command("spark")
         elif key == pygame.K_x:
             self.execute_command(self._investigate_command())
+        elif key == pygame.K_e:
+            self.execute_command("examine")
+        elif key == pygame.K_r:
+            self.execute_command("read")
+        elif key == pygame.K_u:
+            self.execute_command("free")
+        elif key == pygame.K_z:
+            self.execute_command("rest")
+        elif key == pygame.K_b:
+            self.execute_command("wares")
+        elif key == pygame.K_p:
+            self.execute_command("possess")
+        elif key == pygame.K_l:
+            self.execute_command("inspect")
+        elif key == pygame.K_t:
+            self.execute_command("standing")
+        elif key == pygame.K_n:
+            self.execute_command("followers")
+        elif key == pygame.K_h:
+            self.execute_command("help")
         elif key == pygame.K_c:
             self.character_view_scene.start()
         elif key == pygame.K_q:
@@ -1819,6 +1841,9 @@ class GameUI:
                     for part in wrap_text(summary, 34):
                         lines.append((f"  {part}", (150, 170, 150)))
                 distance = max(abs(entity.x - player.x), abs(entity.y - player.y))
+                if entity.kind == "npc" and "bound" in entity.tags and distance <= 1:
+                    buttons.append((len(lines), "free"))
+                    lines.append(("  [ Free ]", (130, 185, 225)))
                 if entity.kind == "prop" and "book" in entity.tags and distance <= 1:
                     buttons.append((len(lines), f"read {entity.name}"))
                     lines.append(("  [ Read ]", (130, 185, 225)))

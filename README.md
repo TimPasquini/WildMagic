@@ -206,9 +206,13 @@ Use `ollama ps` after a spell cast. The `PROCESSOR` column should show `100% GPU
 - Press `j` for the journal, `q` for quests, `i` for inventory.
 - Press `x` to investigate the room (costs turns; careful search can turn up clues).
   When a clue points at something, stand on or beside it and press `x` again to search it.
+- Press `e` to examine the current room, `r` to read a nearby book, and `u` to free an
+  adjacent bound captive.
 - Press `f` for a safe spark bolt.
 - Press `g` to pick up items under your feet.
 - Press `o` to open an adjacent closed door.
+- Press `z` to rest, `b` to browse nearby wares, `p` to possess a nearby body, `l` to
+  inspect, `t` for standing, `n` for followers, and `h` for command help.
 - Press `>` to descend stairs and `<` to ascend stairs.
 - Press `.` to wait.
 - Press `Esc` to clear the spell input or quit.

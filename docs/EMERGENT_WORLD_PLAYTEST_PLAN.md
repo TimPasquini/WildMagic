@@ -49,30 +49,38 @@ Acceptance: each system shows its signal; no tracebacks; replay matches.
 
 ## Track B — overnight Qwen3.5 auto-playtest
 
-**Prep (code, do first — the autoplayer can't reach these systems yet):** in
-`wildmagic/autoplay.py`, teach the chooser the new verbs and when to use them:
-- Add to `COMMAND_SURFACE` and `EXACT_VERBS`: `standing`, `followers`, `found <name>`,
-  `rest` / `rest until dawn`, and the debug `tick`.
-- Add a coverage-goal bullet: *"Periodically `rest until dawn` to let a day pass so the
-  world reacts; check `standing` and `followers` to read consequences; on `empire_compound`
-  fight imperial soldiers to build a legend; once notable, `found` an organization."*
-- Keep `rest` rate-limited in guidance (it skips time) so episodes still see live play.
-- Re-run the trim test suite after editing.
+**Prep — DONE 2026-06-14 (`wildmagic/autoplay.py`).** The autoplayer now knows the emergent
+verbs and can reach the systems:
+- `standing`/`followers`/`tick` (+ aliases) are in `EXACT_VERBS`; `rest`/`camp`/`sleep` and
+  `found`/`establish` are in `TAIL_VERBS` (optional tail). `COMMAND_SURFACE` documents them and
+  a coverage-goal paragraph tells the agent to fight imperials, periodically `rest until dawn`
+  so the world reacts, read `standing`/`followers`, and `found` an org once notable.
+- **Episode budget is now agent *steps* + wall-clock, not the in-game turn counter.** A
+  `rest until dawn` advances the turn counter by a full day (`TURNS_PER_DAY`), which would
+  have ended an episode on the first rest under the old turn-based cap. `--max-turns` is now
+  the per-episode *step* budget (1 step ≈ 1 turn for ordinary play); `--max-steps` overrides.
+- **Invariant fix:** `rest`/`investigate` are exempt from the Tier-1 `turn_counter_jump`
+  finding (a big legitimate jump is not a bug) — without this, every rest would log a false
+  confirmed bug. Backward counters and other jumps are still caught. Regression test added.
 
-**Invocation (example — tune hours/scenarios to the box):**
+**Invocation (auto, tuned for throughput — tune hours/scenarios to the box):**
 ```
 python -m wildmagic.autoplay --agent ollama --provider auto --hours 8 \
-  --scenario empire_compound --scenario frontier --scenario bazaar \
-  --max-turns 400 --episode-minutes 20 --drain-background \
+  --scenario empire_compound --scenario frontier --scenario bazaar --scenario archive \
+  --max-turns 100 --episode-minutes 30 \
   --run-id emergent_overnight
 ```
 - `--agent ollama` = Qwen3.5 chooses commands; `--provider auto` = real wild-magic + deed
-  interpreter (tests the LLM paths). Use `--provider mock` for a deterministic spine-only
-  soak.
-- `--max-turns 400` (up from 120) gives episodes long enough that a few `rest`s cross
-  multiple days and the Simulator actually runs.
-- Mind the A750 + the **localhost→127.0.0.1** stall (see memory) — point Ollama hosts at
-  `127.0.0.1` or expect ~2s/LLM-call overhead.
+  interpreter + canon (tests the LLM paths). Use `--provider mock` for a fast deterministic
+  spine-only soak at much higher volume.
+- `--max-turns 100` = ~100 agent decisions/episode. With `rest`s interspersed, that crosses
+  several in-game days so the daily Simulator (pressure/backlash/bonds) actually fires.
+- `--episode-minutes 30` is a wall-clock safety cap (the agent call has a 300s×2 timeout, so a
+  single stuck step can be slow; this bounds the damage).
+- **Omit `--drain-background` under `auto`** — it makes canon/prop background work synchronous
+  (the ~15s+/cast hitch). Wild-magic + deed-interpreter are synchronous to the cast regardless,
+  so the LLM paths you care about are still exercised; background canon just runs async.
+- Ollama hosts already resolve to `127.0.0.1` (no localhost/IPv6 stall); num_gpu 999 (A750).
 
 **What to review** (under `logs/autoplay/emergent_overnight/`): the Markdown report +
 per-step JSONL. Grep the logs for evidence each system fired and stayed sane:

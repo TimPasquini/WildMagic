@@ -358,6 +358,11 @@ class GameSession:
                 else:
                     self.engine.found_organization(org_name)
                     success = True
+            elif verb in {"free", "release", "liberate", "unbind", "untie"}:
+                # Free a bound captive on an adjacent tile (costs a turn). The deed, the
+                # bond it seeds, and any secret they share all flow from general systems.
+                action = "free"
+                success = self.engine.free_captive()
             elif verb in {"tick", "simulate", "daytick"}:
                 # Debug trigger for the daily world tick (Phase 0). A free action; the
                 # real 05:00 cadence lands in Phase 0.5. Applies unapplied deeds once.
@@ -2562,6 +2567,7 @@ def command_help() -> list[str]:
         "Journal: 'journal' lists everything the world has told you - rumors heard, claims corroborated, places found true - with a rough direction when one was given. Free, costs no turn.",
         "Standing: 'standing' (or 'reputation'/'factions') shows how the world's powers regard you - the mark your deeds have left on the Empire and those who oppose it. Free, costs no turn.",
         "Followers: 'followers' (or 'retinue') lists those who have come to follow you and the organizations you've founded; 'found <name>' raises a banner of your own. Free, costs no turn.",
+        "Freeing captives: stand next to someone held in a cell and 'free' (or 'release') to strike their chains. What they do then is their own - some take up arms and come to follow you, some simply thank you and go, and a few repay you with what they know.",
         "Talking: stand next to an NPC and 'talk <what you want to say>' (or 'speak'/'say') to start a conversation - it costs a turn, just like any other action.",
         "Trading: some NPCs deal in goods and gold - 'wares' (or 'browse') lists what they have for trade, a free look. Haggle naturally through 'talk' - if a real offer comes together, you'll get a confirmation prompt to 'accept' (or 'yes') or 'reject' (or 'no') before anything changes hands.",
         "Equipment: weapons, armor, clothing, and charms go in their own slots and add to your attack/defense while worn. Equip with 'equip <item>' (or 'wear'/'wield'); take gear off with 'unequip <slot_or_item>' (or 'remove <item>').",
@@ -2728,13 +2734,30 @@ def describe_state(engine: GameEngine) -> list[str]:
         (
             e
             for e in engine.state.entities.values()
-            if e.kind == "npc" and engine.is_visible(e.x, e.y)
+            if e.kind == "npc"
+            and "bound" not in e.tags  # captives get their own floor-wide line below
+            and engine.is_visible(e.x, e.y)
         ),
         key=lambda entity: entity.id,
     ):
         profile = engine.state.npc_profiles.get(npc.id)
         role = f" the {profile.role}" if profile and profile.role else ""
         npcs.append(f"{npc.name}{role} at {npc.x},{npc.y}")
+    # Bound captives are listed floor-wide (like enemies), not visibility-gated: someone
+    # held in a cell is a notable, actionable presence worth knowing about and seeking out
+    # ('free' them when adjacent). Surfaces for the player, the GUI panel, and the agent.
+    captives = []
+    for captive in sorted(
+        (
+            e
+            for e in engine.state.entities.values()
+            if e.kind == "npc" and "bound" in e.tags and e.hp > 0
+        ),
+        key=lambda entity: entity.id,
+    ):
+        captives.append(
+            f"{captive.name} (held, can be freed) at {captive.x},{captive.y}"
+        )
     props = []
     for prop in sorted(
         (
@@ -2783,6 +2806,7 @@ def describe_state(engine: GameEngine) -> list[str]:
         f"Triggers: {len(state.triggers)}",
         "Enemies: " + ("; ".join(enemies) if enemies else "none"),
         "Allies: " + ("; ".join(allies) if allies else "none"),
+        "Captives: " + ("; ".join(captives) if captives else "none"),
         "NPCs: " + ("; ".join(npcs) if npcs else "none"),
         "Props: " + ("; ".join(props) if props else "none"),
         "Current room: "

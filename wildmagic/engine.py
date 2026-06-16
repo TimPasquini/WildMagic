@@ -50,7 +50,12 @@ from .semantics import (
     place_anchor,
     WORLD_ANCHOR,
 )
-from .bonds import DRIFT_THRESHOLD, drift_bond
+from .bonds import (
+    DRIFT_THRESHOLD,
+    derive_disposition,
+    disposition_inclination,
+    drift_bond,
+)
 from .deeds import Deed, DeedLedger, interpret_deed_rules
 from .factions import (
     EMPIRE_PATROLS_START,
@@ -77,12 +82,14 @@ from .regions import Region, get_region
 from .config import get_props_provider, ollama_host
 from .llm_client import ollama_reachable
 from .promises import (
+    DIRECTION_NAMES,
     PROMISE_LEDGER_LIMIT,
     PROMISE_RESERVATION_LIMIT,
     PromiseReservation,
     Objective,
     QuestLogEntry,
     Reward,
+    SpatialHint,
     WorldPromise,
     bind_promise,
     journal_entry,
@@ -648,13 +655,21 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             reward_item_key = reward_item.strip().lower()
             npc_wares[reward_item_key] = npc_wares.get(reward_item_key, 0) + reward_qty
 
+        # Derive a disposition (rebel/loyalist/pious/downtrodden) from role/traits/tags so the
+        # bond system differentiates: the same legend makes a rebel adore you and a loyalist
+        # fear you (content workstream B). Appended to the flavor traits; None for the truly
+        # uncommitted (they drift at base rate).
+        profile_traits = list(traits or [])
+        disposition = derive_disposition(role, profile_traits, npc_tags)
+        if disposition is not None and disposition not in profile_traits:
+            profile_traits.append(disposition)
         self.state.npc_profiles[entity.id] = NPCProfile(
             entity_id=entity.id,
             name=name,
             role=role,
             backstory=backstory,
             appearance=appearance,
-            traits=list(traits or []),
+            traits=profile_traits,
             wares=npc_wares,
             wanted_item=wanted_item,
             wanted_qty=wanted_qty,
@@ -699,6 +714,30 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
     #: How close a creature must be (Chebyshev tiles) to witness a deed. A Phase-0
     #: stand-in for FOV + NPC perception, which Phase A.1 substitutes.
     WITNESS_RADIUS = 8
+    #: How close a civilian must be to a slain imperial to read the kill as *defending*
+    #: them (the imperial was looming over them, not a distant onlooker). Deliberately tight.
+    DEFEND_RADIUS = 2
+
+    def _endangered_civilian_near(self, x: int, y: int) -> Entity | None:
+        """The nearest living non-combatant townsperson close to (x, y) — used to read a kill
+        of an imperial standing over the common folk as *defending* them. A civilian is a
+        talkable NPC who isn't part of the Empire and isn't already your sworn follower
+        (rescuing your own retinue isn't a fresh act of protection). Tight radius: the
+        imperial had to be right on top of them, not merely somewhere in sight."""
+        best: Entity | None = None
+        best_dist = self.DEFEND_RADIUS + 1
+        for entity in self.state.entities.values():
+            if entity.kind != "npc" or not entity.alive:
+                continue
+            if "empire" in entity.tags:
+                continue
+            profile = self.state.npc_profiles.get(entity.id)
+            if profile is not None and "follower" in profile.traits:
+                continue
+            dist = max(abs(entity.x - x), abs(entity.y - y))
+            if dist <= self.DEFEND_RADIUS and dist < best_dist:
+                best, best_dist = entity, dist
+        return best
 
     def _deed_witnesses(self, x: int, y: int, exclude: set[str]) -> list[Entity]:
         """Living NPCs/actors near enough to have seen something happen at (x, y)."""
@@ -819,6 +858,19 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 target_tags=["empire"],
                 evidence_tags=["bloodstain"],
             )
+            # Cutting down an imperial who stood over the common folk *also* reads as
+            # defending them (one act, two deeds — the rules table sorts the consequences).
+            # This is how the "people's champion" / protector legend arises in play.
+            bystander = self._endangered_civilian_near(victim.x, victim.y)
+            if bystander is not None:
+                self.record_deed(
+                    "defended_townsfolk",
+                    magnitude=0.2,
+                    summary=f"stood between the Empire and {bystander.name}",
+                    at=(victim.x, victim.y),
+                    target_tags=["civilian"],
+                    evidence_tags=["survivor_testimony"],
+                )
         elif victim.kind == "npc" or "civilian" in victim.tags:
             self.record_deed(
                 "killed_civilians",
@@ -931,6 +983,104 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             profile.remember("I left your side; I could not follow what you became.")
             if "follower" in profile.traits:
                 profile.traits.remove("follower")
+
+    def _adjacent_bound_captive(self) -> Entity | None:
+        """A bound captive on a tile adjacent (8-dir) to the player — someone to free.
+        Deterministic pick (lowest id) when more than one is in reach."""
+        player = self.state.player
+        best: Entity | None = None
+        for entity in self.state.entities.values():
+            if entity.kind != "npc" or not entity.alive or "bound" not in entity.tags:
+                continue
+            if max(abs(entity.x - player.x), abs(entity.y - player.y)) <= 1:
+                if best is None or entity.id < best.id:
+                    best = entity
+        return best
+
+    def free_captive(self) -> bool:
+        """Free a bound captive on an adjacent tile (content workstream A). A *general* act,
+        not a scripted event: it records a `freed_captive` deed (→ liberator legend +
+        resistance gratitude), turns the freed prisoner to your side, and seeds a grateful
+        bond. Whether that gratitude deepens into *following* you is left to the captive's
+        nature (disposition) and the legend you go on to earn — the daily bond tick decides,
+        so some join and some simply thank you and go. A captive who happens to know where
+        something lies may, in thanks, tell you (a real cache, seeded sparingly)."""
+        if self.state.game_over:
+            return False
+        captive = self._adjacent_bound_captive()
+        if captive is None:
+            self.state.add_message("There is no one bound here to free.")
+            return False
+        captive.tags.discard("bound")
+        captive.tags.add("freed")
+        captive.faction = "ally"  # freed, and grateful enough to take your side
+        self.record_deed(
+            "freed_captive",
+            magnitude=0.4,
+            summary=f"struck the chains from {captive.name}",
+            at=(captive.x, captive.y),
+            target_tags=["civilian", "captive"],
+            evidence_tags=["survivor_testimony"],
+        )
+        self.state.add_message(
+            f"You break {captive.name} free. They stagger up, blinking at the light."
+        )
+        profile = self.state.npc_profiles.get(captive.id)
+        if profile is not None:
+            # Gratitude seeds the bond, scaled by the captive's *nature*: one whose
+            # disposition inclines to your cause tips from thanks into following; a wary or
+            # loyal-hearted one merely thanks you and keeps their distance. So *who* joins
+            # emerges from disposition, not a hard-coded flag (§5.3).
+            bond = profile.bond
+            lean = disposition_inclination(profile.traits)
+            loyalty_seed = {"affinity": 55.0, "neutral": 28.0, "aversion": 6.0}[lean]
+            ideology_seed = {"affinity": 50.0, "neutral": 12.0, "aversion": 4.0}[lean]
+            bond.loyalty = min(100.0, bond.loyalty + loyalty_seed)
+            bond.admiration = min(100.0, bond.admiration + loyalty_seed * 0.6)
+            bond.ideology = min(100.0, bond.ideology + ideology_seed)
+            profile.remember("You freed me from the Empire's cage. I won't forget it.")
+            self._reveal_captive_lead(captive, profile)
+        self.finish_player_turn()
+        return True
+
+    def _reveal_captive_lead(self, captive: Entity, profile: Any) -> None:
+        """A freed captive who knows where a cache lies shares it in gratitude — a real item
+        already placed in the world, pointed to by a rough direction in the journal. Organic
+        and optional: most captives carry no such secret (leads are seeded sparingly at
+        generation, so it lands sometimes and whiffs others)."""
+        lead = profile.lead
+        if not lead:
+            return
+        item = str(lead.get("item") or "something of worth")
+        x, y = int(lead.get("x", captive.x)), int(lead.get("y", captive.y))
+        player = self.state.player
+        direction = ((x > player.x) - (x < player.x), (y > player.y) - (y < player.y))
+        compass = DIRECTION_NAMES.get(direction, "near")
+        where = "close by" if direction == (0, 0) else f"to the {compass}"
+        self.state.add_message(
+            f'{captive.name} leans close: "I owe you my life. Hear this - there is '
+            f'{item} hidden {where}. Go - it is yours."'
+        )
+        self.state.promises.append(
+            WorldPromise(
+                id=f"lead_{captive.id}_{normalize_id(item)}",
+                kind="rumor",
+                subject=item,
+                text=(
+                    f"{captive.name}, freed from the cells, swears {item} lies hidden "
+                    f"{where} of where they were held."
+                ),
+                tags=["lead", "cache", "item"],
+                source=f"dialogue:{captive.name}",
+                source_turn=self.state.turn,
+                origin_zone=(self.state.zone_x, self.state.zone_y),
+                salience=4,
+                confidence=0.8,
+                claimed_space=SpatialHint(mode="direction", direction=direction),
+                status="unverified",
+            )
+        )
+        profile.lead = None  # told once
 
     def found_organization(self, name: str) -> Faction:
         """Raise a player-founded organization — a guild, warband, cult, court (Phase F).

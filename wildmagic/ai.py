@@ -310,6 +310,9 @@ class _AIMixin:
                 s in npc.statuses for s in ["stunned", "frozen", "rooted", "webbed"]
             ):
                 continue
+            # A bound captive cannot flee — they can only wait to be freed.
+            if "bound" in npc.tags:
+                continue
             threats = [
                 e
                 for e in self.state.entities.values()

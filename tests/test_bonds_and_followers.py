@@ -11,7 +11,7 @@ See docs/EMERGENT_WORLD_IMPLEMENTATION.md §3 (Phase F).
 
 from __future__ import annotations
 
-from wildmagic.bonds import Bond
+from wildmagic.bonds import Bond, derive_disposition
 from wildmagic.engine import GameEngine
 
 
@@ -52,6 +52,95 @@ def test_same_legend_lands_opposite_on_rebel_and_loyalist() -> None:
     assert rebel.bond.admiration > 0 and rebel.bond.loyalty > 0
     assert loyalist.bond.resentment > 0
     assert loyalist.bond.loyalty <= 0
+
+
+# --- disposition is derived for every NPC (content workstream B) ------------------
+
+
+def test_derive_disposition_classifies_by_role_trait_and_tag() -> None:
+    assert derive_disposition("temple acolyte", []) == "pious"
+    assert derive_disposition("tax collector", []) == "loyalist"
+    assert derive_disposition("charm-seller", ["quietly subversive"]) == "rebel"
+    assert derive_disposition("rag-and-bone dealer", []) == "downtrodden"
+    # The truly uncommitted lean nowhere (they drift at base rate).
+    assert derive_disposition("spice merchant", ["shrewd", "warm"]) is None
+    # Regression: "innkeeper" must not match the pious keyword set ("keeper").
+    assert derive_disposition("innkeeper", []) is None
+
+
+def test_spawn_npc_auto_derives_disposition_so_strangers_differentiate() -> None:
+    """An NPC spawned with no hand-authored lean still reacts in character: a priest fears an
+    uncanny reputation more than a beggar does, with zero per-NPC authoring."""
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    _legend(engine, "uncanny", 5.0)
+    priest = engine.spawn_npc("village priest", "n", 3, 3, role="priest", backstory="")
+    beggar = engine.spawn_npc("street beggar", "n", 3, 5, role="beggar", backstory="")
+    priest_bond = engine.state.npc_profiles[priest.id]
+    beggar_bond = engine.state.npc_profiles[beggar.id]
+    assert "pious" in priest_bond.traits
+    assert "downtrodden" in beggar_bond.traits
+    engine._simulate_bonds()
+    assert priest_bond.bond.fear > beggar_bond.bond.fear
+
+
+# --- freeing captives (content workstream A) --------------------------------------
+
+
+def _bound_captive(engine: GameEngine, role: str, traits: list[str], dx: int = 1):
+    player = engine.state.player
+    entity = engine.spawn_npc(
+        "a captive",
+        "p",
+        player.x + dx,
+        player.y,
+        role=role,
+        backstory="",
+        traits=traits,
+        tags={"captive", "bound", "human"},
+    )
+    return entity, engine.state.npc_profiles[entity.id]
+
+
+def test_freeing_a_captive_records_a_deed_and_turns_them_to_your_side() -> None:
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    captive, profile = _bound_captive(engine, "captured poacher", ["downtrodden"])
+    assert engine.free_captive()
+    assert "bound" not in captive.tags
+    assert captive.faction == "ally"
+    assert any(d.type == "freed_captive" for d in engine.state.deed_ledger.deeds)
+
+
+def test_sympathetic_captive_follows_but_a_wary_one_only_thanks_you() -> None:
+    """Who joins emerges from disposition, not a flag: a downtrodden captive's gratitude
+    tips into following; a wary one becomes a grateful ally but not a sworn follower."""
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    _, sympathetic = _bound_captive(engine, "captured farmhand", ["downtrodden"], dx=1)
+    engine.free_captive()
+    engine2 = GameEngine(seed=7, scenario="test_chamber")
+    _, wary = _bound_captive(engine2, "captured deserter", ["wary"], dx=1)
+    engine2.free_captive()
+    assert sympathetic.bond.is_follower()
+    assert not wary.bond.is_follower()
+
+
+def test_freed_captive_with_a_lead_points_to_a_real_item_location() -> None:
+    """A grateful captive who knows a cache reveals it as a journal lead with a rough
+    direction — organic, optional (only captives seeded with a lead do this)."""
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    player = engine.state.player
+    captive, profile = _bound_captive(engine, "imprisoned scribe", ["bookish"])
+    profile.lead = {"item": "iron sword", "x": player.x - 3, "y": player.y - 3}
+    engine.free_captive()
+    leads = [p for p in engine.state.promises if "lead" in p.tags]
+    assert leads and leads[0].subject == "iron sword"
+    assert leads[0].claimed_space is not None
+    assert leads[0].claimed_space.direction == (-1, -1)  # to the northwest
+    assert profile.lead is None  # told once
+
+
+def test_free_with_no_adjacent_captive_does_nothing() -> None:
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    assert not engine.free_captive()
 
 
 # --- threshold moments -----------------------------------------------------------

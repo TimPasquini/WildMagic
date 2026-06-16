@@ -399,6 +399,10 @@ class NPCProfile:
     # faction and to org membership; evolves from the player's legend, this NPC's traits,
     # and their memories. See wildmagic/bonds.py.
     bond: Bond = field(default_factory=Bond)
+    # A secret this NPC knows and may share when they have reason to — e.g. a freed captive,
+    # in gratitude, telling you where a cache lies. Shape: {"item", "x", "y"}. None = no
+    # secret. Kept off the dialogue context so it surfaces through the act, not idle chatter.
+    lead: dict[str, Any] | None = None
 
     def bond_feeling(self) -> list[str]:
         """The bond rendered as plain words for prompts/readouts — the math stays

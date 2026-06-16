@@ -282,3 +282,140 @@ affinity/aversion vocab, distributed (some loyalists/pious, some downtrodden/reb
 from role + region (occupied frontier folk lean oppressed; garrison/clergy lean loyalist/
 pious). Until then, bonds work but are uniform. *No code changed for this — surfaced for a
 distribution decision.*
+
+## Autoplay prep for overnight 2026-06-14 (`wildmagic/autoplay.py`)
+
+Ran a short auto-playtest (ollama agent + auto provider, empire_compound, ~4 min): harness is
+healthy post-fix (0 parse/technical failures, sane play, a creative wild cast resolved
+correctly), but it could **not** reach the emergent systems, for three reasons now fixed:
+1. **Agent didn't know the verbs.** Added `standing`/`followers`/`tick` (+aliases) to
+   `EXACT_VERBS`, `rest`/`camp`/`sleep` + `found`/`establish` to `TAIL_VERBS`, documented them
+   in `COMMAND_SURFACE`, and added a coverage-goal paragraph (fight imperials → rest to let the
+   world react → read standing/followers → found an org once notable).
+2. **Episode budget was the in-game turn counter.** A `rest until dawn` jumps it by a full day
+   (`TURNS_PER_DAY`), so the first rest ended the episode. Changed the per-episode budget to
+   **agent steps + wall-clock** (`--max-turns` is now the step budget; 1 step ≈ 1 turn for
+   ordinary play). The turn-based early-break is removed; step/wall-clock/game-over bound it.
+3. **Invariant false-positive.** `turn_counter_jump` (Tier-1) fired on any `turn_after -
+   turn_before > 1` — so every rest would have logged a false confirmed bug. Now `rest`/
+   `investigate` are exempt (backward counters + other jumps still caught). Regression test
+   added (`tests/test_autoplay.py`).
+
+Verified with a stub run: 4 rests in one episode (turns → 5760), episode survives, 0 false
+findings, Empire defenses visibly deplete 19→16, founded org appears in standing/followers.
+Mark chose **`--provider auto`** for the overnight run (real LLM paths). Ready-to-run command +
+throughput notes (omit `--drain-background` under auto) in `EMERGENT_WORLD_PLAYTEST_PLAN.md`
+Track B. Suite: 324 + 23 autoplay tests green.
+
+## Content workstreams A+B 2026-06-14 (make the systems shine)
+
+Plan in `EMERGENT_WORLD_CONTENT_PLAN.md`. Mark chose **A+B together**, prose **mostly
+LLM-narrated**. Implemented:
+
+**B — differentiated reactors (the bonds gap is closed).** `bonds.derive_disposition(role,
+traits, tags)` maps any NPC to one disposition (loyalist/pious/rebel/downtrodden) by keyword;
+wired into `spawn_npc` so *every* current/future NPC is covered with no per-NPC authoring.
+Same legend now lands opposite ways (rebel/downtrodden adore a liberator; loyalist/pious
+resent or fear). Player legend was already in the dialogue context. *Decision still open:* the
+disposition keyword distribution is a starting default — tune per Phase C.
+
+**A — completing the deed palette (emission sites + world objects).**
+- `defended_townsfolk`: killing an imperial within `DEFEND_RADIUS=2` of a non-follower
+  civilian *also* records this deed (one act, two deeds) → the `protector` legend is now
+  reachable in play.
+- **Literal Hollowmere dungeon with prisoners** (Mark's request): `_populate_prison_block`
+  adds a cell block of bound captives to dungeon floors (reliable on the first level down).
+  A new `free`/`release` command (`engine.free_captive`) records a `freed_captive` deed,
+  turns the captive to your side (faction → ally; ally AI fights for you), and seeds a
+  gratitude bond **scaled by their disposition** — so a sympathetic captive's gratitude tips
+  into *following* while a wary one only thanks you (emergent, not hard-coded). A captive
+  archetype pool (`_CAPTIVE_ARCHETYPES`) mixes follow-inclined and neutral natures.
+- **Organic item lead:** a captive seeded (sparingly, ~60% and only for "knower" archetypes)
+  with a real cache reveals it on being freed — a journal `rumor` promise with a rough
+  compass direction (`SpatialHint`), pointing at an actual placed item. Occasional whiffs by
+  design (no forcing). `NPCProfile.lead` holds the secret, kept off the dialogue context.
+- Autoplayer taught the `free` verb + a "descend and free prisoners" coverage nudge.
+
+Verified end-to-end (descend → free 4 captives: rebel/downtrodden followed as allies, the
+wary deserter thanked-you-but-didn't, and revealed "leather vest to the northwest" → journal
+lead + the real item in the world). **Deferred:** `spared_enemy` emission (workstream A's
+third deed). Suite: **333 passing.**
+
+### Autoplay run findings 2026-06-15 (`pt_captives`, ollama agent + mock, dungeon, 2 ep)
+Clean: 95 steps, 0 deaths, 0 parse/technical failures, 0 tier-1/2 findings — the new code
+(captives/dispositions/free) survived 95 real agent steps. But the agent never engaged the
+new content. Useful findings (reachability/steering, not bugs):
+1. **Observation asymmetry (the real blocker).** `describe_state` lists *enemies* floor-wide
+   (`living_enemies()`) but *NPCs only when visible* (`is_visible`). Both seeds had captives
+   (3 and 4) but 10–20 tiles off through unexplored dungeon, so state read "NPCs: none" — the
+   agent had **no signal captives existed** (0/95 steps with a visible NPC) and couldn't seek
+   them. `describe_state` is the shared readout (CLI `inspect`, GUI panel, agent), and enemies
+   are *already* shown floor-wide there, so surfacing bound captives the same way is consistent
+   (it's an omniscient summary, not FOV). **Recommended fix:** add a "Captives:" line listing
+   bound captives floor-wide (helps the agent seek them and tells a player they're held here).
+2. **Move-bias.** 87/95 commands were `move` (only 3 verbs used: move/cast/inspect); coverage
+   nudges for free/rest/standing/found/descend went unused. Recommend surfacing opportunities
+   via the existing `nudge` field (e.g. "captives held on this floor — go free them") and/or a
+   periodic "you haven't used X" nudge.
+3. **Episodes ended on wall-clock (6 min ≈ 47 steps), not max-turns** — for overnight, raise
+   `--episode-minutes` so exploration can reach distant content and rests can cross days.
+
+**Fixes applied 2026-06-15 (findings #1 + #2):**
+- `describe_state` now lists **bound captives floor-wide** in a dedicated `Captives:` line
+  (like enemies), excluded from the visibility-gated `NPCs:` line to avoid double-listing.
+  Shared readout, so CLI `inspect`, the GUI panel, and the agent all gain it. Test added.
+- Autoplay `EpisodeRunner._opportunity_nudge`: when bound captives exist, nudges the agent —
+  always when one is adjacent ("'free' them now"), else every 4th step toward the nearest
+  ("People are held in cells … make your way there and 'free' them"). Yields to higher-
+  priority repeat/softlock nudges. Suite **334 passing.**
+
+A follow-up run showed the nudge+surface still wasn't enough: the agent headed the right way
+but **got wall-stuck and thrashed ~40 steps** (greedy "move west" into a wall; the LLM can't
+route around obstacles), and the same-command softlock check missed it (it varied directions).
+
+**Fix #1 (pathfinding hint) 2026-06-15:** `EpisodeRunner._captive_step_dir` uses the engine's
+BFS `next_path_step` to give the agent the cardinal move that actually makes progress toward
+the nearest captive (routes around walls / through unlocked doors), used in both the nudge
+("the open path runs {dir} from here - move {dir}") and the `expedition_direction` override.
+Also added a **`movement_stall` tier-2 finding** (`_recent_positions` deque): flags when ≤2
+distinct tiles are occupied over 12 steps — catches wall-thrash the repeated-command check
+misses. Suite **334 passing**.
+
+## AUTONOMOUS LOOP IN PROGRESS (/goal, 2026-06-15)
+**Directive:** make fix #1 (done), then run **8 × 1-hour** auto-playtest cycles, analyzing +
+fixing issues between each (8h total). **Provider choice: `mock`** — the goal is finding
+*fixable* issues, and mock gives ~3-5× the step volume of `auto`, exercising the whole
+deterministic engine + all new content (deeds/bonds/captives/rest) at scale; `auto`'s extra
+value (wild-magic/deed-interpreter/canon LLM paths) is mostly graceful/tuning, not bugs. Runs:
+`logs/autoplay/pt_loop_cycleN/`. If resuming mid-loop: check which `pt_loop_cycleN` dirs exist
++ their reports to find the current cycle; fix findings, then launch the next cycle.
+
+**Cycle log:**
+- **Cycle 1** ✅ 6 ep, 454 steps, 1 (legit wild) death. **0 tier-1, 0 parse/cast/canon failures.**
+  Pathfinding fix worked — agent reached + **freed 4 captives** (dungeon), freed allies fought
+  the skeletons. Verb variety up (free/talk/read/investigate). 3× `movement_stall` = agent
+  *interaction loops* (oscillating 2 tiles repeating talk/read in the archive), exits open the
+  whole time — not an engine bug. **Fix:** added an anti-stall nudge ("you're stuck, leave
+  decisively") so flagged stalls break out and recover steps. No engine bugs to fix. 334 pass.
+- **Cycle 2** ✅ 6 ep, 488 steps, 1 legit wild death. **0 tier-1, 0 parse/cast/canon failures.**
+  2× `movement_stall` — one was a real **fix-#1 gap**: when captives are *unreachable*
+  (`next_path_step`→None, e.g. cell block behind the locked door), the straight-line *fallback*
+  pointed the agent into a wall → ~20-step thrash. **Fix:** `_captive_step_dir` now returns None
+  when there's no path (no straight-line fallback); the nudge then suppresses the direction
+  (occasional "find another route" note) and exploration resumes its normal drift. 334 pass.
+- **Cycle 3** ✅ 5 ep, 465 steps, 0 deaths. **0 tier-1, 0 parse/cast/canon failures, 0 game
+  glitches** (scanned messages). 11× `movement_stall` — all the *cautious* persona oscillating
+  in 2-tile dead-ends, **ignoring** the text-only anti-stall nudge. **Fix A:** on stall, now
+  *physically* re-point `expedition_direction` to an open adjacent dir away from the repeated
+  one (not just words). Also noticed a coverage gap: **the agent never rests**, so the daily
+  Simulator (backlash/bonds/standing/posters) is never exercised. **Fix B:** `_rest_nudge` —
+  when unapplied deeds exist and no enemy is within 2 tiles, periodically nudge "rest until
+  dawn … then check standing/followers", to activate the daily layer. 334 pass.
+- **Cycle 4** ✅ 7 ep, 481 steps, 3 legit deaths. **0 tier-1, 0 parse/cast/canon failures.**
+  `movement_stall` down 11→2 (physical redirect working). But **still 0 rests** — the agent
+  ignores the text rest-nudge just like the stall nudge, so the daily Simulator layer remained
+  unexercised. **Fix:** gated **harness auto-rest** (`_should_autorest`): when ≥25 steps since
+  last rest, deeds await the tick, and no enemy within 3 tiles, the harness injects `rest until
+  dawn` itself — a deliberate coverage action so backlash/bonds/pressure/deed-application
+  actually run (and can be bug-checked). Ran pre-commit (ruff + ruff-format): fixed 3 lint
+  issues in the new test (unused var, ambiguous `l`); all hooks pass. 334 pass.
