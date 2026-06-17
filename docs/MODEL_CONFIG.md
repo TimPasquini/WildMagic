@@ -133,21 +133,32 @@ resolver calls.
 
 ## Canon prewarming
 
-Background canon prewarming is off by default so the game never starts extra LLM work
-without an explicit opt-in. The first slice is now a small saturation queue: it paints
-the current labeled room first, visible non-book entities as far-look details next, then
-nearby visible book identities.
+Two background tiers share one canon worker. **The book pipeline is always-on** (top
+priority) and works strictly nearest-first: for each book, closest to farthest, it
+materializes the title (cheap, whole zone, so every shelf is readable by name) and then —
+for nearby visible books — the full pages (under the canonical book id, so `read` reuses
+them with no wait). It runs independent of the saturation flag. The broader **saturation**
+tier is off by default so the game never starts extra LLM work without an explicit opt-in;
+when on it adds the current labeled room's flavor and far-look entity details *behind* the
+book pipeline.
+
+The queue advances both on player turns and, in the pygame UI, on idle frames
+(`pump_canon_prewarm`), so titles and pages keep materializing while the player stands
+still and the queued job is re-chosen by proximity each time a slot frees.
 
 | Variable | Default | Notes |
 |---|---|---|
-| `WILDMAGIC_CANON_PREWARM_ENABLED` | off | when on, room flavor, far-look entity details, and nearby visible book previews can materialize in the background |
-| `WILDMAGIC_CANON_PREWARM_LIMIT` | 1 | maximum queued/in-flight background canon jobs |
+| `WILDMAGIC_BOOK_TITLES` | on | the always-on book pipeline: titles for every book in the zone (ignores visibility/distance) + full pages for nearby visible books, nearest-first; the test suite forces it off |
+| `WILDMAGIC_CANON_PREWARM_ENABLED` | off | when on, adds room flavor and far-look entity details behind the book pipeline |
+| `WILDMAGIC_CANON_PREWARM_LIMIT` | 2 | max queued/in-flight background canon jobs. 2 keeps one running and one queued on the single worker so it never idles; 0 disables all background canon (the book pipeline included) |
 
 Prewarming uses the background route (`LORE`/`BACKGROUND` Ollama options) and the
 `WILDMAGIC_BACKGROUND_CANON_MODEL` model, falling back to `WILDMAGIC_LORE_MODEL`.
-It can materialize `room_flavor`, far-look `object_detail`/`npc_detail`/`creature_detail`,
-and `book_preview` records. Full book pages still come from `read`, and close-study
-details still come from player investigation.
+It can materialize `book_title`, full `book`, `room_flavor`, and far-look
+`object_detail`/`npc_detail`/`creature_detail` records. A book's full pages are prewarmed
+only after its title exists (so they inherit the shelf name); a book read before the
+painter reaches it materializes on the urgent channel on demand. Close-study details
+still come from player investigation.
 
 ### The model-reload (thrash) warning
 

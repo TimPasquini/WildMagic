@@ -94,8 +94,8 @@ CONTROLS_HINT = (
     "Keyboard controls active - arrows/WASD/keypad move, > descend, < ascend, o open, "
     "g pick up, f cast spark, x investigate, e examine, r read, u free, z rest, "
     "b wares, p possess, l inspect, t standing, n followers, h help, c character, "
-    "j journal, q quests, i inventory, period or keypad-5 to wait, F8 watch AI, "
-    "F9 pause AI, F10 step AI, Esc back to Wild Spell. "
+    "j journal, q quests, i inventory, period or keypad-5 to wait, F7 generation queue, "
+    "F8 watch AI, F9 pause AI, F10 step AI, Esc back to Wild Spell. "
     "Tab switches Wild Spell / Controls / Talk; hold Ctrl for a quick control key (Ctrl+c = character)."
 )
 
@@ -570,6 +570,11 @@ class GameUI:
         self.inspect_button_rects: list[tuple[pygame.Rect, str]] = []
         self.book_popup: dict[str, Any] | None = None
 
+        # F7 debug overlay: the background generation (canon prewarm) queue.
+        self.queue_debug_active = False
+        self.queue_debug_scroll = 0
+        self._queue_debug_max_scroll = 0
+
         # Menu state
         self.menu_active = False
         self.menu_page: str = "main"  # "main" | "config" | "model"
@@ -598,6 +603,10 @@ class GameUI:
         )
         self._command_future: concurrent.futures.Future | None = None
         self._command_label: str = ""
+        # Coalesce turn-advancing actions to one per frame: a busy frame can buffer
+        # several key-repeat KEYDOWNs that `pygame.event.get()` then delivers in one
+        # batch, which otherwise steps the player twice on a single intended move.
+        self._acted_this_frame = False
 
         # Out-of-process character-portrait generator (SDXL in its own venv). Lazily
         # spawns a worker on first request; absent venv -> available() is False.
@@ -645,6 +654,7 @@ class GameUI:
         running = True
         try:
             while running:
+                self._acted_this_frame = False
                 for event in pygame.event.get():
                     if event.type == pygame.QUIT:
                         running = False
@@ -664,6 +674,11 @@ class GameUI:
                     scene.update()
                 else:
                     self.autoplay.update()
+                    # Advance background canon (book titles/pages, saturation) during
+                    # idle frames so it doesn't stall between player actions — but not
+                    # while a blocking command is mutating state on the worker thread.
+                    if not self._awaiting_command():
+                        self.session.pump_canon_prewarm()
                 try:
                     self.draw()
                 except RuntimeError:
@@ -794,6 +809,28 @@ class GameUI:
         scene = self._active_scene()
         if scene is not None:
             scene.handle_key(event)
+            return
+        if event.key == pygame.K_F7:
+            self.queue_debug_active = not self.queue_debug_active
+            self.queue_debug_scroll = 0
+            return
+        if self.queue_debug_active:
+            # While the generation-queue overlay is up it owns the keyboard: scroll
+            # it and close it, but swallow everything else so the world stays put.
+            if event.key == pygame.K_ESCAPE:
+                self.queue_debug_active = False
+            elif event.key in (pygame.K_UP, pygame.K_PAGEUP, pygame.K_k):
+                step = 8 if event.key == pygame.K_PAGEUP else 1
+                self.queue_debug_scroll = max(0, self.queue_debug_scroll - step)
+            elif event.key in (pygame.K_DOWN, pygame.K_PAGEDOWN, pygame.K_j):
+                step = 8 if event.key == pygame.K_PAGEDOWN else 1
+                self.queue_debug_scroll = min(
+                    self._queue_debug_max_scroll, self.queue_debug_scroll + step
+                )
+            elif event.key == pygame.K_HOME:
+                self.queue_debug_scroll = 0
+            elif event.key == pygame.K_END:
+                self.queue_debug_scroll = self._queue_debug_max_scroll
             return
         if event.key == pygame.K_F8:
             self.autoplay.toggle()
@@ -1360,7 +1397,15 @@ class GameUI:
                 self.session.execute_command, command
             )
             return None
-        return self.execute_command_blocking(command)
+        # Drop a second turn-advancing action buffered into the same frame (a single
+        # intended move that key-repeat duplicated). Free actions before the first
+        # turn-consuming one still run; the flag is only raised once a turn is spent.
+        if self._acted_this_frame:
+            return None
+        result = self.execute_command_blocking(command)
+        if result is not None and result.consumed_turn:
+            self._acted_this_frame = True
+        return result
 
     def execute_command_blocking(self, command: str) -> ActionResult:
         """Run a command synchronously (blocking on any LLM call) and post-process.
@@ -1670,6 +1715,8 @@ class GameUI:
             self.draw_menu()
         if self.book_popup is not None:
             self.draw_book_popup()
+        if self.queue_debug_active:
+            self.draw_queue_debug()
 
     def draw_resolving_indicator(self) -> None:
         """A small banner over the map while an urgent command resolves, so the player
@@ -1773,7 +1820,19 @@ class GameUI:
 
             if entity.kind == "prop":
                 lines.append((f"[{entity.char}] {entity.name.title()}", GOLD))
-                if entity.description:
+                if "book" in entity.tags:
+                    # Books show their materialized title (the name above) and, once
+                    # read/prewarmed, their summary — never the verbose grammar
+                    # placeholder. Until the title call lands, say so.
+                    if not entity.details.get("title_materialized"):
+                        lines.append(("  You can't read the title yet.", MUTED))
+                    if (
+                        entity.details.get("summary_materialized")
+                        and entity.description
+                    ):
+                        for part in wrap_text(entity.description, 34):
+                            lines.append((f"  {part}", TEXT))
+                elif entity.description:
                     for part in wrap_text(entity.description, 34):
                         lines.append((f"  {part}", TEXT))
                 if entity.tags:
@@ -2028,6 +2087,138 @@ class GameUI:
             hint,
             (bx + (box_w - hint.get_width()) // 2, by + box_h - pad // 2 - small_h + 2),
         )
+
+    _QUEUE_STATUS_STYLE = {
+        "done": ("done", MODE_GREEN),
+        "running": ("generating", GOLD),
+        "queued": ("queued", ACCENT),
+        "pending": ("waiting", MUTED),
+        "far": ("(too far)", (110, 110, 120)),
+    }
+
+    def draw_queue_debug(self) -> None:
+        """F7 overlay: the background generation (canon prewarm) queue. Shows what the
+        single worker is doing now and queued next, then the whole zone's books with
+        their title/pages state in proximity order. Rebuilt live each frame, so it
+        updates as the queue drains; the book list scrolls."""
+        snap = self.session.canon_queue_snapshot()
+
+        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        self.screen.blit(overlay, (0, 0))
+
+        box_w = 780
+        box_h = min(700, WINDOW_HEIGHT - 60)
+        bx = (WINDOW_WIDTH - box_w) // 2
+        by = (WINDOW_HEIGHT - box_h) // 2
+        pad = 22
+        row_h = self.small_font.get_linesize()
+        pygame.draw.rect(self.screen, PANEL, (bx, by, box_w, box_h), border_radius=6)
+        pygame.draw.rect(
+            self.screen, PANEL_EDGE, (bx, by, box_w, box_h), 1, border_radius=6
+        )
+
+        cx = bx + pad
+        cy = by + pad
+
+        def emit(text: str, color, font=None) -> None:
+            nonlocal cy
+            surf = (font or self.small_font).render(text, True, color)
+            self.screen.blit(surf, (cx, cy))
+            cy += (font or self.small_font).get_linesize()
+
+        emit("Generation Queue", GOLD, self.ui_font)
+        cy += 2
+        emit("F7 or Esc to close · arrows / PgUp / PgDn / wheel to scroll", MUTED)
+        cy += 6
+
+        flags = (
+            f"titles {'on' if snap['titles_enabled'] else 'off'}   "
+            f"saturation {'on' if snap['saturation_enabled'] else 'off'}   "
+            f"depth {snap['limit']}"
+        )
+        emit(flags, TEXT)
+        emit(
+            f"in flight: {snap['pending_canon']} canon · "
+            f"{snap['pending_lore']} lore · {snap['pending_flesh']} flesh",
+            MUTED,
+        )
+        cy += 8
+
+        emit("Worker — now & next", ACCENT)
+        if snap["now_next"]:
+            for job in snap["now_next"]:
+                label_text, color = self._QUEUE_STATUS_STYLE.get(
+                    job["status"], (job["status"], TEXT)
+                )
+                kind = {"book_title": "title", "book": "pages"}.get(
+                    job["kind"], job["kind"]
+                )
+                name = job["label"]
+                if len(name) > 48:
+                    name = name[:45] + "..."
+                emit(f"  [{label_text}] {kind}: {name}", color)
+        else:
+            emit("  idle — nothing queued", MUTED)
+        cy += 8
+
+        emit(f"Books in zone ({len(snap['books'])}) — nearest first", ACCENT)
+        cy += 2
+
+        # Columns for the scrollable book table.
+        col_dist = cx + 4
+        col_name = col_dist + 56
+        col_title = bx + box_w - 260
+        col_pages = bx + box_w - 130
+        header_y = cy
+        for label, x in (
+            ("dist", col_dist),
+            ("book", col_name),
+            ("title", col_title),
+            ("pages", col_pages),
+        ):
+            self.screen.blit(self.small_font.render(label, True, MUTED), (x, header_y))
+        cy += row_h + 2
+
+        books = snap["books"]
+        list_bottom = by + box_h - pad - row_h
+        capacity = max(1, (list_bottom - cy) // row_h)
+        self._queue_debug_max_scroll = max(0, len(books) - capacity)
+        self.queue_debug_scroll = max(
+            0, min(self.queue_debug_scroll, self._queue_debug_max_scroll)
+        )
+        start = self.queue_debug_scroll
+        visible = books[start : start + capacity]
+
+        name_chars = max(8, (col_title - col_name) // 8 - 1)
+        for book in visible:
+            self.screen.blit(
+                self.small_font.render(f"d{book['distance']}", True, MUTED),
+                (col_dist, cy),
+            )
+            name = book["name"]
+            if len(name) > name_chars:
+                name = name[: name_chars - 1] + "…"
+            self.screen.blit(self.small_font.render(name, True, TEXT), (col_name, cy))
+            for key, x in (("title", col_title), ("pages", col_pages)):
+                label_text, color = self._QUEUE_STATUS_STYLE.get(
+                    book[key], (book[key], TEXT)
+                )
+                self.screen.blit(
+                    self.small_font.render(label_text, True, color), (x, cy)
+                )
+            cy += row_h
+
+        if self._queue_debug_max_scroll > 0:
+            shown_end = start + len(visible)
+            footer = (
+                f"showing {start + 1}–{shown_end} of {len(books)}  "
+                f"({'more below' if shown_end < len(books) else 'end'})"
+            )
+            self.screen.blit(
+                self.small_font.render(footer, True, MUTED),
+                (cx, by + box_h - pad - row_h + 4),
+            )
 
     def draw_menu(self) -> None:
         overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
@@ -3567,6 +3758,12 @@ class GameUI:
 
     def handle_mouse_wheel(self, event: pygame.event.Event) -> None:
         if self._active_scene() is not None:
+            return
+        if self.queue_debug_active:
+            self.queue_debug_scroll = max(
+                0,
+                min(self._queue_debug_max_scroll, self.queue_debug_scroll - event.y),
+            )
             return
         pos = pygame.mouse.get_pos()
         if self.llm_content_rect.collidepoint(pos):

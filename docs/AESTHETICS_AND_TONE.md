@@ -185,7 +185,6 @@ earns its place (an imperial containment site, a tradition's ossuary), it must b
 
 - Proper names: the Empire itself, the rival nation, the three conquered kingdoms,
   the client kingdom, the clerk, the emperor.
-- Who/what is the emperor? (A person? An office? Something stranger?)
 - Geography sketch: how regions, runs, and the overworld relate.
 - The full roster of origins and which tradition each ties to. (v1 shipped: four —
   bone-singer/bone, deserter charter mage/charter, desert nomad/sound, merfolk

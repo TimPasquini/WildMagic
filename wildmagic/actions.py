@@ -14,6 +14,7 @@ from .canon import (
     resolve_canon,
 )
 from .config import (
+    book_titles_enabled,
     canon_prewarm_enabled,
     canon_prewarm_limit,
     flesh_enabled,
@@ -146,6 +147,11 @@ class CanonSaturationJob:
     kind: str
     context: dict[str, Any]
     superseded_by: str | None = None
+
+
+# Lore claims a single book may bind, enforced both as the canon CONTRACT quota
+# (prompt-side) and as the lore-extraction drain clamp (engine-side).
+BOOK_CLAIM_QUOTA = 2
 
 
 class GameSession:
@@ -935,11 +941,14 @@ class GameSession:
             return False, False, None, ["There is no book within reach to read."]
         record_id = f"canon_book_{normalize_id(book.id)}"
         existing = self.engine.state.canon_records.get(record_id)
-        replayed_materialization = False
+        already_read = bool(book.details.get("read"))
+
+        # Replay path: the pages were materialized live (an on-demand read, or a
+        # background prewarm that drained during this action) and recorded at this
+        # apply point. Inject them before deciding anything.
         if existing is None and replay_canon is not None:
             self.apply_recorded_canon(replay_canon.get("after"))
             existing = self.engine.state.canon_records.get(record_id)
-            replayed_materialization = existing is not None
             replayed_failure = replay_canon.get("materialization")
             if (
                 existing is None
@@ -954,66 +963,74 @@ class GameSession:
                         f"The ink swims and refuses to settle. ({replayed_failure.get('error')})"
                     ],
                 )
-        if existing is not None:
-            if replayed_materialization:
-                self._apply_book_canon(book, existing)
-                self.engine.state.add_message(
-                    f"You read {existing.title or book.name}."
-                )
-                self.engine.finish_player_turn()
-                return (
-                    True,
-                    False,
-                    {"record": existing.to_dict(), "replayed": True},
-                    self._present_canon(existing),
-                )
-            return (
-                True,
-                False,
-                {"record": existing.to_dict(), "reused": True},
-                self._present_canon(existing),
-            )
 
-        context = self._canon_context_for_book(book, record_id)
-        resolution = resolve_canon(self.canon_provider, context)
-        self.canon_provider_label = resolution.provider_name
-        canon_record = {
-            "kind": "book",
-            "provider": resolution.provider_name,
-            "technical_failure": resolution.technical_failure,
-            "error": resolution.error,
-            "record": resolution.record.to_dict() if resolution.record else None,
-            "raw_response": resolution.raw_response,
-            "audit_path": resolution.audit_path,
-        }
-        if resolution.technical_failure or resolution.record is None:
-            return (
-                False,
-                True,
-                canon_record,
-                [f"The ink swims and refuses to settle. ({resolution.error})"],
-            )
-        applied = self.engine.add_canon_record(resolution.record)
-        self._canon_apply_buffer.append(applied.to_dict())
-        self._apply_book_canon(book, applied)
-        self.engine.state.add_message(f"You read {applied.title or book.name}.")
+        # If a background prewarm of this book's pages is already in flight, wait for
+        # it and reuse it rather than launching a second, divergent generation on the
+        # urgent channel — that double-generation is what made a read show different
+        # text than the prewarmed pages. (Replay reuses recorded canon, never blocks.)
+        if (
+            existing is None
+            and not self.replay_mode
+            and record_id in self._queued_canon_ids
+        ):
+            self.drain_canon_prewarm(block=True)
+            existing = self.engine.state.canon_records.get(record_id)
+
+        canon_record: dict[str, Any] | None = None
+        if existing is None:
+            # Not prewarmed (and none in flight, or it failed): the player is blocked,
+            # so materialize the full pages on the urgent channel now.
+            context = self._canon_context_for_book(book, record_id)
+            resolution = resolve_canon(self.canon_provider, context)
+            self.canon_provider_label = resolution.provider_name
+            canon_record = {
+                "kind": "book",
+                "provider": resolution.provider_name,
+                "technical_failure": resolution.technical_failure,
+                "error": resolution.error,
+                "record": resolution.record.to_dict() if resolution.record else None,
+                "raw_response": resolution.raw_response,
+                "audit_path": resolution.audit_path,
+            }
+            if resolution.technical_failure or resolution.record is None:
+                return (
+                    False,
+                    True,
+                    canon_record,
+                    [f"The ink swims and refuses to settle. ({resolution.error})"],
+                )
+            existing = self.engine.add_canon_record(resolution.record)
+            self._canon_apply_buffer.append(existing.to_dict())
+
+        # The book's canon now exists (prewarmed in the background, freshly
+        # materialized above, or replayed). Its title/summary become the in-world
+        # identity whether or not the player has spent a turn reading it.
+        self._apply_book_canon(book, existing)
+        record = canon_record or {"record": existing.to_dict(), "reused": True}
+        if already_read:
+            # Free reread: the pages are already canon — no turn, no re-extraction.
+            return True, False, record, self._present_canon(existing)
+
+        # First read consumes the turn and harvests lore claims from the pages.
+        book.details["read"] = True
+        self.engine.state.add_message(f"You read {existing.title or book.name}.")
         self.engine.finish_player_turn()
         if not self.replay_mode:
-            quota = int(context.get("contract", {}).get("claim_quota") or 0)
-            if quota > 0:
-                self._enqueue_lore_extraction(
-                    self._lore_context_for_book(book, applied),
-                    canon_record,
-                    claim_quota=quota,
-                )
-        return True, False, canon_record, self._present_canon(applied)
+            self._enqueue_lore_extraction(
+                self._lore_context_for_book(book, existing),
+                record,
+                claim_quota=BOOK_CLAIM_QUOTA,
+            )
+        return True, False, record, self._present_canon(existing)
 
     def _apply_book_canon(self, book: Any, record: Any) -> None:
         """Materialized title and summary become the book's in-world identity."""
         if record.title:
             book.name = record.title
+            book.details["title_materialized"] = True
         if record.summary:
             book.description = record.summary
+            book.details["summary_materialized"] = True
         author = (
             record.llm_choices.get("author")
             if isinstance(record.llm_choices, dict)
@@ -1022,21 +1039,40 @@ class GameSession:
         if author and record.summary and author not in record.summary:
             book.description = f"{record.summary} (by {author})"
 
+    def _book_catalog(self, book: Any) -> tuple[dict[str, str], list[str]]:
+        """A book's grammar seed split into (scalar catalog fields, subjects list).
+        Subjects are the book's durable 1-4-topic metadata; they fall back to the
+        catalog's topic axes for books seeded before subjects were recorded."""
+        raw_seed: dict[str, Any] = {}
+        if isinstance(getattr(book, "details", None), dict):
+            candidate = book.details.get("book_seed")
+            if isinstance(candidate, dict):
+                raw_seed = candidate
+        catalog = {
+            str(key): str(value)
+            for key, value in raw_seed.items()
+            if isinstance(value, (str, int, float)) and str(value).strip()
+        }
+        subjects = [
+            str(subject).strip()
+            for subject in (raw_seed.get("subjects") or [])
+            if str(subject).strip()
+        ]
+        if not subjects:
+            subjects = [
+                catalog[key]
+                for key in ("topic", "secondary_topic", "discipline")
+                if catalog.get(key)
+            ]
+        return catalog, subjects[:4]
+
     def _canon_context_for_book(self, book: Any, record_id: str) -> dict[str, Any]:
         state = self.engine.state
         room = self.engine.room_profile_at(book.x, book.y)
         room_dict = room.to_public_dict() if room is not None else None
         room_tags = list(room.tags) if room is not None else []
         room_topics = list(room.topics) if room is not None else []
-        book_seed = {}
-        if isinstance(getattr(book, "details", None), dict):
-            raw_seed = book.details.get("book_seed")
-            if isinstance(raw_seed, dict):
-                book_seed = {
-                    str(key): str(value)
-                    for key, value in raw_seed.items()
-                    if isinstance(value, (str, int, float)) and str(value).strip()
-                }
+        book_seed, subjects = self._book_catalog(book)
         seed_tags = {
             normalize_id(str(value))
             for key, value in book_seed.items()
@@ -1060,8 +1096,9 @@ class GameSession:
             or set(promise.tags) & set(thread_tags)
         ][:2]
         base_tags = sorted({*book.tags, "book"})
-        preview_id = f"canon_book_preview_{normalize_id(book.id)}"
-        preview = self.engine.state.canon_records.get(preview_id)
+        title_id = f"canon_book_title_{normalize_id(book.id)}"
+        title_record = self.engine.state.canon_records.get(title_id)
+        materialized_title = title_record.title if title_record else None
         return {
             "record_id": record_id,
             "kind": "book",
@@ -1084,7 +1121,8 @@ class GameSession:
                     "description": book.description,
                     "tags": sorted(book.tags),
                     "catalog": book_seed,
-                    "preview": preview.to_dict() if preview else None,
+                    "subjects": subjects,
+                    "title": materialized_title,
                 },
                 "attachment": {"kind": "prop", "entity_id": book.id},
             },
@@ -1094,7 +1132,7 @@ class GameSession:
             },
             "contract": {
                 "allowed_outputs": ["title", "summary", "text", "tags", "llm_choices"],
-                "claim_quota": 2,
+                "claim_quota": BOOK_CLAIM_QUOTA,
                 "book_guidance": {
                     "use_catalog_fields": [
                         "genre",
@@ -1144,31 +1182,50 @@ class GameSession:
             },
         }
 
-    def _canon_context_for_book_preview(
+    def _canon_context_for_book_title(
         self, book: Any, record_id: str
     ) -> dict[str, Any]:
-        context = self._canon_context_for_book(book, record_id)
-        context["kind"] = "book_preview"
-        context["source"] = "background"
-        context["base_tags"] = sorted({*context.get("base_tags", []), "book_preview"})
-        context["allowed_tags"] = sorted(
-            {*context.get("allowed_tags", []), "book_preview"}
-        )
-        context["contract"] = {
-            "allowed_outputs": ["title", "summary", "text", "tags", "llm_choices"],
-            "claim_quota": 0,
-            "book_guidance": context.get("contract", {}).get("book_guidance", {}),
-            "forbidden": [
-                "pages",
-                "treasure locations",
-                "guaranteed allies",
-                "map exits",
-                "named player rewards",
-                "stats",
-                "spell effects",
-            ],
+        """A deliberately tiny seed packet for the always-on title call: just the
+        subjects and the catalog axes that shape a title. No world/place/threads
+        block, so the prompt stays short and the call stays cheap — a title has no
+        mechanical stakes, so minimal context is enough."""
+        state = self.engine.state
+        catalog, subjects = self._book_catalog(book)
+        title_catalog = {
+            key: catalog[key]
+            for key in ("genre", "discipline", "title_shape", "taboo_level", "era")
+            if catalog.get(key)
         }
-        return context
+        base_tags = sorted({*book.tags, "book", "book_title"})
+        return {
+            "record_id": record_id,
+            "kind": "book_title",
+            "source": "background",
+            "turn": state.turn,
+            "world": {"region": self.engine.region.prompt_style()},
+            "subject": {
+                "book": {
+                    "id": book.id,
+                    "subjects": subjects,
+                    "catalog": title_catalog,
+                },
+                "attachment": {"kind": "prop", "entity_id": book.id},
+            },
+            "contract": {
+                "allowed_outputs": ["title"],
+                "claim_quota": 0,
+                "forbidden": [
+                    "author",
+                    "summary",
+                    "pages",
+                    "stats",
+                    "spell effects",
+                ],
+            },
+            "base_tags": base_tags,
+            "allowed_tags": base_tags,
+            "engine_choices": {"turn_cost": 0},
+        }
 
     def _lore_context_for_book(self, book: Any, record: Any) -> dict[str, Any]:
         """Book pages run through the same lore extraction as dialogue; the
@@ -2185,16 +2242,117 @@ class GameSession:
                     )
         self._pending_flesh = remaining
 
+    def pump_canon_prewarm(self) -> None:
+        """Advance the background canon queue outside of player turns. Frontends with
+        an idle loop (the pygame UI) call this every frame so titles and pages keep
+        materializing while the player stands still, and the queued job is re-chosen
+        by proximity each time a slot frees. Must not run while a player command is
+        mutating state on another thread; the UI guards that with `_awaiting_command`.
+        No-op in replay (canon there comes from recorded apply points)."""
+        if self.replay_mode:
+            return
+        self.drain_canon_prewarm(block=False)
+        self._enqueue_canon_prewarm()
+
+    def canon_queue_snapshot(self) -> dict[str, Any]:
+        """A read-only view of the background canon queue, for the debug overlay.
+        Cheap (dict/set lookups only, no context building) and main-thread-safe:
+        every structure it reads is mutated only on the main thread."""
+        state = self.engine.state
+        player = state.player
+
+        # The actually-submitted jobs: first not-done is the one the single worker
+        # is running, the rest are queued behind it.
+        inflight: dict[str, str] = {}
+        now_next: list[dict[str, Any]] = []
+        running_assigned = False
+        for future, job in list(self._pending_canon):
+            if future.done():
+                status = "done"
+            elif not running_assigned:
+                status, running_assigned = "running", True
+            else:
+                status = "queued"
+            inflight[job.record_id] = status
+            now_next.append(
+                {
+                    "kind": job.kind,
+                    "status": status,
+                    "label": self._canon_job_target_name(job),
+                }
+            )
+
+        def stage_status(record_id: str) -> str:
+            if record_id in state.canon_records:
+                return "done"
+            return inflight.get(
+                record_id,
+                "queued" if record_id in self._queued_canon_ids else "pending",
+            )
+
+        books: list[dict[str, Any]] = []
+        for entity in state.entities.values():
+            if entity.kind != "prop" or "book" not in entity.tags:
+                continue
+            title_id = f"canon_book_title_{normalize_id(entity.id)}"
+            full_id = f"canon_book_{normalize_id(entity.id)}"
+            distance = max(abs(entity.x - player.x), abs(entity.y - player.y))
+            nearby = distance <= 8 and self.engine.is_visible(entity.x, entity.y)
+            if full_id in state.canon_records:
+                pages = "done"
+            elif not nearby:
+                pages = "far"  # pages prewarm only for nearby visible books
+            else:
+                pages = stage_status(full_id)
+            books.append(
+                {
+                    "name": entity.name,
+                    "distance": distance,
+                    "title": stage_status(title_id),
+                    "pages": pages,
+                }
+            )
+        books.sort(key=lambda book: (book["distance"], book["name"]))
+        return {
+            "limit": canon_prewarm_limit(),
+            "titles_enabled": book_titles_enabled(),
+            "saturation_enabled": canon_prewarm_enabled(),
+            "now_next": now_next,
+            "books": books,
+            "pending_canon": len(self._pending_canon),
+            "pending_lore": len(self._pending_lore),
+            "pending_flesh": len(self._pending_flesh),
+        }
+
+    def _canon_job_target_name(self, job: CanonSaturationJob) -> str:
+        """A friendly label for a queued canon job: the book/entity name when the
+        job is attached to one, else its record id."""
+        subject = job.context.get("subject")
+        subject = subject if isinstance(subject, dict) else {}
+        book = subject.get("book") if isinstance(subject.get("book"), dict) else None
+        if book is not None:
+            entity = self.engine.state.entities.get(str(book.get("id")))
+            if entity is not None:
+                return entity.name
+        attachment = subject.get("attachment")
+        attachment = attachment if isinstance(attachment, dict) else {}
+        entity = self.engine.state.entities.get(str(attachment.get("entity_id")))
+        if entity is not None:
+            return entity.name
+        return job.record_id
+
     def _enqueue_canon_prewarm(self) -> None:
-        """Keep the background canon route busy with low-risk saturation jobs."""
-        if self.replay_mode or not canon_prewarm_enabled():
+        """Keep the background canon route busy. The book pipeline is always-on and
+        takes priority over the opt-in saturation set (room flavor, entity detail),
+        so the nearest books get readied (title, then pages) first."""
+        if self.replay_mode:
             return
         limit = canon_prewarm_limit()
         if limit <= 0:
             return
         if len(self._pending_canon) >= limit:
             return
-        for job in self._canon_saturation_candidates():
+        for job in self._canon_prewarm_candidates():
             if len(self._pending_canon) >= limit:
                 break
             self._queued_canon_ids.add(job.record_id)
@@ -2206,6 +2364,68 @@ class GameSession:
                 resolve_canon, self.background_canon_provider, job.context
             )
             self._pending_canon.append((future, job))
+
+    def _canon_prewarm_candidates(self) -> list[CanonSaturationJob]:
+        """Book jobs first (always-on, top priority), then the flag-gated saturation
+        set (room flavor, entity detail). The list is in priority order; the
+        single-worker route fills free slots from the front, so the nearest books
+        get readied before anything else, and the queued slot is re-chosen by
+        proximity every time a slot frees."""
+        candidates: list[CanonSaturationJob] = []
+        if book_titles_enabled():
+            candidates.extend(self._canon_book_jobs())
+        if canon_prewarm_enabled():
+            candidates.extend(self._canon_saturation_candidates())
+        return candidates
+
+    def _canon_book_jobs(self) -> list[CanonSaturationJob]:
+        """The book pipeline, ordered strictly by proximity so the closest books are
+        readied first. Each book is taken to full readiness before the next: its
+        title materializes (whole zone, so every shelf is readable by name), then —
+        for nearby visible books — its full pages, so `read` opens instantly. The
+        sort key (distance, stage) interleaves as title→pages per book in distance
+        order, and the list is rebuilt each enqueue, so it tracks the player."""
+        state = self.engine.state
+        player = state.player
+        pending: list[tuple[tuple[int, int], str, str, Any, str | None]] = []
+        for entity in state.entities.values():
+            if entity.kind != "prop" or "book" not in entity.tags:
+                continue
+            title_id = f"canon_book_title_{normalize_id(entity.id)}"
+            full_id = f"canon_book_{normalize_id(entity.id)}"
+            if full_id in state.canon_records:
+                continue  # fully materialized — nothing left to prewarm
+            distance = max(abs(entity.x - player.x), abs(entity.y - player.y))
+            if title_id not in state.canon_records:
+                if title_id in self._queued_canon_ids:
+                    continue
+                pending.append(((distance, 0), title_id, "book_title", entity, full_id))
+            elif (
+                full_id not in self._queued_canon_ids
+                and distance <= 8
+                and self.engine.is_visible(entity.x, entity.y)
+            ):
+                # Title is known; prewarm the full pages for nearby visible books.
+                pending.append(((distance, 1), full_id, "book", entity, None))
+        pending.sort(key=lambda item: (item[0], item[1]))
+        jobs: list[CanonSaturationJob] = []
+        for _key, record_id, kind, book, superseded_by in pending:
+            if kind == "book_title":
+                context = self._canon_context_for_book_title(book, record_id)
+            else:
+                context = self._canon_context_for_book(book, record_id)
+                context["source"] = "background"
+                context["engine_choices"] = dict(context.get("engine_choices") or {})
+                context["engine_choices"]["turn_cost"] = 0
+            jobs.append(
+                CanonSaturationJob(
+                    record_id=record_id,
+                    kind=kind,
+                    context=context,
+                    superseded_by=superseded_by,
+                )
+            )
+        return jobs
 
     def _canon_saturation_candidates(self) -> list[CanonSaturationJob]:
         candidates: list[tuple[int, str, CanonSaturationJob]] = []
@@ -2258,43 +2478,10 @@ class GameSession:
                 )
             )
 
-        for distance, book in self._canon_book_preview_candidates():
-            record_id = f"canon_book_preview_{normalize_id(book.id)}"
-            context = self._canon_context_for_book_preview(book, record_id)
-            candidates.append(
-                (
-                    20 + distance,
-                    record_id,
-                    CanonSaturationJob(
-                        record_id=record_id,
-                        kind="book_preview",
-                        context=context,
-                        superseded_by=f"canon_book_{normalize_id(book.id)}",
-                    ),
-                )
-            )
+        # Books are no longer here — they run on the always-on book pipeline
+        # (_canon_book_jobs), ahead of this flag-gated room/entity saturation set.
         candidates.sort(key=lambda item: (item[0], item[1]))
         return [job for _priority, _record_id, job in candidates]
-
-    def _canon_book_preview_candidates(self) -> list[tuple[int, Any]]:
-        state = self.engine.state
-        player = state.player
-        candidates = []
-        for entity in state.entities.values():
-            if entity.kind != "prop" or "book" not in entity.tags:
-                continue
-            preview_id = f"canon_book_preview_{normalize_id(entity.id)}"
-            full_id = f"canon_book_{normalize_id(entity.id)}"
-            if preview_id in state.canon_records or full_id in state.canon_records:
-                continue
-            if preview_id in self._queued_canon_ids:
-                continue
-            distance = max(abs(entity.x - player.x), abs(entity.y - player.y))
-            if distance > 8 or not self.engine.is_visible(entity.x, entity.y):
-                continue
-            candidates.append((distance, entity.id, entity))
-        candidates.sort(key=lambda item: item[:2])
-        return [(distance, entity) for distance, _entity_id, entity in candidates]
 
     def _canon_entity_detail_candidates(self) -> list[tuple[int, Any]]:
         state = self.engine.state
@@ -2396,23 +2583,19 @@ class GameSession:
             return
         if record.kind == "book":
             self._apply_book_canon(entity, record)
-        elif record.kind == "book_preview":
+        elif record.kind == "book_title":
+            # The full pages already carry the canonical title — don't let a late
+            # title job overwrite a book that's already been fully materialized.
             full_id = f"canon_book_{normalize_id(entity.id)}"
             if full_id not in self.engine.state.canon_records:
-                self._apply_book_preview(entity, record)
+                self._apply_book_title(entity, record)
 
-    def _apply_book_preview(self, book: Any, record: CanonRecord) -> None:
+    def _apply_book_title(self, book: Any, record: CanonRecord) -> None:
+        """The materialized title becomes the book's in-world name and marks it as
+        readable-by-name; the verbose grammar description is left behind."""
         if record.title:
             book.name = record.title
-        if record.summary:
-            book.description = record.summary
-        author = (
-            record.llm_choices.get("author")
-            if isinstance(record.llm_choices, dict)
-            else None
-        )
-        if author and record.summary and author not in record.summary:
-            book.description = f"{record.summary} (by {author})"
+            book.details["title_materialized"] = True
 
     def close(self) -> None:
         for future, _dialogue_record, _claim_quota in self._pending_lore:

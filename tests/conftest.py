@@ -21,6 +21,9 @@ def pytest_configure(config: pytest.Config) -> None:
         # developer's .env points background generation at Ollama.
         os.environ.setdefault("WILDMAGIC_TOWN_PROVIDER", "mock")
         os.environ.setdefault("WILDMAGIC_CANON_PREWARM_ENABLED", "0")
+        # Book titles prewarm on-by-default in real play; force off so the trim
+        # suite never fires background title calls. Title tests opt back in.
+        os.environ.setdefault("WILDMAGIC_BOOK_TITLES", "0")
         # Experimental LLM prop set-dressing is on-by-default when Ollama is
         # reachable; force it off so the trim suite never fires real prop calls
         # in background threads. Tests that exercise it inject MockPropProvider.

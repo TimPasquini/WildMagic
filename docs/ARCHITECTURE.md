@@ -230,9 +230,15 @@ Materialized canon generation for room, object, and text details (`examine`, `re
 malformed-response retries), and `logs/canon_audit.jsonl` writing. The Ollama provider
 uses the `canon` purpose for blocking calls, which routes URGENT (GPU-resident main
 model); background canon saturation uses the `lore`/BACKGROUND route and can use a
-smaller model via `WILDMAGIC_BACKGROUND_CANON_MODEL`. The first background jobs cover
-current-room `room_flavor`, far-look entity detail records, and nearby `book_preview`
-records.
+smaller model via `WILDMAGIC_BACKGROUND_CANON_MODEL`. The always-on book pipeline runs
+first, nearest-first: `book_title` for every book in the zone, then full `book` pages for
+nearby visible books (so `read` is instant). The flag-gated saturation set
+(`room_flavor`, far-look entity detail) runs behind it. The queue advances on player
+turns and on UI idle frames (`GameSession.pump_canon_prewarm`); the default depth of 2
+keeps one job running and one queued on the single-worker route, re-picked by proximity
+as a slot frees. `GameSession.canon_queue_snapshot()` exposes a read-only view of the
+queue (in-flight jobs + every zone book's title/pages state) that the pygame UI renders
+as a scrollable **F7** debug overlay.
 The engine supplies attachments, tags, allowed outputs, and mechanical choices; the
 provider supplies wording and nonmechanical choices only.
 
@@ -241,9 +247,10 @@ Layer-1 procedural texture grammars: instant, model-free naming for bulk content
 Currently `grammar_book()`, which gives placed books a concrete catalog-style name and
 description plus a richer hidden shelf card (`topic`, `secondary_topic`, `genre`,
 `discipline`, `author_role`, `audience`, `purpose`, `stance`, `institution`,
-`title_shape`, `taboo_level`). Printed titles and authors can materialize through the
-opt-in background `book_preview` pass; full pages stay unmaterialized until reading
-triggers book canon generation.
+`title_shape`, `taboo_level`) plus 1-4 durable `subjects` (the title-call seed and future
+lore-router key). Printed titles materialize through the always-on background `book_title`
+pass; full pages prewarm only with the saturation flag (after the title exists) or
+materialize on first `read`.
 
 ### `wildmagic/secrets.py`
 Engine-owned secret resolution for the `investigate` verb: difficulty→turn costs,

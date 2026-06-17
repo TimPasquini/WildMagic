@@ -208,11 +208,24 @@ the dual-instance Ollama setup exists for exactly this):
 
 ## Case studies
 
-Current playable slice: the queue paints current-room `room_flavor`, visible non-book
-entities as far-look `object_detail`/`npc_detail`/`creature_detail`, then nearby book
-identity previews. Background detail records use `claim_quota=0` and `turn_cost=0`.
-They never create close-study records, so adjacent investigation can still reveal
-engine-owned secret clues.
+Current playable slice: an **always-on book pipeline** (top priority) works strictly
+nearest-first — for each book, closest to farthest, it materializes the `book_title`
+(cheap, whole zone, ignoring visibility/distance, so the shelf is readable on sight) and
+then, for nearby visible books, the full `book` pages under the canonical book id so
+`read` reuses them with no wait. This whole pipeline runs independent of the saturation
+flag, because legible, readable books are core UX, not opt-in richness. The flag-gated
+saturation queue runs *behind* it, painting current-room `room_flavor` and far-look
+`object_detail`/`npc_detail`/`creature_detail`. The title call carries a deliberately tiny
+seed packet (subjects + the catalog axes that shape a title, no world/place/threads
+block); titles have no mechanical stakes, so minimal context keeps the call cheap. The
+queue advances both on player turns and on UI idle frames (`pump_canon_prewarm`), and at
+the default depth of 2 keeps one job running and one queued — re-picked by proximity each
+time a slot frees — so it keeps readying the nearest books while the player stands still.
+Background detail records use `claim_quota=0` and `turn_cost=0` and never create
+close-study records, so adjacent investigation can still reveal engine-owned secret clues.
+(Books are the exception that does carry pages: the prewarmed `book` record is the same
+record `read` would have made on demand — claims are still harvested at the player's first
+read, not in the background.)
 
 ### Books (the model case)
 
@@ -222,7 +235,7 @@ generator writes titles:
 | Tier | Decided by | Title | Pages | Mechanical content |
 |---|---|---|---|---|
 | Ambient shelf | grammar | category only ("damp imperial ledgers") | none | none |
-| Notable book | LLM (background) | LLM title + author + one-line summary | on read or prewarm | 0-1 low-salience claims |
+| Notable book | LLM | LLM title (always-on background, title-only, whole zone) | on read or saturation prewarm | 0-1 low-salience claims |
 | Readable book | LLM | LLM | 2 excerpt pages from full seed packet, background or on-demand | claims quota |
 | Keystone book | engine places it | LLM | LLM | engine-owned clue/promise hook, LLM-worded |
 
@@ -331,12 +344,23 @@ no compatibility shims with dual authority.
   `source="book:<title>"`. Live-verified on GPU (June 2026): a fresh-run book wove an
   active chapel promise from THREADS into its excerpt as the author's hearsay; reads
   run ~10s on the urgent channel at canon temperature 0.85 (titles/authors vary across
-  packets). Background canon saturation now exists as an opt-in first slice
-  (`WILDMAGIC_CANON_PREWARM_ENABLED=1`): the queue paints current-room `room_flavor`,
-  far-look detail for visible non-book entities, then replay-safe `book_preview` canon
-  on the background route; full `read` pages reuse preview identity while still costing
-  a turn. Remaining for R3/R6: add inscription/notices, richer NPC-detail prioritization,
-  and clue-leak jobs to the same priority queue.
+  packets). Background canon now runs in two tiers. **The book pipeline is always-on**
+  (`WILDMAGIC_BOOK_TITLES=1`, default; top priority) and strictly nearest-first: for each
+  book, closest to farthest, a cheap title-only `book_title` call (tiny subjects+axes
+  packet) names it — whole zone, so every shelf is readable and the disliked grammar
+  placeholder description is gone — and then, for nearby visible books, the full `book`
+  pages prewarm under the canonical book id, so `read` opens instantly. The broader
+  **saturation** tier stays opt-in (`WILDMAGIC_CANON_PREWARM_ENABLED=1`) and runs *behind*
+  the book pipeline: current-room `room_flavor` and far-look entity detail. `read` reuses
+  prewarmed pages instantly when present (the first read still costs a turn and harvests
+  its lore claims, tracked per-book via `details["read"]` so rereads stay free) and falls
+  back to urgent-channel materialization when the painter hasn't reached the book yet. The
+  queue advances on player turns and on UI idle frames (`pump_canon_prewarm`) so it keeps
+  working while the player stands still; the default depth of 2 keeps one job running and
+  one queued, re-picked by proximity as a slot frees. Subjects (1-4 per book) are durable
+  metadata seeding the title call and the planned lore-card router. Remaining for R3/R6:
+  the lore-card content router, plus inscription/notices, richer NPC-detail
+  prioritization, and clue-leak jobs.
 - **R4 — NPC appearance.** *Done (pulled forward — it needed no canon store):*
   appearance fields ride the existing towngen and flesh calls; tooltip + dialogue
   integration. Remaining exit check: a promise-bound keeper's generated appearance

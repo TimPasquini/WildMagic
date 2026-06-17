@@ -435,6 +435,31 @@ def test_book_texture_carries_rich_seed_axes() -> None:
         assert entry[key]
     assert entry["topic"] == "old maps"
     assert entry["genre"] not in {"old maps", "map", "maps"}
+    # 1-4 durable subjects seed the title call and (later) the lore-card router.
+    assert 1 <= len(entry["subjects"]) <= 4
+    assert entry["topic"] in entry["subjects"]
+
+
+def test_book_title_seed_packet_is_lean(monkeypatch) -> None:
+    session = GameSession(
+        seed=7,
+        scenario="test_chamber",
+        provider_name="mock",
+        canon_provider_name="mock",
+    )
+    try:
+        book = _chamber_book(session.engine)
+        context = session._canon_context_for_book_title(book, "canon_test_title")
+        assert context["kind"] == "book_title"
+        assert context["contract"]["allowed_outputs"] == ["title"]
+        assert "forbidden" in context["contract"]
+        subjects = context["subject"]["book"]["subjects"]
+        assert "forbidden saints" in subjects
+        # Lean packet: no expensive world/place/threads blocks on the title call.
+        assert "threads" not in context
+        assert "place" not in context
+    finally:
+        session.close()
 
 
 def test_book_seed_packet_includes_catalog_guidance() -> None:
@@ -458,27 +483,10 @@ def test_book_seed_packet_includes_catalog_guidance() -> None:
         session.close()
 
 
-def test_book_prewarm_is_disabled_by_default(monkeypatch) -> None:
-    monkeypatch.delenv("WILDMAGIC_CANON_PREWARM_ENABLED", raising=False)
-    session = GameSession(
-        seed=7,
-        scenario="test_chamber",
-        provider_name="mock",
-        canon_provider_name="mock",
-    )
-    try:
-        session.execute_command("inspect")
-        assert not any(
-            record.kind == "book_preview"
-            for record in session.engine.state.canon_records.values()
-        )
-    finally:
-        session.close()
-
-
-def test_book_prewarm_materializes_preview_without_turn_cost(monkeypatch) -> None:
-    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_ENABLED", "1")
-    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_LIMIT", "3")
+def test_book_titles_prewarm_independent_of_saturation_flag(monkeypatch) -> None:
+    # Saturation off, titles on: titles are not gated by the saturation flag.
+    monkeypatch.setenv("WILDMAGIC_BOOK_TITLES", "1")
+    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_ENABLED", "0")
     session = GameSession(
         seed=7,
         scenario="test_chamber",
@@ -490,26 +498,47 @@ def test_book_prewarm_materializes_preview_without_turn_cost(monkeypatch) -> Non
         original_name = book.name
         result = session.execute_command("inspect")
         session.drain_canon_prewarm(block=True)
-        assert result.success
         assert not result.consumed_turn
-        previews = [
+        titles = [
             record
             for record in session.engine.state.canon_records.values()
-            if record.kind == "book_preview"
+            if record.kind == "book_title"
         ]
-        assert len(previews) == 1
-        preview = previews[0]
-        assert preview.attachment == {"kind": "prop", "entity_id": book.id}
-        assert preview.title
-        assert book.name == preview.title
+        assert len(titles) == 1
+        assert titles[0].attachment == {"kind": "prop", "entity_id": book.id}
+        assert titles[0].title
+        assert book.name == titles[0].title
         assert book.name != original_name
+        assert book.details.get("title_materialized")
+        # Saturation stayed off: no full pages or room flavor materialized.
+        assert not any(
+            record.kind in {"book", "room_flavor"}
+            for record in session.engine.state.canon_records.values()
+        )
     finally:
         session.close()
 
 
-def test_read_after_book_prewarm_reuses_preview_identity(monkeypatch) -> None:
-    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_ENABLED", "1")
-    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_LIMIT", "3")
+def test_saturation_disabled_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("WILDMAGIC_CANON_PREWARM_ENABLED", raising=False)
+    monkeypatch.setenv("WILDMAGIC_BOOK_TITLES", "0")
+    session = GameSession(
+        seed=7,
+        scenario="test_chamber",
+        provider_name="mock",
+        canon_provider_name="mock",
+    )
+    try:
+        session.execute_command("inspect")
+        session.drain_canon_prewarm(block=True)
+        assert not session.engine.state.canon_records
+    finally:
+        session.close()
+
+
+def test_read_after_title_prewarm_reuses_title(monkeypatch) -> None:
+    monkeypatch.setenv("WILDMAGIC_BOOK_TITLES", "1")
+    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_ENABLED", "0")
     session = GameSession(
         seed=7,
         scenario="test_chamber",
@@ -520,11 +549,13 @@ def test_read_after_book_prewarm_reuses_preview_identity(monkeypatch) -> None:
         book = _chamber_book(session.engine)
         session.execute_command("inspect")
         session.drain_canon_prewarm(block=True)
-        preview = next(
+        title = next(
             record
             for record in session.engine.state.canon_records.values()
-            if record.kind == "book_preview"
+            if record.kind == "book_title"
         )
+        # Saturation is off, so the full pages materialize on demand at read time
+        # and inherit the title already shown on the shelf.
         result = session.execute_command("read")
         assert result.success
         assert result.consumed_turn
@@ -533,16 +564,261 @@ def test_read_after_book_prewarm_reuses_preview_identity(monkeypatch) -> None:
             for record in session.engine.state.canon_records.values()
             if record.kind == "book"
         )
-        assert full.title == preview.title
-        assert full.llm_choices.get("author") == preview.llm_choices.get("author")
+        assert full.title == title.title
         assert book.name == full.title
     finally:
         session.close()
 
 
-def test_book_prewarm_replays_without_provider_call(monkeypatch, tmp_path) -> None:
+def test_book_prewarm_materializes_full_pages_after_title(monkeypatch) -> None:
+    monkeypatch.setenv("WILDMAGIC_BOOK_TITLES", "1")
     monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_ENABLED", "1")
-    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_LIMIT", "3")
+    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_LIMIT", "4")
+    session = GameSession(
+        seed=7,
+        scenario="test_chamber",
+        provider_name="mock",
+        canon_provider_name="mock",
+    )
+    try:
+        book = _chamber_book(session.engine)
+        session.execute_command("inspect")
+        # Stage 1: the title lands first and names the book on the shelf.
+        session.drain_canon_prewarm(block=True)
+        title = next(
+            record
+            for record in session.engine.state.canon_records.values()
+            if record.kind == "book_title"
+        )
+        full_id = f"canon_book_{book.id}"
+        assert full_id not in session.engine.state.canon_records
+        # Stage 2: now that the title exists, the full pages prewarm under the
+        # canonical book id and inherit that title.
+        session._enqueue_canon_prewarm()
+        session.drain_canon_prewarm(block=True)
+        full = session.engine.state.canon_records[full_id]
+        assert full.kind == "book"
+        assert full.title == title.title
+        assert full.text
+        assert book.name == full.title
+    finally:
+        session.close()
+
+
+def test_book_pages_prewarm_without_saturation_flag(monkeypatch) -> None:
+    # The book pipeline (titles + nearby pages) is always-on; full-page prewarm no
+    # longer requires the saturation flag, so a book the player stands beside gets
+    # its pages readied for an instant read.
+    monkeypatch.setenv("WILDMAGIC_BOOK_TITLES", "1")
+    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_ENABLED", "0")
+    session = GameSession(
+        seed=7,
+        scenario="test_chamber",
+        provider_name="mock",
+        canon_provider_name="mock",
+    )
+    try:
+        book = _chamber_book(session.engine)
+        full_id = f"canon_book_{book.id}"
+        # Pump the queue: title first, then full pages — saturation stays off.
+        for _ in range(4):
+            session._enqueue_canon_prewarm()
+            session.drain_canon_prewarm(block=True)
+        assert full_id in session.engine.state.canon_records
+        assert session.engine.state.canon_records[full_id].kind == "book"
+        # Saturation off: no room flavor materialized despite the active pipeline.
+        assert not any(
+            record.kind == "room_flavor"
+            for record in session.engine.state.canon_records.values()
+        )
+    finally:
+        session.close()
+
+
+def test_book_pipeline_readies_closest_book_first(monkeypatch) -> None:
+    monkeypatch.setenv("WILDMAGIC_BOOK_TITLES", "1")
+    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_ENABLED", "0")
+    # One at a time, so the first drain materializes only the nearest title.
+    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_LIMIT", "1")
+    session = GameSession(
+        seed=7,
+        scenario="test_chamber",
+        provider_name="mock",
+        canon_provider_name="mock",
+    )
+    try:
+        px, py = session.engine.state.player.x, session.engine.state.player.y
+        far = session.engine.spawn_prop("book", px + 4, py)
+        assert far is not None
+        far.details["book_seed"] = {
+            "subjects": ["river custom"],
+            "title_shape": "manual",
+            "genre": "manual",
+        }
+        far.tags.add("book")
+        near = _chamber_book(session.engine)  # the chamber book, adjacent to player
+        near_title = f"canon_book_title_{near.id}"
+        near_full = f"canon_book_{near.id}"
+        far_title = f"canon_book_title_{far.id}"
+        # Phase 1 (no titles yet): both books offer only a title job, nearest first.
+        order = [j.record_id for j in session._canon_book_jobs()]
+        assert order[0] == near_title
+        assert far_title in order
+        assert near_full not in order  # pages can't precede the title
+        # Materialize the near title, then re-check: the near book's *pages* now
+        # outrank the far book's title — the closest book is finished first.
+        session._enqueue_canon_prewarm()
+        session.drain_canon_prewarm(block=True)
+        order = [j.record_id for j in session._canon_book_jobs()]
+        assert order[0] == near_full
+        assert order.index(near_full) < order.index(far_title)
+    finally:
+        session.close()
+
+
+def test_read_reuses_prewarmed_pages_without_regenerating(monkeypatch) -> None:
+    class CountingMockCanonProvider:
+        name = "counting-mock"
+
+        def __init__(self) -> None:
+            from wildmagic.canon import MockCanonProvider
+
+            self._mock = MockCanonProvider()
+            self.full_book_calls = 0
+
+        def materialize(self, context):
+            from wildmagic.normalize import normalize_id
+
+            if normalize_id(str(context.get("kind") or "")) == "book":
+                self.full_book_calls += 1
+            return self._mock.materialize(context)
+
+    monkeypatch.setenv("WILDMAGIC_BOOK_TITLES", "1")
+    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_ENABLED", "1")
+    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_LIMIT", "4")
+    provider = CountingMockCanonProvider()
+    session = GameSession(
+        seed=7,
+        scenario="test_chamber",
+        canon_provider=provider,
+    )
+    # Both the urgent and background canon routes use our counting provider.
+    session.background_canon_provider = provider
+    try:
+        book = _chamber_book(session.engine)
+        full_id = f"canon_book_{book.id}"
+        session.execute_command("inspect")
+        session.drain_canon_prewarm(block=True)  # title
+        session._enqueue_canon_prewarm()
+        session.drain_canon_prewarm(block=True)  # full pages
+        assert full_id in session.engine.state.canon_records
+        assert provider.full_book_calls == 1
+
+        result = session.execute_command("read")
+        assert result.success
+        # First read still costs a turn even though the pages were prewarmed.
+        assert result.consumed_turn
+        assert result.canon_materialization["reused"] is True
+        # No second full-book generation: the prewarmed pages were reused.
+        assert provider.full_book_calls == 1
+
+        again = session.execute_command("read")
+        assert again.success
+        assert not again.consumed_turn
+        assert provider.full_book_calls == 1
+    finally:
+        session.close()
+
+
+def test_read_waits_for_in_flight_pages_prewarm_no_double_gen(monkeypatch) -> None:
+    """Reading a book whose pages are already prewarming reuses that job instead of
+    launching a second generation (the cause of slow reads with mismatched text)."""
+
+    class CountingCanonProvider:
+        name = "counting"
+
+        def __init__(self) -> None:
+            from wildmagic.canon import MockCanonProvider
+
+            self._mock = MockCanonProvider()
+            self.page_calls = 0
+
+        def materialize(self, context):
+            from wildmagic.normalize import normalize_id
+
+            if normalize_id(str(context.get("kind") or "")) == "book":
+                self.page_calls += 1
+            return self._mock.materialize(context)
+
+    monkeypatch.setenv("WILDMAGIC_BOOK_TITLES", "1")
+    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_ENABLED", "1")
+    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_LIMIT", "4")
+    provider = CountingCanonProvider()
+    session = GameSession(
+        seed=7,
+        scenario="test_chamber",
+        canon_provider=provider,
+        lore_provider_name="mock",
+    )
+    session.background_canon_provider = provider
+    try:
+        book = _chamber_book(session.engine)
+        full_id = f"canon_book_{book.id}"
+        # Get the title in place, then enqueue the pages prewarm WITHOUT draining it,
+        # so it is in flight when we read.
+        session._enqueue_canon_prewarm()
+        session.drain_canon_prewarm(block=True)  # title
+        session._enqueue_canon_prewarm()  # pages job now queued
+        assert full_id in session._queued_canon_ids
+        # Call _read_book directly so we bypass execute_command's own pre-drain and
+        # exercise the in-flight reuse branch.
+        success, technical_failure, record, _lines = session._read_book("")
+        assert success and not technical_failure
+        assert full_id in session.engine.state.canon_records
+        assert record.get("reused") is True
+        # The page text was generated exactly once (by the prewarm), not again here.
+        assert provider.page_calls == 1
+    finally:
+        session.close()
+
+
+def test_full_book_prewarm_replays_without_provider_call(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("WILDMAGIC_BOOK_TITLES", "1")
+    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_ENABLED", "1")
+    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_LIMIT", "4")
+    session = GameSession(
+        seed=7,
+        scenario="test_chamber",
+        provider_name="mock",
+        canon_provider_name="mock",
+    )
+    try:
+        book = _chamber_book(session.engine)
+        full_id = f"canon_book_{book.id}"
+        session.execute_command("inspect")
+        session.drain_canon_prewarm(block=True)
+        session._enqueue_canon_prewarm()
+        session.drain_canon_prewarm(block=True)
+        session.execute_command("read")
+        assert full_id in session.engine.state.canon_records
+        replay_path = tmp_path / "full_book_prewarm.json"
+        save_replay(session, replay_path)
+    finally:
+        session.close()
+
+    replay_result = run_replay(replay_path)
+    assert replay_result.matched
+    assert any(
+        record["kind"] == "book"
+        for record in replay_result.final_summary["canon_records"]
+    )
+
+
+def test_book_title_prewarm_replays_without_provider_call(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("WILDMAGIC_BOOK_TITLES", "1")
+    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_ENABLED", "0")
     session = GameSession(
         seed=7,
         scenario="test_chamber",
@@ -551,7 +827,7 @@ def test_book_prewarm_replays_without_provider_call(monkeypatch, tmp_path) -> No
     )
     try:
         session.execute_command("inspect")
-        replay_path = tmp_path / "book_prewarm.json"
+        replay_path = tmp_path / "book_title_prewarm.json"
         save_replay(session, replay_path)
     finally:
         session.close()
@@ -559,7 +835,7 @@ def test_book_prewarm_replays_without_provider_call(monkeypatch, tmp_path) -> No
     replay_result = run_replay(replay_path)
     assert replay_result.matched
     assert any(
-        record["kind"] == "book_preview"
+        record["kind"] == "book_title"
         for record in replay_result.final_summary["canon_records"]
     )
 

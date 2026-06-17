@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "code-review-graph": {
+      "command": "C:\\Users\\Owner\\AppData\\Local\\Programs\\Python\\Python312\\Scripts\\code-review-graph.exe",
+      "args": [
+        "serve"
+      ],
+      "cwd": "C:\\Games\\WildMagic",
+      "env": {
+        "PYTHONUTF8": "1"
+      },
+      "type": "stdio"
+    }
+  }
+}

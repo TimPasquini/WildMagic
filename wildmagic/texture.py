@@ -203,11 +203,19 @@ def grammar_book(rng: random.Random, topics: list[str], era: str) -> dict[str, A
     institution = rng.choice(_INSTITUTIONS)
     title_shape = rng.choice(_TITLE_SHAPES)
     taboo_level = rng.choice(_TABOO_LEVELS)
+    # 1-4 subjects are the book's durable metadata: they seed the title call now
+    # and will key the lore-card router later. Dedupe while preserving order.
+    subjects: list[str] = []
+    for subject in (topic, secondary_topic, discipline):
+        cleaned = str(subject).strip()
+        if cleaned and cleaned not in subjects:
+            subjects.append(cleaned)
     return {
         "name": f"{condition} {form} of {topic}",
         "description": f"A {form} bound in {binding}, {condition}. It concerns {topic}.",
         "topic": topic,
         "secondary_topic": secondary_topic,
+        "subjects": subjects[:4],
         "form": form,
         "condition": condition,
         "binding": binding,

@@ -405,8 +405,19 @@ def canon_prewarm_enabled() -> bool:
     return _bool_value("WILDMAGIC_CANON_PREWARM_ENABLED", False)
 
 
+def book_titles_enabled() -> bool:
+    """Book titles always prewarm in the background (top priority, whole zone) so
+    every shelved book is identifiable on sight. Unlike the broader saturation set
+    (`canon_prewarm_enabled`), this is on by default; the test suite forces it off."""
+    return _bool_value("WILDMAGIC_BOOK_TITLES", True)
+
+
 def canon_prewarm_limit() -> int:
-    return _int_value("WILDMAGIC_CANON_PREWARM_LIMIT", 1, 0, 8)
+    """How many background canon jobs may be submitted at once. The default of 2
+    keeps one job running and one queued on the single-worker route, so the model
+    never idles between jobs; the queued slot is re-chosen by proximity each time a
+    slot frees. 0 disables all background canon."""
+    return _int_value("WILDMAGIC_CANON_PREWARM_LIMIT", 2, 0, 8)
 
 
 def audit_dir() -> Path:

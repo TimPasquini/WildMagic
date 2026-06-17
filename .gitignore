@@ -4,3 +4,7 @@ runs/
 .env
 .idea/
 tools/portraits/out/
+.code-review-graph/
+*.crg.html
+*.crg.svg
+*.crg.graphml

@@ -146,8 +146,8 @@ class MockCanonProvider:
 
     def materialize(self, context: dict[str, Any]) -> str:
         kind = normalize_id(str(context.get("kind") or ""))
-        if kind == "book_preview":
-            return self._materialize_book_preview(context)
+        if kind == "book_title":
+            return self._materialize_book_title(context)
         if kind == "book":
             return self._materialize_book(context)
         if kind == "investigation":
@@ -287,13 +287,15 @@ class MockCanonProvider:
 
     def _materialize_book(self, context: dict[str, Any]) -> str:
         info = self._book_seed_info(context)
-        title = info["preview_title"] or self._mock_book_title(
+        # A title prewarmed on the shelf is reused verbatim; the author is always
+        # the book's own (title-only previews carry no author).
+        title = info["materialized_title"] or self._mock_book_title(
             info["title_shape"],
             info["topic"],
             info["secondary"],
             info["genre"],
         )
-        author = info["preview_author"] or self._mock_author(info["author_role"])
+        author = self._mock_author(info["author_role"])
         threads = (
             context.get("threads") if isinstance(context.get("threads"), dict) else {}
         )
@@ -335,26 +337,17 @@ class MockCanonProvider:
             }
         )
 
-    def _materialize_book_preview(self, context: dict[str, Any]) -> str:
+    def _materialize_book_title(self, context: dict[str, Any]) -> str:
         info = self._book_seed_info(context)
         title = self._mock_book_title(
             info["title_shape"], info["topic"], info["secondary"], info["genre"]
         )
-        author = self._mock_author(info["author_role"])
         return json.dumps(
             {
                 "title": title,
-                "summary": (
-                    f"A {info['stance']} {info['genre']} from the {info['institution']}, "
-                    f"written for {info['audience']}."
-                ),
-                "text": f"Preview: {title}, by {author}.",
-                "tags": ["book", "lore", "book_preview"],
-                "llm_choices": {
-                    "author": author,
-                    "voice": info["stance"],
-                    "genre": info["genre"],
-                },
+                "text": title,
+                "tags": ["book", "lore", "book_title"],
+                "llm_choices": {},
             }
         )
 
@@ -365,19 +358,21 @@ class MockCanonProvider:
         book = subject.get("book") if isinstance(subject.get("book"), dict) else {}
         catalog = book.get("catalog") if isinstance(book.get("catalog"), dict) else {}
         book_name = str(book.get("name") or "untitled volume")
+        subjects = [str(s).strip() for s in book.get("subjects", []) if str(s).strip()]
+        # The lean title packet omits the topic axes but carries subjects; fall back
+        # to them so the mock title reads sensibly, mirroring what the LLM is told.
         topic = str(catalog.get("topic") or "").strip()
+        if not topic:
+            topic = subjects[0] if subjects else ""
         if not topic:
             topic_words = [w for w in book_name.split() if len(w) > 3][-2:]
             topic = " ".join(topic_words) or "small weather"
-        preview = book.get("preview") if isinstance(book.get("preview"), dict) else {}
-        llm_choices = (
-            preview.get("llm_choices")
-            if isinstance(preview.get("llm_choices"), dict)
-            else {}
-        )
+        secondary = str(catalog.get("secondary_topic") or "").strip()
+        if not secondary:
+            secondary = subjects[1] if len(subjects) > 1 else "ordinary grief"
         return {
             "topic": topic,
-            "secondary": str(catalog.get("secondary_topic") or "ordinary grief"),
+            "secondary": secondary,
             "genre": str(catalog.get("genre") or "treatise"),
             "author_role": str(catalog.get("author_role") or "minor clerk"),
             "audience": str(catalog.get("audience") or "patient readers"),
@@ -386,8 +381,7 @@ class MockCanonProvider:
             "institution": str(catalog.get("institution") or "provincial office"),
             "title_shape": str(catalog.get("title_shape") or "manual"),
             "taboo": str(catalog.get("taboo_level") or "ordinary"),
-            "preview_title": str(preview.get("title") or ""),
-            "preview_author": str(llm_choices.get("author") or ""),
+            "materialized_title": str(book.get("title") or ""),
         }
 
     def _mock_book_title(
