@@ -294,8 +294,8 @@ Materialized canon generation for room, object, and text details (`examine`, `re
 `make_canon_provider()`, `make_background_canon_provider()`, `resolve_canon()` (with
 malformed-response retries), and `logs/canon_audit.jsonl` writing. The Ollama provider
 uses the `canon` purpose for blocking calls, which routes URGENT (GPU-resident main
-model); background canon saturation uses the `lore`/BACKGROUND route and can use a
-smaller model via `WILDMAGIC_BACKGROUND_CANON_MODEL`. The always-on book pipeline runs
+model); background canon saturation uses the `lore`/BACKGROUND route and can override
+the canon model via `WILDMAGIC_BACKGROUND_CANON_MODEL`. The always-on book pipeline runs
 first, nearest-first: `book_title` for every book in the zone, then full `book` pages for
 nearby visible books (so `read` is instant). The flag-gated saturation set
 (`room_flavor`, far-look entity detail) runs behind it. The queue advances on player
@@ -312,10 +312,12 @@ Layer-1 procedural texture grammars: instant, model-free naming for bulk content
 Currently `grammar_book()`, which gives placed books a concrete catalog-style name and
 description plus a richer hidden shelf card (`topic`, `secondary_topic`, `genre`,
 `discipline`, `author_role`, `audience`, `purpose`, `stance`, `institution`,
-`title_shape`, `taboo_level`) plus 1-4 durable `subjects` (the title-call seed and future
-lore-router key). Printed titles materialize through the always-on background `book_title`
-pass; full pages prewarm only with the saturation flag (after the title exists) or
-materialize on first `read`.
+`title_shape`, `taboo_level`) plus 1-4 durable `subjects` (the title-call seed and
+lore-router key). The subject picker rotates between room-colored general subjects and
+known lore-card subjects, so about half of procedural books can pull authored world canon
+while the rest stay local, practical, or odd. Printed titles materialize through the
+always-on background `book_title` pass, and nearby visible books prewarm their full pages
+after the title exists; unreadied books materialize on first `read`.
 
 ### `wildmagic/secrets.py`
 Engine-owned secret resolution for the `investigate` verb: difficulty→turn costs,

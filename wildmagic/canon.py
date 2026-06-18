@@ -585,20 +585,33 @@ def normalize_canon_record(
     data: dict[str, Any], context: dict[str, Any]
 ) -> CanonRecord:
     subject = context.get("subject") if isinstance(context.get("subject"), dict) else {}
-    attachment = (
-        subject.get("attachment") if isinstance(subject.get("attachment"), dict) else {}
+    private = (
+        context.get("engine_private")
+        if isinstance(context.get("engine_private"), dict)
+        else {}
     )
+    attachment = subject.get("attachment")
+    if not isinstance(attachment, dict):
+        attachment = private.get("attachment")
+    if not isinstance(attachment, dict):
+        attachment = {}
     kind = normalize_id(str(context.get("kind") or data.get("kind") or "room_flavor"))
     record_id = normalize_id(
         str(context.get("record_id") or data.get("id") or "canon_record")
     )
+    title = _clean_text(data.get("title"), _TEXT_LIMITS["title"]) or None
     if kind == "book":
         text = _clean_body(data.get("text"), _BOOK_TEXT_LIMIT)
+    elif kind == "book_title":
+        text = _clean_text(data.get("text"), _TEXT_LIMITS["text"])
+        if not text and title:
+            text = title
     else:
         text = _clean_text(data.get("text"), _TEXT_LIMITS["text"])
     if not text:
         raise ValueError("canon response did not include text")
-    title = _clean_text(data.get("title"), _TEXT_LIMITS["title"]) or None
+    if kind == "book_title" and not title:
+        title = _clean_text(text, _TEXT_LIMITS["title"]) or None
     summary = (
         _clean_text(data.get("summary"), _TEXT_LIMITS["summary"])
         or text[: _TEXT_LIMITS["summary"]]
@@ -619,7 +632,9 @@ def normalize_canon_record(
         if isinstance(value, (str, int, float)) and str(value).strip()
     }
     engine_choices = dict(context.get("engine_choices") or {})
-    engine_choices.update(context.get("engine_private") or {})
+    engine_choices.update(
+        {key: value for key, value in private.items() if key != "attachment"}
+    )
     return CanonRecord(
         id=record_id,
         kind=kind,

@@ -199,7 +199,7 @@ def get_canon_model() -> str:
 
 
 def get_background_canon_model() -> str:
-    return get_config_value("WILDMAGIC_BACKGROUND_CANON_MODEL") or get_lore_model()
+    return get_config_value("WILDMAGIC_BACKGROUND_CANON_MODEL") or get_canon_model()
 
 
 def get_agent_model() -> str:

@@ -159,6 +159,49 @@ class CanonSaturationJob:
 # (prompt-side) and as the lore-extraction drain clamp (engine-side).
 BOOK_CLAIM_QUOTA = 2
 
+_BOOK_TEXT_CATALOG_FIELDS = (
+    "topic",
+    "secondary_topic",
+    "genre",
+    "discipline",
+    "author_role",
+    "audience",
+    "purpose",
+    "stance",
+    "institution",
+    "title_shape",
+    "taboo_level",
+)
+
+
+def _book_focus_line(
+    catalog: dict[str, str], subjects: list[str], title: str | None, *, pages: bool
+) -> str:
+    """A concise book-specific anchor placed at the start/end of the prompt packet."""
+    subject_text = ", ".join(subject for subject in subjects if subject) or "unknown"
+    task = "Write the printed contents" if pages else "Invent only the printed title"
+    bits = [
+        f"{task} for this book",
+        f"subjects: {subject_text}",
+    ]
+    if title:
+        bits.append(f"printed title: {title}")
+    for key, label in (
+        ("genre", "genre"),
+        ("discipline", "discipline"),
+        ("author_role", "author"),
+        ("audience", "audience"),
+        ("purpose", "purpose"),
+        ("stance", "stance"),
+        ("title_shape", "title shape"),
+        ("taboo_level", "taboo"),
+    ):
+        value = catalog.get(key)
+        if value:
+            bits.append(f"{label}: {value}")
+    bits.append("do not describe the physical book")
+    return "; ".join(bits)
+
 
 class GameSession:
     def __init__(
@@ -1139,7 +1182,22 @@ class GameSession:
         }
         if lore_threads:
             thread_block["lore"] = lore_threads
+        literary_catalog = {
+            key: book_seed[key]
+            for key in _BOOK_TEXT_CATALOG_FIELDS
+            if book_seed.get(key)
+        }
+        book_context = {
+            "catalog": literary_catalog,
+            "subjects": subjects,
+        }
+        if materialized_title:
+            book_context["title"] = materialized_title
+        book_focus = _book_focus_line(
+            literary_catalog, subjects, materialized_title, pages=True
+        )
         return {
+            "book_focus": book_focus,
             "record_id": record_id,
             "kind": "book",
             "source": "ondemand",
@@ -1155,16 +1213,7 @@ class GameSession:
                 "room": room_dict,
             },
             "subject": {
-                "book": {
-                    "id": book.id,
-                    "name": book.name,
-                    "description": book.description,
-                    "tags": sorted(book.tags),
-                    "catalog": book_seed,
-                    "subjects": subjects,
-                    "title": materialized_title,
-                },
-                "attachment": {"kind": "prop", "entity_id": book.id},
+                "book": book_context,
             },
             "threads": thread_block,
             "contract": {
@@ -1217,6 +1266,10 @@ class GameSession:
                 "mechanical_effect": "none",
                 "turn_cost": 1,
             },
+            "engine_private": {
+                "attachment": {"kind": "prop", "entity_id": book.id},
+            },
+            "book_focus_reminder": book_focus,
         }
 
     def _canon_context_for_book_title(
@@ -1233,8 +1286,10 @@ class GameSession:
             for key in ("genre", "discipline", "title_shape", "taboo_level", "era")
             if catalog.get(key)
         }
+        book_focus = _book_focus_line(title_catalog, subjects, None, pages=False)
         base_tags = sorted({*book.tags, "book", "book_title"})
         return {
+            "book_focus": book_focus,
             "record_id": record_id,
             "kind": "book_title",
             "source": "background",
@@ -1262,6 +1317,7 @@ class GameSession:
             "base_tags": base_tags,
             "allowed_tags": base_tags,
             "engine_choices": {"turn_cost": 0},
+            "book_focus_reminder": book_focus,
         }
 
     def _lore_context_for_book(self, book: Any, record: Any) -> dict[str, Any]:
@@ -2392,6 +2448,10 @@ class GameSession:
             if entity is not None:
                 return entity.name
         attachment = subject.get("attachment")
+        if not isinstance(attachment, dict):
+            private = job.context.get("engine_private")
+            private = private if isinstance(private, dict) else {}
+            attachment = private.get("attachment")
         attachment = attachment if isinstance(attachment, dict) else {}
         entity = self.engine.state.entities.get(str(attachment.get("entity_id")))
         if entity is not None:
@@ -2799,13 +2859,13 @@ def _parse_rest_arg(arg: str) -> tuple[float | None, float | None, str | None]:
 
 def command_help() -> list[str]:
     return [
-        "Commands: move north/south/east/west, open, descend, ascend, wait (recover 1 MP), rest [hours | until <time>] (camp 8h by default), cast <spell>, target <x> <y>, talk <message>, possess [name], examine, read [book], use <item>, equip <item>, unequip <slot>, drop <item>, pickup, inspect (or inventory), curses, clear curse <name>, journal (or rumors), standing, wares (or browse), quit.",
+        "Commands: move north/south/east/west, open, descend, ascend, wait (recover 1 MP), rest [hours | until <time>] (camp 8h by default), cast <spell>, target <x> <y>, talk <message>, possess [name], examine, read [book], use <item>, equip <item>, unequip <slot>, drop <item>, pickup, inspect (or inventory), curses, journal (or rumors), standing, wares (or browse), quit.",
         "Targeting: click a square (or 'target <x> <y>') to mark it - a free action, no turn. Then 'cast fireball at target', 'teleport to target', etc. aim there, and the standard spark/frost spells hit your marked foe. Click it again, 'untarget', or Esc to clear.",
         "Possessing: 'possess' (or 'swap'/'inhabit') leaps your soul into the nearest body - or 'possess <name>' for a specific one. You become that body entirely: its stats, its hit points, its inventory. The body you leave drops as an inert husk. Costs a turn.",
         "Reading: stand on or next to a book and 'read' (or 'read <name>' to pick one). The first reading takes a turn and fixes the book's title and pages forever; rereading is free. What books claim about the world is hearsay - but the world has a way of honoring what gets written down.",
         "Investigating: 'investigate' (or 'search') studies the room - it costs 1-3 turns while the world keeps moving, and what you learn is permanent. If something here is hidden, careful search turns up a clue; investigate the thing the clue points at ('investigate <name>') to see what it was protecting.",
         "Journal: 'journal' lists everything the world has told you - rumors heard, claims corroborated, places found true - with a rough direction when one was given. Free, costs no turn.",
-        "Curses: 'curses' lists active curse names, descriptions, and mechanical limits. 'clear curse <name>' spends experience to remove one stack.",
+        "Curses: 'curses' lists active curse names, descriptions, and mechanical limits. Curses lift on their own as you gain experience - each breaks once you've earned enough XP while carrying it. Nothing to spend.",
         "Standing: 'standing' (or 'reputation'/'factions') shows how the world's powers regard you - the mark your deeds have left on the Empire and those who oppose it. Free, costs no turn.",
         "Followers: 'followers' (or 'retinue') lists those who have come to follow you and the organizations you've founded; 'found <name>' raises a banner of your own. Free, costs no turn.",
         "Freeing captives: stand next to someone held in a cell and 'free' (or 'release') to strike their chains. What they do then is their own - some take up arms and come to follow you, some simply thank you and go, and a few repay you with what they know.",
@@ -2848,35 +2908,22 @@ def describe_curses(engine: GameEngine, query: str = "") -> list[str]:
         if card["semantic_prompt"]:
             lines.append(f"    Flavor: {card['semantic_prompt']}")
         lines.append(
-            f"    Clear one stack: {card['xp_to_clear']} XP with 'clear curse {curse_id}'."
+            f"    Lifts on its own at {card['xp_to_clear']} XP earned while cursed "
+            f"(this stack: {card['clear_progress']}/{card['xp_to_clear']})."
         )
     return lines
 
 
 def clear_curse(engine: GameEngine, query: str) -> tuple[bool, list[str]]:
-    if not query:
-        return False, ["Clear which curse? Use 'clear curse <name>'."]
-    state = engine.state
-    curse_key = find_curse_key(state.curses, query)
-    if curse_key is None:
-        return False, [f"No curse matches {query!r}."]
-    curse = state.curses[curse_key]
-    cost = max(1, int(curse.xp_to_clear))
-    if state.experience < cost:
-        return (
-            False,
-            [
-                f"{curse.name} needs {cost} XP to clear one stack; you have {state.experience}."
-            ],
-        )
-    state.experience -= cost
-    curse.stacks -= 1
-    if curse.stacks <= 0:
-        state.curses.pop(curse_key, None)
-        return True, [f"You spend {cost} XP. {curse.name} breaks."]
-    return True, [
-        f"You spend {cost} XP. {curse.name} weakens to {curse.stacks} stack(s)."
+    """Curses now lift on their own as you gain experience (see GameEngine.award_experience);
+    nothing is spent and no command is needed. This responder only survives the old habit of
+    typing 'clear curse <name>': it explains the change and shows where the curse stands."""
+    lines = [
+        "Curses lift on their own now -- keep earning experience and each will break "
+        "once you've gained enough while carrying it. Nothing to spend, nothing to do.",
     ]
+    lines.extend(describe_curses(engine, query))
+    return True, lines
 
 
 def describe_journal(engine: GameEngine) -> list[str]:

@@ -431,13 +431,42 @@ def test_book_texture_carries_rich_seed_axes() -> None:
         "institution",
         "title_shape",
         "taboo_level",
+        "subject_source",
     }:
         assert entry[key]
-    assert entry["topic"] == "old maps"
     assert entry["genre"] not in {"old maps", "map", "maps"}
+    assert entry["subject_source"] in {"general", "lore"}
     # 1-4 durable subjects seed the title call and (later) the lore-card router.
     assert 1 <= len(entry["subjects"]) <= 4
     assert entry["topic"] in entry["subjects"]
+    assert "weather law" not in " ".join(str(value).lower() for value in entry.values())
+
+
+def test_book_texture_rotates_lore_and_general_subjects(monkeypatch) -> None:
+    import random
+
+    from wildmagic.lore_router import book_lore_cards
+
+    monkeypatch.setenv("WILDMAGIC_LORE_CARDS_ENABLED", "1")
+    entries = [grammar_book(random.Random(seed), [], "imperial") for seed in range(60)]
+    assert {entry["subject_source"] for entry in entries} == {"general", "lore"}
+    assert all(
+        "weather law" not in " ".join(str(value).lower() for value in entry.values())
+        for entry in entries
+    )
+    assert any(
+        book_lore_cards(entry["subjects"], entry["name"])
+        for entry in entries
+        if entry["subject_source"] == "lore"
+    )
+
+
+def test_room_archetype_topics_avoid_retired_weather_law() -> None:
+    from wildmagic.generation import ROOM_ARCHETYPES
+
+    topics = [topic for archetype in ROOM_ARCHETYPES for topic in archetype.topics]
+    assert topics
+    assert "weather law" not in {topic.lower() for topic in topics}
 
 
 def test_book_title_seed_packet_is_lean(monkeypatch) -> None:
@@ -455,6 +484,11 @@ def test_book_title_seed_packet_is_lean(monkeypatch) -> None:
         assert "forbidden" in context["contract"]
         subjects = context["subject"]["book"]["subjects"]
         assert "forbidden saints" in subjects
+        visible_keys = [key for key in context if key != "engine_private"]
+        assert visible_keys[0] == "book_focus"
+        assert visible_keys[-1] == "book_focus_reminder"
+        assert "forbidden saints" in context["book_focus"]
+        assert context["book_focus"] == context["book_focus_reminder"]
         # Lean packet: no expensive world/place/threads blocks on the title call.
         assert "threads" not in context
         assert "place" not in context
@@ -472,10 +506,30 @@ def test_book_seed_packet_includes_catalog_guidance() -> None:
     try:
         book = _chamber_book(session.engine)
         context = session._canon_context_for_book(book, "canon_test_book")
+        visible_keys = [key for key in context if key != "engine_private"]
+        assert visible_keys[0] == "book_focus"
+        assert visible_keys[-1] == "book_focus_reminder"
+        assert "forbidden saints" in context["book_focus"]
+        assert context["book_focus"] == context["book_focus_reminder"]
+        book_packet = context["subject"]["book"]
+        assert "id" not in book_packet
+        assert "name" not in book_packet
+        assert "description" not in book_packet
+        assert "tags" not in book_packet
+        assert "attachment" not in context["subject"]
+        assert context["engine_private"]["attachment"] == {
+            "kind": "prop",
+            "entity_id": book.id,
+        }
         catalog = context["subject"]["book"]["catalog"]
         assert catalog["genre"] == "saint's life"
         assert catalog["author_role"] == "field nun"
         assert "title_shape" in catalog
+        assert "binding" not in catalog
+        assert "condition" not in catalog
+        assert "form" not in catalog
+        assert "description" not in catalog
+        assert "name" not in catalog
         guidance = context["contract"]["book_guidance"]
         assert "genre" in guidance["use_catalog_fields"]
         assert "maps" in guidance["avoid_defaulting_to"]
@@ -515,6 +569,44 @@ def test_book_titles_prewarm_independent_of_saturation_flag(monkeypatch) -> None
             record.kind in {"book", "room_flavor"}
             for record in session.engine.state.canon_records.values()
         )
+    finally:
+        session.close()
+
+
+def test_title_only_book_title_response_renames_book(monkeypatch) -> None:
+    class TitleOnlyCanonProvider:
+        name = "title_only"
+
+        def materialize(self, context):
+            assert context["kind"] == "book_title"
+            return '{"title": "The Ash-Stove Manual", "tags": ["book_title"]}'
+
+    monkeypatch.setenv("WILDMAGIC_BOOK_TITLES", "1")
+    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_ENABLED", "0")
+    monkeypatch.setenv("WILDMAGIC_CANON_PREWARM_LIMIT", "1")
+    session = GameSession(
+        seed=7,
+        scenario="test_chamber",
+        provider_name="mock",
+        canon_provider_name="mock",
+    )
+    session.background_canon_provider = TitleOnlyCanonProvider()
+    try:
+        book = _chamber_book(session.engine)
+        original_name = book.name
+        session.execute_command("inspect")
+        session.drain_canon_prewarm(block=True)
+        title = next(
+            record
+            for record in session.engine.state.canon_records.values()
+            if record.kind == "book_title"
+        )
+
+        assert title.title == "The Ash-Stove Manual"
+        assert title.text == "The Ash-Stove Manual"
+        assert book.name == "The Ash-Stove Manual"
+        assert book.name != original_name
+        assert book.details.get("title_materialized")
     finally:
         session.close()
 

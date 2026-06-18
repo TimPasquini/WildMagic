@@ -13,6 +13,44 @@ from .semantics import place_anchor
 class _CombatMixin:
     """Combat methods mixed into GameEngine."""
 
+    def award_experience(self, amount: int = 1, *, announce: bool = True) -> None:
+        """The single entry point for gaining experience. XP is a lifetime tally that is
+        never spent; every point also weathers the player's active curses, and a curse
+        lifts on its own once the caster has earned enough XP while carrying it (see
+        _advance_curse_clearing). This is how curses clear -- there is no manual command."""
+        if amount <= 0:
+            return
+        self.state.experience += amount
+        self.state.stats.experience_gained += amount
+        if announce:
+            self.state.add_message(f"You gain {amount} experience.")
+        self._advance_curse_clearing(amount)
+
+    def _advance_curse_clearing(self, amount: int) -> None:
+        """Pour `amount` earned XP into every active curse's clear meter. A stack lifts
+        each time its meter fills (xp_to_clear), with any overflow carrying to the next
+        stack; the curse is removed when its last stack clears. XP is not consumed -- the
+        meter is independent of the experience tally."""
+        for curse_id in list(self.state.curses):
+            curse = self.state.curses.get(curse_id)
+            if curse is None:
+                continue
+            threshold = max(1, int(curse.xp_to_clear))
+            curse.clear_progress += amount
+            while curse.clear_progress >= threshold and curse.stacks > 0:
+                curse.clear_progress -= threshold
+                curse.stacks -= 1
+                if curse.stacks <= 0:
+                    self.state.curses.pop(curse_id, None)
+                    self.state.add_message(
+                        f"You have earned your way clear of {curse.name}; the curse lifts."
+                    )
+                    break
+                self.state.add_message(
+                    f"{curse.name} loosens its grip, down to {curse.stacks} "
+                    f"stack{'s' if curse.stacks != 1 else ''}."
+                )
+
     def equipment_bonus(self, entity: Entity, stat: str) -> int:
         total = 0
         for item_name in entity.equipment.values():
@@ -293,9 +331,7 @@ class _CombatMixin:
                     self.state.add_message(f"{entity.name} dies.")
                     self.state.stats.enemies_killed += 1
                     if self._deed_attributed_to_player(source):
-                        self.state.experience += 1
-                        self.state.stats.experience_gained += 1
-                        self.state.add_message("You gain 1 experience.")
+                        self.award_experience(1)
                     # Emergent world: a kill the player's soul is responsible for can
                     # become a deed (Phase 0 records imperial kills). Recorded now;
                     # consequences are applied later by the daily tick (§1.8).

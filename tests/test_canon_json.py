@@ -4,7 +4,11 @@ import json
 
 import pytest
 
-from wildmagic.canon import parse_canon_json, _repair_truncated_json
+from wildmagic.canon import (
+    normalize_canon_record,
+    parse_canon_json,
+    _repair_truncated_json,
+)
 
 
 def test_parses_clean_json():
@@ -75,3 +79,46 @@ def test_genuine_garbage_still_raises():
 
 def test_repair_returns_none_for_unsalvageable():
     assert _repair_truncated_json("no opening brace") is None
+
+
+def test_normalize_uses_private_attachment_without_engine_choice_leak():
+    record = normalize_canon_record(
+        {"title": "A Book", "text": "the body", "tags": ["book"]},
+        {
+            "record_id": "canon_book_prop_5",
+            "kind": "book",
+            "source": "ondemand",
+            "subject": {"book": {"catalog": {}}},
+            "base_tags": ["book"],
+            "allowed_tags": ["book"],
+            "engine_choices": {"turn_cost": 1},
+            "engine_private": {
+                "attachment": {"kind": "prop", "entity_id": "prop_5"},
+            },
+        },
+    )
+    assert record.attachment == {"kind": "prop", "entity_id": "prop_5"}
+    assert record.engine_choices == {"turn_cost": 1}
+
+
+def test_book_title_normalizes_title_only_response():
+    record = normalize_canon_record(
+        {"title": "The Ash-Stove Manual", "tags": ["book_title"]},
+        {
+            "record_id": "canon_book_title_prop_12",
+            "kind": "book_title",
+            "source": "background",
+            "subject": {
+                "book": {"id": "prop_12", "subjects": ["well-keeping"]},
+                "attachment": {"kind": "prop", "entity_id": "prop_12"},
+            },
+            "base_tags": ["book", "book_title"],
+            "allowed_tags": ["book", "book_title"],
+            "engine_choices": {"turn_cost": 0},
+        },
+    )
+
+    assert record.title == "The Ash-Stove Manual"
+    assert record.text == "The Ash-Stove Manual"
+    assert record.summary == "The Ash-Stove Manual"
+    assert record.attachment == {"kind": "prop", "entity_id": "prop_12"}

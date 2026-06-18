@@ -3141,7 +3141,13 @@ class GameUI:
             lines.append((limit, GOLD))
         if card["semantic_prompt"]:
             lines.append((card["semantic_prompt"], MUTED))
-        lines.append((f"Clear one stack: {card['xp_to_clear']} XP", ACCENT))
+        lines.append(
+            (
+                f"Lifts at {card['xp_to_clear']} XP earned "
+                f"(this stack: {card['clear_progress']}/{card['xp_to_clear']})",
+                ACCENT,
+            )
+        )
         wrapped: list[tuple[str, tuple[int, int, int]]] = []
         for text, color in lines:
             for part in wrap_text(str(text), 38):

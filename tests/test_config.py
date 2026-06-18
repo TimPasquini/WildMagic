@@ -15,6 +15,8 @@ MODEL_KEYS = (
     "WILDMAGIC_TRADE_MODEL",
     "WILDMAGIC_TOWN_MODEL",
     "WILDMAGIC_LORE_MODEL",
+    "WILDMAGIC_CANON_MODEL",
+    "WILDMAGIC_BACKGROUND_CANON_MODEL",
     "WILDMAGIC_AGENT_MODEL",
 )
 PROVIDER_KEYS = (
@@ -65,6 +67,8 @@ def test_model_fallback_chains(monkeypatch) -> None:
     assert config.get_trade_model() == config.DEFAULT_MODEL
     assert config.get_town_model() == config.DEFAULT_MODEL
     assert config.get_lore_model() == config.DEFAULT_LORE_MODEL
+    assert config.get_canon_model() == config.DEFAULT_MODEL
+    assert config.get_background_canon_model() == config.DEFAULT_MODEL
     assert config.get_agent_model() == config.DEFAULT_MODEL
 
     monkeypatch.setenv("WILDMAGIC_MODEL", "shared-model")
@@ -73,6 +77,8 @@ def test_model_fallback_chains(monkeypatch) -> None:
     assert config.get_trade_model() == "shared-model"
     assert config.get_town_model() == "shared-model"
     assert config.get_lore_model() == config.DEFAULT_LORE_MODEL
+    assert config.get_canon_model() == "shared-model"
+    assert config.get_background_canon_model() == "shared-model"
     assert config.get_agent_model() == "shared-model"
 
     monkeypatch.setenv("WILDMAGIC_WILD_MODEL", "wild-model")
@@ -84,6 +90,13 @@ def test_model_fallback_chains(monkeypatch) -> None:
     assert config.get_dialogue_model() == "dialogue-model"
     assert config.get_trade_model() == "dialogue-model"
     assert config.get_town_model() == "shared-model"
+
+    monkeypatch.setenv("WILDMAGIC_CANON_MODEL", "canon-model")
+    assert config.get_canon_model() == "canon-model"
+    assert config.get_background_canon_model() == "canon-model"
+
+    monkeypatch.setenv("WILDMAGIC_BACKGROUND_CANON_MODEL", "background-canon-model")
+    assert config.get_background_canon_model() == "background-canon-model"
 
     monkeypatch.setenv("WILDMAGIC_TRADE_MODEL", "trade-model")
     monkeypatch.setenv("WILDMAGIC_TOWN_MODEL", "town-model")

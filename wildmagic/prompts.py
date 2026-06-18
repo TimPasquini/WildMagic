@@ -370,7 +370,7 @@ Be concrete and warm-blooded, not grandiose. No stats, no mechanics, no new loca
 CANON_SYSTEM_PROMPT = """You materialize one piece of observed world canon for a fantasy roguelike about wild magic under a handsome, cold Empire.
 Return ONLY one JSON object, no markdown, no commentary, no <think> text.
 
-Shape:
+Default shape for most canon records:
 {
   "title": "short evocative title",
   "summary": "one sentence, 20-40 words",
@@ -378,21 +378,25 @@ Shape:
   "tags": ["short_tag"],
   "llm_choices": {"author": "for books: the writer's invented name (required)", "voice": "optional nonmechanical choice"}
 }
+For kind "book_title", use the compact shape {"title": "...", "tags": [...], "llm_choices": {}}; text may repeat the title, but summary and body text are not needed.
 
 The user message is a seed packet. Treat WORLD, PLACE, SUBJECT, and THREADS as facts and constraints, not suggestions.
 Describe the SUBJECT itself. THREADS are background the subject may echo or reference in passing - never what you describe instead of the subject.
 Write only sensory and interpretive detail. You may imply mood, age, use, neglect, local history, and connections to provided threads.
+When book_focus and book_focus_reminder are present, use them as the highest-priority summary of the task and subject.
 When kind is "book": you are writing the book itself, not describing it. The reader is already holding it - give them its words.
-- SUBJECT.book.catalog is the engine's shelf card: topic, secondary_topic, genre, discipline, author_role, audience, purpose, stance, institution, title_shape, and taboo_level. Use those fields as hard creative steering. A "ledger of old maps" might become a widow's border complaint, a children's road lesson, a suppressed sermon, or a trial record - not another generic map book.
+- SUBJECT.book contains the printed title if already known, subjects, and a literary steering catalog: topic, secondary_topic, genre, discipline, author_role, audience, purpose, stance, institution, title_shape, and taboo_level. It deliberately omits shelf name, binding, condition, damage, and other physical description; do not invent or discuss those.
+- Use the catalog fields as hard creative steering. A book about old maps might become a widow's border complaint, a children's road lesson, a suppressed sermon, or a trial record - not another generic map book.
 - If SUBJECT.book.title is given, use it verbatim as the title; the reader is opening the already-named book on the shelf, not discovering a different one. Otherwise invent the title as below.
-- title: the book's own printed title - particular, in-world, freshly invented from the catalog's topic plus at least one other catalog axis. Obey title_shape when present. Never reuse the subject book's catalog description (its name field) as the title.
+- title: the book's own printed title - particular, in-world, freshly invented from the catalog's topic plus at least one other catalog axis. Obey title_shape when present. Never use a category label as the title.
 - llm_choices.author: the author's invented name (required).
-- text: the book's actual contents, compressed to a few readable pages - 4 to 7 paragraphs, 300-600 words, paragraphs separated by blank lines. Write entirely in the author_role's voice, for the audience, pursuing the purpose, colored by the stance. Make the genre and discipline change the structure: a primer teaches, a complaint accuses, a log records, a sermon exhorts, a manual instructs, a confession evades and admits. Begin mid-work if you like, as an excerpt of something longer.
-- NEVER describe the physical object - no bindings, stains, brittle pages, ink, thumbprints, or smells of the volume. That is the catalog's job. Words only, as printed.
+- text: the book's actual printed contents, compressed into 4 to 7 short paragraphs, 250-500 words. This MUST be one JSON string; put paragraph breaks inside that single string as \\n\\n, never as separate quoted strings or extra JSON fields. Write entirely in the author_role's voice, for the audience, pursuing the purpose, colored by the stance. Make the genre and discipline change the structure: a primer teaches, a complaint accuses, a log records, a sermon exhorts, a manual instructs, a confession evades and admits. Begin mid-work if you like, as an excerpt of something longer.
+- Each paragraph should advance a new point, episode, instruction, or argument. Do not repeat the same sentence, entry, example, or template across paragraphs.
+- NEVER describe the physical object - no bindings, covers, stains, brittle pages, ink, thumbprints, smells, shelf location, or the act of reading. Words only, as printed.
 - Avoid defaulting to ink, maps, copying, archives, or cartography unless the catalog specifically demands them; even then, make the human purpose stranger than the subject matter.
 - Marginalia are welcome as bracketed lines in another hand, sparingly.
 - If THREADS carry rumors or promises, the author may treat them as hearsay worth recording - places, names, troubles - without proving or mapping anything.
-When kind is "book_title": invent ONLY the book's printed title - nothing else. Use SUBJECT.book.subjects (the 1-4 things the book is about) as the heart of the title, steered by catalog.title_shape, genre, and taboo_level. Make it a particular, natural-sounding in-world title, never a category label or a list of the subjects. Obey title_shape when present (a complaint accuses, a registry enumerates, a sermon exhorts, a calendar counts days). Put the title in the title field; the text field may repeat the title verbatim. Do NOT write an author, a summary, or any pages, and do not emit lore claims.
+When kind is "book_title": invent ONLY the book's printed title - nothing else. Use SUBJECT.book.subjects (the 1-4 things the book is about) as the heart of the title, steered by catalog.title_shape, genre, and taboo_level. Make it a particular, natural-sounding in-world title, never a category label or a list of the subjects. Obey title_shape when present (a complaint accuses, a registry enumerates, a sermon exhorts, a calendar counts days). Put the title in the title field; the text field may repeat the title verbatim but can be omitted. Do NOT write an author, a summary, or the book contents, and do not emit lore claims.
 When kind is "room_flavor": title names the place; text describes the room as a whole - its air, light, arrangement, and what living in it must have been like. Mention objects in it (including books) in at most one clause each.
 When kind is "investigation": engine_choices carry the only truth about secrets. If secret_present is false, write what patient study honestly finds - material, age, craft, history - and never imply hidden treasure, compartments, or passages. If secret_present is true, write the search and exactly one concrete clue in the manner of clue_style pointing at anchor_name; do not state what is hidden, where the reward sits, or how to open it - the clue should make a careful reader want to investigate the anchor itself.
 If engine_choices include decoration_options, you may surface ONE as something the search turns up: set llm_choices.decoration_template to its exact template id, optionally llm_choices.decoration_name (a particular name for it) and llm_choices.decoration_description (one sensory sentence), and mention it in your text. If your text mentions any decoration option, you MUST set llm_choices.decoration_template to match; never describe an option you did not choose. Choose none if nothing fits.

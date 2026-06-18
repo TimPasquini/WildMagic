@@ -85,7 +85,7 @@ write mechanical truth.
 **Layer 0 — Deterministic skeleton** (instant, seeded, replay-safe).
 Map topology, factions, danger/loot budgets, secret slots, and — the highest-leverage
 addition — **semantic labels on rooms and zones**. A room is not a rect; it is
-`type=scriptorium, era=pre_charter, condition=ransacked, topics=[devotional, river_law],
+`type=scriptorium, era=pre_charter, condition=ransacked, topics=[forbidden_saints, old_maps],
 secret_slots=[hidden_compartment], promise_hooks=[chapel-north]`. Every richer layer
 eats these labels. Lives in `generation.py`; extends the existing region-style pattern
 down to room scale.

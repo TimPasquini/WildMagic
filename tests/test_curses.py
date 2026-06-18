@@ -168,19 +168,88 @@ def test_player_attributed_enemy_kill_grants_placeholder_experience() -> None:
     assert engine.state.stats.experience_gained == 1
 
 
-def test_clear_curse_command_spends_experience_and_removes_stack() -> None:
+def test_curse_clears_automatically_after_earning_required_xp() -> None:
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    add_curse(engine, "close_curse")
+    threshold = engine.state.curses["close_curse"].xp_to_clear
+    assert threshold > 1
+
+    for _ in range(threshold - 1):
+        engine.award_experience(1)
+    # Not yet: the meter has filled but not reached the threshold.
+    assert "close_curse" in engine.state.curses
+    assert engine.state.curses["close_curse"].clear_progress == threshold - 1
+
+    engine.award_experience(1)
+    assert "close_curse" not in engine.state.curses
+    # XP is a lifetime tally; clearing a curse never spends it.
+    assert engine.state.experience == threshold
+    assert engine.state.stats.experience_gained == threshold
+
+
+def test_curse_clearing_does_not_spend_experience_on_bulk_award() -> None:
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    add_curse(engine, "narrow_curse")
+
+    engine.award_experience(10)
+
+    assert "narrow_curse" not in engine.state.curses
+    assert engine.state.experience == 10
+
+
+def test_multi_stack_curse_lifts_one_stack_per_threshold() -> None:
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    add_curse(engine, "narrow_curse")
+    engine.state.curses["narrow_curse"].stacks = 2
+    threshold = engine.state.curses["narrow_curse"].xp_to_clear
+
+    engine.award_experience(threshold)
+    curse = engine.state.curses.get("narrow_curse")
+    assert curse is not None and curse.stacks == 1
+    assert curse.clear_progress == 0
+
+    engine.award_experience(threshold)
+    assert "narrow_curse" not in engine.state.curses
+    assert engine.state.experience == threshold * 2
+
+
+def test_kill_xp_advances_curse_clearing() -> None:
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    add_curse(engine, "narrow_curse")  # xp_to_clear == 3
+    enemy = engine.nearest_enemy()
+    assert enemy is not None
+
+    # One player-attributed kill grants 1 XP, which weathers the curse by one tick.
+    engine.apply_wild_magic_resolution(
+        resolution(
+            effects=[
+                {
+                    "type": "damage",
+                    "target": enemy.id,
+                    "amount": 99,
+                    "damage_type": "arcane",
+                }
+            ]
+        )
+    )
+    assert engine.state.experience == 1
+    assert engine.state.curses["narrow_curse"].clear_progress == 1
+
+
+def test_clear_curse_command_is_informational_only() -> None:
     session = GameSession(seed=7, scenario="test_chamber", provider_name="mock")
     curse = build_curse({"id": "close_curse"}, turn=session.engine.state.turn)
     session.engine.state.curses[curse.id] = curse
-    session.engine.state.experience = curse.xp_to_clear
+    session.engine.state.experience = 10
 
     result = session.execute_command("clear curse close", record=False)
 
     assert result.success is True
     assert result.consumed_turn is False
-    assert session.engine.state.experience == 0
-    assert "close_curse" not in session.engine.state.curses
-    assert "breaks" in result.messages[0]
+    # The command no longer spends XP or removes the curse; it only explains.
+    assert session.engine.state.experience == 10
+    assert "close_curse" in session.engine.state.curses
+    assert any("lift on their own" in message for message in result.messages)
 
 
 def test_curse_card_labels_known_mechanical_curses() -> None:

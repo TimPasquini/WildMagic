@@ -2,7 +2,7 @@
 
 This layer guarantees nothing is ever blank and manufactures the seed vocabulary
 that LLM materialization (canon.py) consumes. A book placed here has a concrete
-grammar-tier name ("a water-stained ledger of weather law") the moment the map
+grammar-tier name ("a water-stained ledger of storm signs") the moment the map
 exists; its title, author, and pages stay unmaterialized until read or prewarmed.
 """
 
@@ -68,7 +68,7 @@ _BOOK_GENRES = (
 
 _BOOK_DISCIPLINES = (
     "devotional practice",
-    "weather law",
+    "storm signs",
     "borderkeeping",
     "funeral custom",
     "river engineering",
@@ -83,6 +83,78 @@ _BOOK_DISCIPLINES = (
     "glassmaking",
     "road maintenance",
     "midwifery",
+    "folk cartography",
+    "lampkeeping",
+    "well-keeping",
+    "salt preservation",
+)
+
+_GENERAL_BOOK_TOPICS = (
+    "abandoned provisions",
+    "apprentice mistakes",
+    "bad harvests",
+    "border gossip",
+    "broken tools",
+    "candle accounts",
+    "census ghosts",
+    "charter loopholes",
+    "drain maps",
+    "field remedies",
+    "fishwife curses",
+    "forbidden saints",
+    "funeral songs",
+    "garden weather",
+    "glasshouse accidents",
+    "hedge accounting",
+    "hidden wells",
+    "household inspections",
+    "kitchen physic",
+    "lantern taxes",
+    "lost bridges",
+    "market weights",
+    "midwife oaths",
+    "minor saints",
+    "mislabeled crates",
+    "mold in archives",
+    "mushroom cookery",
+    "old maps",
+    "old patrol routes",
+    "pilgrim injuries",
+    "pilgrim road songs",
+    "plant omens",
+    "river tolls",
+    "roadside shrines",
+    "root sickness",
+    "salt debts",
+    "smuggled prayers",
+    "soldier superstitions",
+    "storm signs",
+    "watch rotations",
+    "well customs",
+    "widow ledgers",
+)
+
+_LORE_BOOK_TOPICS = (
+    "the Empire",
+    "charter magic",
+    "the Shadow Purge",
+    "Vigovia",
+    "Stalnaz",
+    "crystal magic",
+    "Brall",
+    "bone magic",
+    "Ryolan",
+    "blood magic",
+    "Vint",
+    "woven magic",
+    "Threen",
+    "Monteary",
+    "Ontria",
+    "Gontark",
+    "Parn",
+    "birdfolk",
+    "merfolk",
+    "Rentacosta",
 )
 
 _AUTHOR_ROLES = (
@@ -175,12 +247,49 @@ _TITLE_SHAPES = (
 
 _TABOO_LEVELS = ("ordinary", "eccentric", "suppressed", "forbidden")
 
+_TOPIC_REPLACEMENTS = {
+    "weather law": "storm signs",
+    "weather laws": "storm signs",
+    "river_law": "river tolls",
+}
+
+
+def _clean_topic(topic: str) -> str:
+    cleaned = " ".join(str(topic).strip().split())
+    return _TOPIC_REPLACEMENTS.get(cleaned.lower(), cleaned)
+
+
+def _clean_topics(topics: list[str]) -> list[str]:
+    useful: list[str] = []
+    for topic in topics:
+        cleaned = _clean_topic(str(topic))
+        if cleaned and cleaned not in useful:
+            useful.append(cleaned)
+    return useful
+
+
+def _choice_except(
+    rng: random.Random, pool: tuple[str, ...] | list[str], forbidden: set[str]
+) -> str:
+    forbidden_keys = {_clean_topic(item).casefold() for item in forbidden}
+    candidates = [
+        cleaned
+        for item in pool
+        if (cleaned := _clean_topic(str(item)))
+        and cleaned.casefold() not in forbidden_keys
+    ]
+    if not candidates:
+        candidates = [
+            _clean_topic(str(item)) for item in pool if _clean_topic(str(item))
+        ]
+    return rng.choice(candidates)
+
 
 def _choose_topic(rng: random.Random, topics: list[str]) -> str:
-    useful = [topic for topic in topics if str(topic).strip()]
-    if useful:
-        return str(rng.choice(useful))
-    return rng.choice(_BOOK_DISCIPLINES)
+    useful = _clean_topics(topics)
+    if useful and rng.random() < 0.55:
+        return rng.choice(useful)
+    return rng.choice(_GENERAL_BOOK_TOPICS)
 
 
 def grammar_book(rng: random.Random, topics: list[str], era: str) -> dict[str, Any]:
@@ -189,13 +298,28 @@ def grammar_book(rng: random.Random, topics: list[str], era: str) -> dict[str, A
     The name is deliberately a category description, not a title — titles carry
     world texture and belong to the LLM at materialization time.
     """
-    topic = _choose_topic(rng, topics)
-    secondary_topic = rng.choice([item for item in _BOOK_DISCIPLINES if item != topic])
+    room_topics = _clean_topics(topics)
+    subject_source = "lore" if rng.random() < 0.5 else "general"
+    if subject_source == "lore":
+        topic = rng.choice(_LORE_BOOK_TOPICS)
+        secondary_pool = [
+            *room_topics,
+            *_GENERAL_BOOK_TOPICS,
+            *_BOOK_DISCIPLINES,
+        ]
+    else:
+        topic = _choose_topic(rng, room_topics)
+        secondary_pool = [
+            *room_topics,
+            *_BOOK_DISCIPLINES,
+            *_GENERAL_BOOK_TOPICS,
+        ]
+    secondary_topic = _choice_except(rng, secondary_pool, {topic})
     form = rng.choice(_BOOK_FORMS)
     condition = rng.choice(_BOOK_CONDITIONS)
     binding = rng.choice(_BOOK_BINDINGS)
     genre = rng.choice(_BOOK_GENRES)
-    discipline = rng.choice(_BOOK_DISCIPLINES)
+    discipline = _choice_except(rng, _BOOK_DISCIPLINES, {topic, secondary_topic})
     author_role = rng.choice(_AUTHOR_ROLES)
     audience = rng.choice(_AUDIENCES)
     purpose = rng.choice(_PURPOSES)
@@ -215,6 +339,7 @@ def grammar_book(rng: random.Random, topics: list[str], era: str) -> dict[str, A
         "description": f"A {form} bound in {binding}, {condition}. It concerns {topic}.",
         "topic": topic,
         "secondary_topic": secondary_topic,
+        "subject_source": subject_source,
         "subjects": subjects[:4],
         "form": form,
         "condition": condition,

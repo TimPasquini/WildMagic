@@ -39,9 +39,9 @@ purposes run on executor threads behind gameplay and may use a slower, cheaper
 configuration (CPU, smaller model) so they never compete with the foreground.
 
 > Note: promise **flesh** rides the `lore` purpose configuration (it is genuinely
-> background work). Future background canon prewarming will construct its provider with
-> background-channel overrides; the `canon` purpose covers the blocking, player-facing
-> path.
+> background work). Background canon prewarming uses the BACKGROUND route but defaults
+> to the canon model, so book titles/pages stay on the more lucid prose model unless
+> `WILDMAGIC_BACKGROUND_CANON_MODEL` is explicitly set.
 
 ### Scoped variables
 
@@ -81,7 +81,7 @@ resolver, while `--agent ollama` uses the `agent` purpose only to choose CLI com
 | `WILDMAGIC_DIALOGUE_MODEL` | shared | NPC conversation (a chattier finetune works well) |
 | `WILDMAGIC_TRADE_MODEL` | dialogue's | trade extraction |
 | `WILDMAGIC_CANON_MODEL` | shared | examine/read materialization |
-| `WILDMAGIC_BACKGROUND_CANON_MODEL` | lore model | background book previews |
+| `WILDMAGIC_BACKGROUND_CANON_MODEL` | canon model | background book previews |
 | `WILDMAGIC_AGENT_MODEL` | shared | autonomous playtesting command chooser |
 | `WILDMAGIC_TOWN_MODEL` | shared | settlement generation |
 | `WILDMAGIC_LORE_MODEL` | `qwen3:1.7b` | extraction/flesh; small is fine for extraction |
@@ -154,7 +154,8 @@ still and the queued job is re-chosen by proximity each time a slot frees.
 | `WILDMAGIC_CANON_PREWARM_LIMIT` | 2 | max queued/in-flight background canon jobs. 2 keeps one running and one queued on the single worker so it never idles; 0 disables all background canon (the book pipeline included) |
 
 Prewarming uses the background route (`LORE`/`BACKGROUND` Ollama options) and the
-`WILDMAGIC_BACKGROUND_CANON_MODEL` model, falling back to `WILDMAGIC_LORE_MODEL`.
+`WILDMAGIC_BACKGROUND_CANON_MODEL` model, falling back to `WILDMAGIC_CANON_MODEL` and
+then the shared `WILDMAGIC_MODEL`.
 It can materialize `book_title`, full `book`, `room_flavor`, and far-look
 `object_detail`/`npc_detail`/`creature_detail` records. A book's full pages are prewarmed
 only after its title exists (so they inherit the shelf name); a book read before the
