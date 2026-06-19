@@ -21,6 +21,7 @@ from .models import (
     TILE_NAMES,
     WALL,
     Entity,
+    NPCMemoryRecord,
     WildMagicOutcome,
 )
 from .normalize import (
@@ -1691,9 +1692,9 @@ class _EffectsMixin:
 
     def _apply_edit_memory(self, effect: dict[str, Any]) -> list[str]:
         """Bend a mind: add, remove, or alter what an NPC remembers. Operates on the NPC's
-        NPCProfile.memory (the 'things_i_have_noticed' the dialogue model sees). Forgetting
-        the caster from a hostile NPC also calms it -- 'make the guard forget me' should
-        actually end the pursuit, not just change small talk."""
+        structured and legacy memory lanes. Forgetting the caster from a hostile NPC also
+        calms it -- 'make the guard forget me' should actually end the pursuit, not just
+        change small talk."""
         target = self.resolve_target(effect.get("target") or "nearest_enemy")
         if target is None or target.kind != "npc":
             target = self._nearest_npc()
@@ -1708,6 +1709,14 @@ class _EffectsMixin:
         op = normalize_id(str(effect.get("op") or "alter"))
         text = " ".join(str(effect.get("text") or "").split())[:200]
         subject = " ".join(str(effect.get("subject") or "").split())[:80]
+        privacy = normalize_id(str(effect.get("privacy") or "social"))
+        if privacy not in {"public", "social", "intimate", "secret"}:
+            privacy = "social"
+        shareable = bool(
+            effect.get("shareable")
+            or effect.get("socially_visible")
+            or effect.get("spreadable")
+        )
         subject_lower = subject.lower()
         player_name = (self.state.player.name or "").lower()
         caster_aliases = {
@@ -1739,9 +1748,36 @@ class _EffectsMixin:
                 return True
             return False
 
+        def _record_mentions(record: NPCMemoryRecord) -> bool:
+            haystack = " ".join(
+                [
+                    record.claim,
+                    record.subject,
+                    " ".join(record.subject_refs),
+                    " ".join(record.tags),
+                ]
+            ).lower()
+            padded = f" {haystack} "
+            if subject_lower and subject_lower in padded:
+                return True
+            if refers_to_caster and (
+                self.state.player_soul_id in record.subject_refs
+                or (player_name and player_name in padded)
+                or " you " in padded
+                or " your " in padded
+                or " player " in padded
+            ):
+                return True
+            return False
+
         if op in {"remove", "erase", "forget", "wipe"}:
             kept = [m for m in profile.memory if not _mentions(m)]
             profile.memory = kept
+            profile.memory_records = [
+                record
+                for record in profile.memory_records
+                if not _record_mentions(record)
+            ]
             calmed = False
             if refers_to_caster and target.faction not in {"ally", "player", "neutral"}:
                 target.faction = "neutral"
@@ -1757,7 +1793,27 @@ class _EffectsMixin:
         if op in {"add", "implant", "plant", "insert"}:
             if not text:
                 return ["The false memory has no shape to take, and slips away."]
-            profile.remember(text)
+            profile.add_memory(
+                NPCMemoryRecord(
+                    id="",
+                    claim=text,
+                    provenance="implanted",
+                    bucket="observation",
+                    subtype="false_memory",
+                    subject=subject,
+                    subject_refs=[self.state.player_soul_id]
+                    if refers_to_caster
+                    else [],
+                    tags=["implanted", "memory_edit"],
+                    place_key=self.state.current_place_key(),
+                    turn=self.state.turn,
+                    confidence=1.0,
+                    salience=clamp_int(effect.get("strength") or 3, 1, 5),
+                    privacy=privacy,
+                    shareable=shareable,
+                    source_event_id=f"memory_edit:{self.state.turn}:{target.id}",
+                )
+            )
             return [
                 f"A memory that never happened settles into {target.name}'s mind as if it always lived there."
             ]
@@ -1765,8 +1821,33 @@ class _EffectsMixin:
         # alter (default): drop what matched, then plant the new recollection.
         if subject_lower or refers_to_caster:
             profile.memory = [m for m in profile.memory if not _mentions(m)]
+            profile.memory_records = [
+                record
+                for record in profile.memory_records
+                if not _record_mentions(record)
+            ]
         if text:
-            profile.remember(text)
+            profile.add_memory(
+                NPCMemoryRecord(
+                    id="",
+                    claim=text,
+                    provenance="implanted",
+                    bucket="observation",
+                    subtype="edited_memory",
+                    subject=subject,
+                    subject_refs=[self.state.player_soul_id]
+                    if refers_to_caster
+                    else [],
+                    tags=["implanted", "memory_edit"],
+                    place_key=self.state.current_place_key(),
+                    turn=self.state.turn,
+                    confidence=1.0,
+                    salience=clamp_int(effect.get("strength") or 3, 1, 5),
+                    privacy=privacy,
+                    shareable=shareable,
+                    source_event_id=f"memory_edit:{self.state.turn}:{target.id}",
+                )
+            )
         return [f"{target.name}'s memory rewrites itself quietly around your words."]
 
     def _resolve_prop_target(self, effect: dict[str, Any]) -> "Entity | None":

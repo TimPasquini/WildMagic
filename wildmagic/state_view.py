@@ -502,6 +502,39 @@ def state_summary(engine: "GameEngine") -> dict[str, Any]:
             for fid in sorted(state.faction_ledger.factions)
         },
         "legend": state.legend_ledger.to_dict(),
+        "gossip_edges": [
+            edge.to_dict()
+            for edge in sorted(state.gossip_edges.values(), key=lambda edge: edge.id)
+        ],
+        "gossip_spread_days": sorted(state.gossip_spread_days),
+        "npc_memories": {
+            npc_id: {
+                "name": profile.name,
+                "personally_witnessed": [
+                    record.to_dict()
+                    for record in profile.memory_records
+                    if record.bucket == "observation"
+                    and record.provenance in {"firsthand", "implanted"}
+                ],
+                "overheard": [
+                    record.to_dict()
+                    for record in profile.memory_records
+                    if record.bucket == "overheard" or record.provenance == "overheard"
+                ],
+                "gossip": [
+                    record.to_dict()
+                    for record in profile.memory_records
+                    if record.bucket == "gossip" or record.provenance == "gossip"
+                ],
+                "conversation": [
+                    record.to_dict()
+                    for record in profile.memory_records
+                    if record.bucket == "conversation"
+                ],
+            }
+            for npc_id, profile in sorted(state.npc_profiles.items())
+            if profile.memory_records
+        },
         "pending_backlash": [dict(event) for event in state.pending_backlash],
         "followers": [
             {

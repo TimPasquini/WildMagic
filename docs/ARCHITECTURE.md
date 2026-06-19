@@ -462,6 +462,9 @@ notes for outcomes" contract).
 resentment/ideology + `hidden_pressure` + `affiliations`), one of three orthogonal layers
 (combat faction / org membership / bond). `drift_bond` scores legend × traits × memory.
 
+Structured NPC memories supply a provenance-weighted personal multiplier for reputation
+drift; legacy string memories preserve the old firsthand-memory behavior.
+
 ### `wildmagic/deed_interpreter.py`
 The Phase-A.2 LLM provider that classifies *ambiguous* spell outcomes (raise-dead, raze,
 desecrate, atrocity) into the bounded deed vocabulary — consequences still come from the
@@ -472,7 +475,9 @@ recorded on the wild-magic action record so replays reproduce the deed with no m
 ### Engine integration (`engine.py`)
 `GameState` gains `deed_ledger`/`faction_ledger`/`legend_ledger`, `player_soul_id`, the
 day/night clock (derived from `turn`), placeholder `experience` for curse clearing,
-`ticked_through_day`, `pending_backlash`. The daily
+`ticked_through_day`, `pending_backlash`, `gossip_edges` for deterministic NPC memory
+spread, and `gossip_spread_days` so repeated daily ticks cannot push rumors another hop in
+the same in-world day. The daily
 **Simulator** is `_maybe_run_daily_tick` (fires once per in-game day at 05:00):
 `run_world_tick` (apply deeds → standing + legend + compress) · `_simulate_empire_pressure`
 (D9 kill-emperor gate) · `_simulate_backlash` (factions spend to act) · `_simulate_bonds`
@@ -491,8 +496,12 @@ All shared data types and tile constants. No game logic.
   `WATER`, `FIRE`, `SLICK_ICE`, `ICE_WALL`, `POISON_CLOUD`, `VINES`, `RUBBLE`, `MIST`, `ROAD`
 - Derived tile sets: `BLOCKING_TILES`, `DAMAGING_TILES`, `TILE_NAMES`, `TILE_TAGS`, `TILE_ALIASES`
 - Status/damage type catalogues: `MECHANICAL_STATUSES`, `DAMAGE_TYPES`
-- Dataclasses: `Entity`, `Curse`, `NPCProfile`, `GameStats`, `WildMagicOutcome`, `Room`,
-  `RoomProfile`, `CanonRecord`, `ZoneSnapshot`. `RoomProfile` is the deterministic
+- Dataclasses: `Entity`, `Curse`, `NPCMemoryRecord`, `GossipEdge`, `NPCProfile`,
+  `GameStats`, `WildMagicOutcome`, `Room`, `RoomProfile`, `CanonRecord`, `ZoneSnapshot`.
+  `NPCMemoryRecord` stores neutral memory claims with provenance, bucket, subject refs,
+  salience, privacy, and shareability; `NPCProfile` renders those records into dialogue
+  buckets while keeping the legacy `memory: list[str]` mirror compatible. `GossipEdge`
+  stores deterministic NPC-to-NPC social spread links. `RoomProfile` is the deterministic
   semantic seed layer for richer content; `CanonRecord` stores per-run materialized text
   or descriptions that have become game canon. `Entity.details` stores engine-side
   nonmechanical metadata such as a book's procedural shelf card; feature-specific

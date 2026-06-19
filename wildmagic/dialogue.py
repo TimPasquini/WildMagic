@@ -175,11 +175,17 @@ def _is_self_repetition(reply: str, context: dict[str, Any]) -> bool:
     both to an open question about the Empire AND to "I will burn the Empire to the
     ground" - two wildly different prompts (confirmed via the audit log's stored
     `prompt`, which genuinely differed turn to turn). The model anchored on its own
-    prior line in recent_conversation instead of reacting to the new message - a
+    prior line in conversation_memory instead of reacting to the new message - a
     stuck-in-a-loop failure, distinct from _is_degenerate_echo (which catches
     parroting the *player's* words back, not the NPC's own)."""
     npc = context.get("npc")
-    conversation = npc.get("recent_conversation") if isinstance(npc, dict) else None
+    conversation = None
+    if isinstance(npc, dict):
+        memory = npc.get("conversation_memory")
+        if isinstance(memory, dict):
+            conversation = memory.get("recent_exchanges")
+        if conversation is None:
+            conversation = npc.get("recent_conversation")
     if not isinstance(conversation, list):
         return False
     last_npc_line: str | None = None

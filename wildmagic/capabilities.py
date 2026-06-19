@@ -857,7 +857,9 @@ _MEMORY_EDIT = CapabilityCard(
     prompt_block=(
         "- edit_memory: target (an npc id, or 'nearest_enemy' — applies to the nearest NPC), "
         "op ('add'|'remove'|'alter'), subject (what the memory is about; 'the caster' to mean "
-        "the player), text (the new or rewritten memory in the NPC's own frame), strength 1-5. "
+        "the player), text (the new or rewritten memory), strength 1-5, optional shareable "
+        "(true only when the false/edited memory should spread as gossip), optional privacy "
+        "('public'|'social'|'intimate'|'secret'). "
         "Removing the caster from a hostile NPC's memory also calms it. Memory edits are major: "
         "they bend a mind — pair with a real cost (a curse, or max-resource loss), and never let "
         "one be a free win-button against a quest gate."

@@ -447,7 +447,7 @@ class GameSession:
                 success = True
                 applied = self.engine.run_world_tick()
                 explicit_messages = [
-                    "The world turns. Recent deeds are reckoned with."
+                    "The world turns. News and deeds are reckoned with."
                     if applied
                     else "The world turns. Nothing new to reckon with."
                 ]
@@ -3162,6 +3162,44 @@ def describe_state(engine: GameEngine) -> list[str]:
         "Visible rooms: " + ("; ".join(room_lines) if room_lines else "none"),
         f"Canon records: {len(state.canon_records)}",
     ]
+    memory_lines: list[str] = []
+    for npc_id, profile in sorted(state.npc_profiles.items()):
+        if not profile.memory_records:
+            continue
+        witnessed = sum(
+            1
+            for record in profile.memory_records
+            if record.bucket == "observation"
+            and record.provenance in {"firsthand", "implanted"}
+        )
+        overheard = sum(
+            1
+            for record in profile.memory_records
+            if record.bucket == "overheard" or record.provenance == "overheard"
+        )
+        gossip = sum(
+            1
+            for record in profile.memory_records
+            if record.bucket == "gossip" or record.provenance == "gossip"
+        )
+        conversation = sum(
+            1 for record in profile.memory_records if record.bucket == "conversation"
+        )
+        counts = []
+        if witnessed:
+            counts.append(f"witnessed:{witnessed}")
+        if overheard:
+            counts.append(f"overheard:{overheard}")
+        if gossip:
+            counts.append(f"gossip:{gossip}")
+        if conversation:
+            counts.append(f"conversation:{conversation}")
+        if counts:
+            memory_lines.append(f"{profile.name} ({', '.join(counts)})")
+    if memory_lines:
+        lines.append("NPC memory: " + "; ".join(memory_lines))
+    if state.gossip_edges:
+        lines.append(f"Gossip edges: {len(state.gossip_edges)}")
     if player.resistances:
         lines.append(f"Resistances: {resistances}")
     if player.weaknesses:

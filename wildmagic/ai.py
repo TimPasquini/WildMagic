@@ -139,11 +139,21 @@ class _AIMixin:
             )
             for text in witnessed:
                 # An NPC's own exchange with the player already lives in profile.conversation
-                # (and is surfaced as recent_conversation) -- recording it again here would
+                # (surfaced through conversation_memory) -- recording it again here would
                 # just have them "notice" their own words as if overhearing a stranger.
                 if text.startswith(own_dialogue_prefixes):
                     continue
-                profile.remember(text)
+                profile.remember(
+                    text,
+                    bucket="observation",
+                    provenance="firsthand",
+                    subtype="perception",
+                    tags=["perception"],
+                    place_key=state.current_place_key(),
+                    turn=state.turn,
+                    salience=1,
+                    shareable=False,
+                )
 
     def _enemy_turns(self) -> None:
         player = self.state.player

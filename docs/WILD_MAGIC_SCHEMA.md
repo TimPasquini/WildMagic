@@ -82,7 +82,7 @@ with `python -m wildmagic.spell_contract --write-docs`.
 - `transform_item`: Alter an existing item's type, material, or tags.
 - `modify_inventory`: Add, remove, or set carried item counts.
 - `transform_entity`: Alter an actor's identity, appearance, stats, or tags.
-- `edit_memory`: Add or remove bounded semantic memories from an actor.
+- `edit_memory`: Add, alter, or remove bounded semantic memories from an actor. Optional `shareable: true` lets a planted/altered memory enter gossip spread; optional `privacy` can be `public`, `social`, `intimate`, or `secret`.
 - `animate_object`: Turn an existing prop into a bounded actor.
 - `aura`: Attach a persistent area effect to an entity or tile.
 - `add_trait`: Add a durable semantic trait to an entity.
