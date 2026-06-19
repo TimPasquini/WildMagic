@@ -494,7 +494,7 @@ def main() -> None:
     assert getattr(hit_msg2, "is_danger", False) is True
 
     # Test equipment system additions
-    from .items import infer_equipment_slot
+    from .equipment import infer_equipment_slot
 
     # 1. Verify player starts with cloak and trousers equipped
     assert p.equipment.get("chest") == "tattered cloak"

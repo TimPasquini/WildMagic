@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 
 from .capabilities import select_cards, selected_effect_types
 from .curses import curse_card
+from .equipment import EQUIPMENT_SLOTS, equipment_slot_for_item
 from .game_data import FOCUS_SPECS
 from .normalize import normalize_id
 from .models import (
@@ -97,6 +98,44 @@ def resolve_foci(engine: "GameEngine") -> list[dict[str, Any]]:
             entry["power"] = int(spec["power"])
         foci.append(entry)
     return foci
+
+
+def equipment_inventory_view(engine: "GameEngine") -> dict[str, Any]:
+    """Stable presentation model for equipment and carried inventory.
+
+    Equipment rules stay in `equipment.py`; renderers receive only the resulting slots,
+    focus marks, quantities, and whether each carried item can be equipped.
+    """
+
+    state = engine.state
+    player = state.player
+    slots = [
+        {
+            "slot": slot,
+            "item": player.equipment.get(slot),
+            "occupied": bool(player.equipment.get(slot)),
+            "focused": slot in player.focus_slots,
+        }
+        for slot in EQUIPMENT_SLOTS
+    ]
+    items = []
+    for name, quantity in sorted(state.inventory.items()):
+        if name == "gold":
+            continue
+        equipment_slot = equipment_slot_for_item(name)
+        items.append(
+            {
+                "name": name,
+                "quantity": quantity,
+                "equippable": equipment_slot is not None,
+                "equipment_slot": equipment_slot,
+            }
+        )
+    return {
+        "gold": state.inventory.get("gold", 0),
+        "slots": slots,
+        "items": items,
+    }
 
 
 def room_card(

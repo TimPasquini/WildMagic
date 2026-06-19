@@ -44,7 +44,7 @@ from .lore import (
 )
 from .normalize import normalize_id
 from .models import CanonRecord, CharacterProfile
-from .state_view import replay_summary_view
+from .state_view import equipment_inventory_view, replay_summary_view
 from .secrets import (
     choose_anchor,
     choose_reward,
@@ -329,6 +329,11 @@ class GameSession:
         self._flesh_apply_buffer: list[dict[str, Any]] = []
         self._canon_apply_buffer: list[dict[str, Any]] = []
         self.records: list[dict[str, Any]] = []
+
+    def equipment_inventory_view(self) -> dict[str, Any]:
+        """Read-only equipment/inventory model shared by CLI and GUI."""
+
+        return equipment_inventory_view(self.engine)
 
     def execute_command(
         self,
@@ -3054,9 +3059,10 @@ def describe_followers(engine: GameEngine) -> list[str]:
 def describe_state(engine: GameEngine) -> list[str]:
     state = engine.state
     player = state.player
+    equipment_view = equipment_inventory_view(engine)
     inventory = (
         ", ".join(
-            f"{name} x{amount}" for name, amount in sorted(state.inventory.items())
+            f"{item['name']} x{item['quantity']}" for item in equipment_view["items"]
         )
         or "empty"
     )
@@ -3158,9 +3164,9 @@ def describe_state(engine: GameEngine) -> list[str]:
         )
     equipment = (
         ", ".join(
-            f"{slot}: {item}" + (" [focus]" if slot in player.focus_slots else "")
-            for slot, item in sorted(player.equipment.items())
-            if item
+            f"{slot['slot']}: {slot['item']}" + (" [focus]" if slot["focused"] else "")
+            for slot in equipment_view["slots"]
+            if slot["occupied"]
         )
         or "none"
     )
@@ -3177,6 +3183,7 @@ def describe_state(engine: GameEngine) -> list[str]:
         f"Depth {state.depth}/{state.max_depth} | Position {player.x},{player.y} | Scenario {state.scenario}",
         f"Visible tiles: {len(state.visible)} | Explored tiles: {len(state.explored)}",
         f"Statuses: {statuses}",
+        f"Gold: {equipment_view['gold']}",
         f"Equipment: {equipment}",
         f"Inventory: {inventory}",
         f"Curses: {curses}",

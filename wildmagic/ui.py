@@ -31,8 +31,7 @@ from .autoplay import (
 )
 from .config import DEFAULT_MODEL, audit_dir, get_config_value, set_config_value
 from .curses import curse_card
-from .game_data import _TOWN_GEN_TIMEOUT, EQUIPMENT_SPECS
-from .items import infer_equipment_slot
+from .game_data import _TOWN_GEN_TIMEOUT
 from .normalize import normalize_id
 from .portraits import PortraitClient
 from .scenes.character_creation_scene import CharacterCreationScene
@@ -1263,19 +1262,9 @@ class GameUI:
 
     def _handle_menu_key(self, event: pygame.event.Event) -> None:
         if self.menu_page == "inventory":
-            inventory_items = sorted(
-                [item for item in self.engine.state.inventory.keys() if item != "gold"]
-            )
-            slots = [
-                "weapon",
-                "armor",
-                "charm",
-                "head",
-                "chest",
-                "legs",
-                "feet",
-                "hands",
-            ]
+            equipment_view = self.session.equipment_inventory_view()
+            inventory_items = [item["name"] for item in equipment_view["items"]]
+            slots = [slot["slot"] for slot in equipment_view["slots"]]
 
             if event.key == pygame.K_ESCAPE or event.key == pygame.K_i:
                 self._close_menu()
@@ -1312,10 +1301,10 @@ class GameUI:
                 # Toggle the selected equipped slot as the spell focus (left pane only).
                 # Routes through the same focus/unfocus commands the CLI uses.
                 if self.inventory_pane == 0:
-                    slot = slots[self.inventory_left_cursor]
-                    player = self.engine.state.player
-                    if player.equipment.get(slot):
-                        if slot in player.focus_slots:
+                    slot_view = equipment_view["slots"][self.inventory_left_cursor]
+                    slot = slot_view["slot"]
+                    if slot_view["occupied"]:
+                        if slot_view["focused"]:
                             self.execute_command(f"unfocus {slot}")
                         else:
                             self.execute_command(f"focus {slot}")
@@ -1327,9 +1316,9 @@ class GameUI:
                 pygame.K_u,
             ):
                 if self.inventory_pane == 0:
-                    slot = slots[self.inventory_left_cursor]
-                    if self.engine.state.player.equipment.get(slot):
-                        self.execute_command(f"unequip {slot}")
+                    slot_view = equipment_view["slots"][self.inventory_left_cursor]
+                    if slot_view["occupied"]:
+                        self.execute_command(f"unequip {slot_view['slot']}")
                 else:
                     if inventory_items:
                         item_name = inventory_items[self.inventory_right_cursor]
@@ -1337,13 +1326,7 @@ class GameUI:
                             self.execute_command(f"unequip {item_name}")
                         else:
                             self.execute_command(f"equip {item_name}")
-                new_inventory_items = sorted(
-                    [
-                        item
-                        for item in self.engine.state.inventory.keys()
-                        if item != "gold"
-                    ]
-                )
+                new_inventory_items = self.session.equipment_inventory_view()["items"]
                 if new_inventory_items:
                     self.inventory_right_cursor = min(
                         self.inventory_right_cursor, len(new_inventory_items) - 1
@@ -2312,6 +2295,7 @@ class GameUI:
         self.screen.blit(overlay, (0, 0))
 
         if self.menu_page == "inventory":
+            equipment_view = self.session.equipment_inventory_view()
             box_w = 700
             box_h = 450
             bx = (WINDOW_WIDTH - box_w) // 2
@@ -2328,7 +2312,7 @@ class GameUI:
             title_surf = self.ui_font.render("EQUIPMENT & INVENTORY", True, ACCENT)
             self.screen.blit(title_surf, (bx + padding, by + padding))
 
-            gold_amount = self.engine.state.inventory.get("gold", 0)
+            gold_amount = equipment_view["gold"]
             gold_surf = self.ui_font.render(f"Gold: {gold_amount}", True, GOLD)
             self.screen.blit(
                 gold_surf, (bx + box_w - padding - gold_surf.get_width(), by + padding)
@@ -2347,23 +2331,12 @@ class GameUI:
             list_h = box_h - (padding * 2 + 36 + 24)
             row_h = 28
 
-            player = self.engine.state.player
-            slots = [
-                "weapon",
-                "armor",
-                "charm",
-                "head",
-                "chest",
-                "legs",
-                "feet",
-                "hands",
-            ]
-
             left_header = self.ui_font.render("Equipped Gear", True, MUTED)
             self.screen.blit(left_header, (bx + padding, pane_y))
             pane_y_list = pane_y + 24
 
-            for idx, slot in enumerate(slots):
+            for idx, slot_view in enumerate(equipment_view["slots"]):
+                slot = slot_view["slot"]
                 qy = pane_y_list + idx * row_h
                 is_selected = (self.inventory_pane == 0) and (
                     idx == self.inventory_left_cursor
@@ -2377,9 +2350,9 @@ class GameUI:
                         border_radius=4,
                     )
 
-                item = player.equipment.get(slot)
+                item = slot_view["item"]
                 item_display = f"{item}" if item else "(empty)"
-                focus_mark = " *focus*" if slot in player.focus_slots else ""
+                focus_mark = " *focus*" if slot_view["focused"] else ""
                 display_text = f"{slot:<7} : {item_display}{focus_mark}"
 
                 if item:
@@ -2403,9 +2376,7 @@ class GameUI:
             self.screen.blit(right_header, (rx, pane_y))
             pane_y_list = pane_y + 24
 
-            inventory_items = sorted(
-                [item for item in self.engine.state.inventory.keys() if item != "gold"]
-            )
+            inventory_items = equipment_view["items"]
 
             if not inventory_items:
                 empty_surf = self.ui_font.render("No items carried.", True, MUTED)
@@ -2421,8 +2392,9 @@ class GameUI:
                     item_idx = start_right_idx + idx
                     if item_idx >= len(inventory_items):
                         break
-                    item_name = inventory_items[item_idx]
-                    qty = self.engine.state.inventory.get(item_name, 0)
+                    item_view = inventory_items[item_idx]
+                    item_name = item_view["name"]
+                    qty = item_view["quantity"]
                     qy = pane_y_list + idx * row_h
                     is_selected = (self.inventory_pane == 1) and (
                         item_idx == self.inventory_right_cursor
@@ -2442,14 +2414,9 @@ class GameUI:
                         )
 
                     display_text = f"{item_name} x{qty}"
-                    spec = EQUIPMENT_SPECS.get(item_name.strip().lower())
-                    is_wearable = spec is not None or (
-                        infer_equipment_slot(item_name) is not None
-                    )
-
                     if is_selected:
                         color = GOLD
-                    elif is_wearable:
+                    elif item_view["equippable"]:
                         color = (130, 220, 150)
                     else:
                         color = TEXT
@@ -3102,14 +3069,13 @@ class GameUI:
         return y
 
     def draw_inventory(self, x: int, y: int) -> int:
-        state = self.engine.state
+        equipment_view = self.session.equipment_inventory_view()
         # Gold gets its own dedicated readout (draw_gold) right next to the HP/MP
         # bars - showing it again here would just be visual noise.
         items = (
             ", ".join(
-                f"{name} x{amount}"
-                for name, amount in state.inventory.items()
-                if name != "gold"
+                f"{item['name']} x{item['quantity']}"
+                for item in equipment_view["items"]
             )
             or "empty"
         )

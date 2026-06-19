@@ -243,11 +243,20 @@ def render_screen(session: GameSession) -> str:
     lines = render_map(session)
     state = session.engine.state
     player = state.player
+    equipment_view = session.equipment_inventory_view()
     inventory = (
         ", ".join(
-            f"{name} x{amount}" for name, amount in sorted(state.inventory.items())
+            f"{item['name']} x{item['quantity']}" for item in equipment_view["items"]
         )
         or "empty"
+    )
+    equipment = (
+        ", ".join(
+            f"{slot['slot']}: {slot['item']}" + (" [focus]" if slot["focused"] else "")
+            for slot in equipment_view["slots"]
+            if slot["occupied"]
+        )
+        or "none"
     )
     curses = ", ".join(curse.name for curse in state.curses.values()) or "none"
     if state.scenario == "frontier":
@@ -257,6 +266,8 @@ def render_screen(session: GameSession) -> str:
     footer = [
         "",
         f"Turn {state.turn} | {state.clock_label()} | {location} | HP {player.hp}/{player.max_hp} | MP {player.mana}/{player.max_mana} | XP {state.experience}",
+        f"Gold: {equipment_view['gold']}",
+        f"Equipment: {equipment}",
         f"Inventory: {inventory}",
         f"Curses: {curses}",
         f"Standing: {standing_summary(state)}",

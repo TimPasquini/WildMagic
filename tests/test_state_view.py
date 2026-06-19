@@ -107,6 +107,38 @@ def test_selected_target_card_reports_marked_occupant() -> None:
     assert card["entity_name"] == enemy.name
 
 
+def test_equipment_inventory_view_owns_presentation_rules() -> None:
+    engine, _player, _enemy = _engine()
+    engine.state.inventory["emberglass wand"] = 1
+    engine.state.inventory["plain stone"] = 2
+    assert engine.equip_item("emberglass wand")
+    assert engine.set_focus("weapon")
+
+    view = state_view.equipment_inventory_view(engine)
+
+    assert [slot["slot"] for slot in view["slots"]] == [
+        "weapon",
+        "armor",
+        "charm",
+        "head",
+        "chest",
+        "legs",
+        "feet",
+        "hands",
+    ]
+    weapon = next(slot for slot in view["slots"] if slot["slot"] == "weapon")
+    assert weapon == {
+        "slot": "weapon",
+        "item": "emberglass wand",
+        "occupied": True,
+        "focused": True,
+    }
+    stone = next(item for item in view["items"] if item["name"] == "plain stone")
+    assert stone["quantity"] == 2
+    assert stone["equippable"] is False
+    assert stone["equipment_slot"] is None
+
+
 def test_room_card_secrets_flag_passes_through() -> None:
     engine, player, _enemy = _engine()
     room = engine.room_profile_at(player.x, player.y)
@@ -133,5 +165,6 @@ def test_building_views_does_not_mutate_state() -> None:
     state_view.tile_card(player.x, player.y, engine)
     state_view.scene_notes_card(engine, player, fov)
     state_view.nearby_tile_details(engine, radius=5)
+    state_view.equipment_inventory_view(engine)
 
     assert summarize_state(engine) == before

@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from .game_data import DEFAULT_ITEM_USE_SPEC, EQUIPMENT_SPECS, ITEM_USE_SPECS
+from .equipment import equipment_slot_for_item
+from .game_data import DEFAULT_ITEM_USE_SPEC, ITEM_USE_SPECS
 from .models import MIST, Entity
 from .operations import StateDelta
 from .normalize import (
@@ -12,118 +13,6 @@ from .normalize import (
     optional_duration,
     status_duration,
 )
-
-
-def infer_equipment_slot(item_name: str) -> str | None:
-    name_lower = item_name.strip().lower()
-
-    # Substring weapon checks
-    weapon_subs = [
-        "sword",
-        "blade",
-        "dagger",
-        "axe",
-        "pick",
-        "bow",
-        "staff",
-        "mace",
-        "hammer",
-        "whip",
-        "spear",
-        "rapier",
-        "scythe",
-        "club",
-        "wand",
-    ]
-    if any(sub in name_lower for sub in weapon_subs):
-        return "weapon"
-
-    # Substring head checks
-    head_subs = [
-        "hat",
-        "helmet",
-        "cowl",
-        "crown",
-        "hood",
-        "circlet",
-        "mask",
-        "visor",
-        "helm",
-        "coif",
-    ]
-    if any(sub in name_lower for sub in head_subs) or "cap" in name_lower.split():
-        return "head"
-
-    # Substring feet checks
-    feet_subs = ["boot", "shoe", "slipper", "sabaton", "footwear"]
-    if any(sub in name_lower for sub in feet_subs):
-        return "feet"
-
-    # Substring legs checks
-    legs_subs = [
-        "trouser",
-        "pant",
-        "legging",
-        "breeches",
-        "greaves",
-        "cuisses",
-        "skirt",
-        "kilt",
-        "hosen",
-    ]
-    if any(sub in name_lower for sub in legs_subs):
-        return "legs"
-
-    # Substring hands checks
-    hands_subs = ["glove", "gauntlet", "mitt", "bracer"]
-    if any(sub in name_lower for sub in hands_subs):
-        return "hands"
-
-    # Substring chest checks
-    chest_subs = [
-        "cloak",
-        "robe",
-        "tunic",
-        "shirt",
-        "coat",
-        "jacket",
-        "cape",
-        "shroud",
-        "doublet",
-        "jerkin",
-    ]
-    if any(sub in name_lower for sub in chest_subs):
-        return "chest"
-
-    # Substring charm checks
-    charm_subs = [
-        "charm",
-        "trinket",
-        "amulet",
-        "ring",
-        "talisman",
-        "necklace",
-        "locket",
-        "pendant",
-    ]
-    if any(sub in name_lower for sub in charm_subs):
-        return "charm"
-
-    # Substring armor checks
-    armor_subs = [
-        "shield",
-        "buckler",
-        "armor",
-        "armour",
-        "cuirass",
-        "breastplate",
-        "vest",
-        "mail",
-    ]
-    if any(sub in name_lower for sub in armor_subs):
-        return "armor"
-
-    return None
 
 
 class _ItemsMixin:
@@ -403,16 +292,12 @@ class _ItemsMixin:
         if matched is None or self.state.inventory.get(matched, 0) < 1:
             self.state.add_message(f"You don't have any {item_name.strip().lower()}.")
             return False
-        spec = EQUIPMENT_SPECS.get(matched.strip().lower())
-        if spec:
-            slot = str(spec["slot"])
-        else:
-            slot = infer_equipment_slot(matched)
-            if not slot:
-                self.state.add_message(
-                    f"The {matched} isn't something you can wear or wield."
-                )
-                return False
+        slot = equipment_slot_for_item(matched)
+        if not slot:
+            self.state.add_message(
+                f"The {matched} isn't something you can wear or wield."
+            )
+            return False
         player = self.state.player
         previous = player.equipment.get(slot)
         self.consume_inventory_item(matched, 1)

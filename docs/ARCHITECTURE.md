@@ -20,11 +20,14 @@ graphical UI with AI watch mode already enabled.
 Pygame front-end. Owns the game loop, renders the tile map and side panels, handles keyboard
 input, and routes commands to `GameSession`. Also shows the LLM thinking panel, the model
 selector overlay, and a visual AI watch controller that lets the autoplay command chooser
-drive the same command path while the renderer stays responsive.
+drive the same command path while the renderer stays responsive. Equipment and inventory
+screens consume `GameSession.equipment_inventory_view()` rather than importing equipment
+rules or reconstructing wearability from item names.
 
 ### `wildmagic/cli.py`
 Terminal front-end. Parses `--seed`, `--scenario`, `--provider`, `--script`, `--record` flags,
-drives `GameSession` in a readline loop, and optionally saves a replay JSON at exit.
+drives `GameSession` in a readline loop, and optionally saves a replay JSON at exit. Its
+equipment/inventory footer uses the same presentation view as the GUI.
 
 ### `wildmagic/autoplay.py`
 Autonomous headless playtesting harness (`python -m wildmagic.autoplay`). Runs sequential
@@ -47,7 +50,8 @@ recorded into replay data. On-demand canon materialization for `examine` also li
 valid new room-flavor records cost a turn, technical failures do not, and re-reading existing
 canon is free. `close()` cancels pending lore work and shuts down the executor.
 Also holds `summarize_state()` (used by the replay system) and `to_replay()` / `from_replay()`
-serialization.
+serialization. `equipment_inventory_view()` exposes the shared read-only equipment and
+inventory presentation model used by both front ends.
 
 ### `wildmagic/replay.py`
 Save/load/run replay JSON files. `run_replay(path)` re-feeds a recorded session's commands back
@@ -111,14 +115,15 @@ GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _EffectsMixin)
 The read-only state surface over `GameState`. `GameState` stays the single source of truth;
 this module turns it into the compact, stable packets each consumer needs without mutating
 anything. It holds one builder per public-dict shape — `entity_card`, `item_card`,
-`tile_card`, `room_card`, `selected_target_card`, `scene_notes_card`, `nearby_tile_details` —
-and composes them into the two top-level views: `spell_context_view` (the resolver packet
-returned by `engine.context_for_llm`) and `state_summary` (exposed as `replay_summary_view`
-for `actions.summarize_state`/replay records and `inspection_view` for CLI/GUI inspection).
+`tile_card`, `room_card`, `selected_target_card`, `scene_notes_card`,
+`nearby_tile_details`, `equipment_inventory_view` — and composes them into the two
+top-level views: `spell_context_view` (the resolver packet returned by
+`engine.context_for_llm`) and `state_summary` (exposed as `replay_summary_view` for
+`actions.summarize_state`/replay records and `inspection_view` for CLI/GUI inspection).
 `resolve_foci` turns the caster's marked focus slots into the resolver's `spell_foci` flavor
 list. Everything here is pure reads; `tile_counts` lives here too. See
 `docs/WILD_MAGIC_STATE_SURFACE_PLAN.md` (Stage 2). Imports only leaf modules
-(`models`, `capabilities`, `spell_contract`, `templates`), never `engine`, so it sits below
+(`models`, `capabilities`, `equipment`, `spell_contract`, `templates`), never `engine`, so it sits below
 the engine in the import order despite reading from it at call time. Active `tile_flows`
 surface through tile detail cards and replay/inspection summaries.
 
@@ -191,6 +196,12 @@ Inventory management and item use:
 (keyed by inventory key) so its flavor survives the Entity's removal. Spell-focus marking lives
 here too: `set_focus`/`clear_focus` mark an already-equipped slot as a spell focus (a mark, not a
 new slot), resolved via `_equipped_slot_by_item`. Also holds `_EQUIPMENT_SLOT_ALIASES`.
+
+### `wildmagic/equipment.py`
+Pure equipment policy shared by mutation and read-model layers: canonical
+`EQUIPMENT_SLOTS`, generated-item `infer_equipment_slot`, and
+`equipment_slot_for_item`, which resolves authored `EQUIPMENT_SPECS` before inference.
+Front ends must consume the `state_view` projection instead of importing this module.
 
 ### `wildmagic/ai.py` — `_AIMixin`
 NPC perception and turn execution:
