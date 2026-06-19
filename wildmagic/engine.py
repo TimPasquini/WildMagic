@@ -63,6 +63,8 @@ from .effects import _EffectsMixin
 from .items import _ItemsMixin
 from . import state_view
 from . import refs
+from .behaviors import tick_behavior_modifiers
+from .conditions import evaluate_condition
 from .operations import StateDelta
 from .props import get_prop_template
 from .prop_gen import make_prop_provider, PropProvider, PropSpec, MECHANICAL_TAGS
@@ -279,6 +281,7 @@ class GameState:
     height: int = MAP_HEIGHT
     tiles: list[list[str]] = field(default_factory=list)
     visible: set[str] = field(default_factory=set)
+    visible_entity_ids: set[str] = field(default_factory=set)
     explored: set[str] = field(default_factory=set)
     entities: dict[str, Entity] = field(default_factory=dict)
     player_id: str = "player"
@@ -299,6 +302,7 @@ class GameState:
     target_entity_id: str | None = None
     tile_tags: dict[str, list[str]] = field(default_factory=dict)
     tile_durations: dict[str, int] = field(default_factory=dict)
+    tile_flows: dict[str, dict[str, Any]] = field(default_factory=dict)
     # Standing auras anchored to ground rather than to a creature, keyed by "x,y"
     # -- a hexed circle that bleeds anyone standing on it, a warded floor that
     # steadies allies. Resolved alongside entity-borne auras in _tick_auras.
@@ -334,6 +338,9 @@ class GameState:
     player_soul_id: str = "player"
     event_timers: list[dict[str, Any]] = field(default_factory=list)
     triggers: list[dict[str, Any]] = field(default_factory=list)
+    player_steps: int = 0
+    last_spell_text: str = ""
+    same_spell_streak: int = 0
     game_over: bool = False
     victory: bool = False
     death_cause: str | None = (
@@ -1721,8 +1728,9 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
 
     def update_fov(self) -> None:
         player = self.state.player
+        previous_entity_ids = set(self.state.visible_entity_ids)
         visible: set[str] = set()
-        radius = self.state.fov_radius
+        radius = self.effective_fov_radius()
         for y in range(player.y - radius, player.y + radius + 1):
             for x in range(player.x - radius, player.x + radius + 1):
                 if not self.in_bounds(x, y):
@@ -1733,9 +1741,36 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                     visible.add(self.tile_key(x, y))
         self.state.visible = visible
         self.state.explored.update(visible)
+        current_entity_ids = {
+            entity.id
+            for entity in self.state.entities.values()
+            if entity.id != self.state.player_id
+            and entity.kind in {"actor", "npc"}
+            and entity.hp > 0
+            and self.tile_key(entity.x, entity.y) in visible
+        }
+        self.state.visible_entity_ids = current_entity_ids
+        for entity_id in sorted(current_entity_ids - previous_entity_ids):
+            entity = self.state.entities.get(entity_id)
+            if entity is None or entity.hp <= 0:
+                continue
+            self._fire_triggers(
+                ["on_enters_sight", "on_entity_enters_sight"],
+                {"target": entity, "source": player},
+            )
         if self._prop_provider is not None:
             self._poll_prop_generation()
             self._launch_prop_generation()
+
+    def effective_fov_radius(self) -> int:
+        player = self.state.player
+        radius = clamp_int(self.state.fov_radius, 0, 99)
+        if "sight_shrouded" not in player.statuses:
+            return radius
+        override = player.details.get("sight_radius")
+        if override is None:
+            return min(radius, 2)
+        return min(radius, clamp_int(override, 0, 99))
 
     def has_line_of_sight(self, x1: int, y1: int, x2: int, y2: int) -> bool:
         for x, y in bresenham_line(x1, y1, x2, y2)[1:-1]:
@@ -1855,6 +1890,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         for table_name, table in (
             ("tile_tags", state.tile_tags),
             ("tile_durations", state.tile_durations),
+            ("tile_flows", state.tile_flows),
         ):
             for key in table:
                 try:
@@ -1867,6 +1903,22 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         for key, duration in state.tile_durations.items():
             if not isinstance(duration, int) or duration < 1:
                 errors.append(f"tile duration {key!r} is invalid: {duration!r}")
+        for key, flow in state.tile_flows.items():
+            if not isinstance(flow, dict):
+                errors.append(f"tile flow {key!r} is not an object")
+                continue
+            if flow.get("duration") != "permanent":
+                duration = flow.get("duration")
+                if not isinstance(duration, int) or duration < 1:
+                    errors.append(
+                        f"tile flow {key!r} has invalid duration: {duration!r}"
+                    )
+            for axis in ("dx", "dy"):
+                value = flow.get(axis)
+                if not isinstance(value, int) or value < -1 or value > 1:
+                    errors.append(f"tile flow {key!r} has invalid {axis}: {value!r}")
+            if flow.get("dx") == 0 and flow.get("dy") == 0:
+                errors.append(f"tile flow {key!r} has no direction")
         for index, event in enumerate(state.event_timers):
             if not isinstance(event, dict):
                 errors.append(f"event timer {index} is not an object")
@@ -1983,6 +2035,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 f"{TILE_NAMES.get(self.tile_at(target_x, target_y), 'stone')} blocks the way."
             )
             return False
+        from_x, from_y = player.x, player.y
         player.x = target_x
         player.y = target_y
         moved = True
@@ -2002,6 +2055,8 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 self.state.add_message("You slide on the ice!")
                 self._apply_tile_entry(player)
         if moved:
+            player.details["last_move_delta"] = [player.x - from_x, player.y - from_y]
+            self.state.player_steps += 1
             self._fire_triggers("on_player_move", {"target": player, "source": player})
         self.finish_player_turn()
         return True
@@ -2754,6 +2809,9 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         if self.tile_at(player.x, player.y) != STAIRS_DOWN:
             self.state.add_message("There are no downward stairs here.")
             return False
+        if self.state.flags.get("seal_stairs") or self.state.flags.get("stairs_sealed"):
+            self.state.add_message("The stairs are sealed by magic.")
+            return False
         if self.state.depth >= self.state.max_depth:
             # Verticality is bounded and local (D2/§0.2): a site has a few levels, like
             # the real world — reaching the bottom is never a win or progression. Victory
@@ -2792,6 +2850,9 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         player = self.state.player
         if self.tile_at(player.x, player.y) != STAIRS_UP:
             self.state.add_message("There are no upward stairs here.")
+            return False
+        if self.state.flags.get("seal_stairs") or self.state.flags.get("stairs_sealed"):
+            self.state.add_message("The stairs are sealed by magic.")
             return False
         if self.state.depth <= 1:
             self.state.add_message("The dungeon mouth is not that easy to find again.")
@@ -3073,10 +3134,34 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         self._enemy_turns()
         self._ally_turns()
         self._npc_turns()
+        self._tick_behavior_modifiers()
         self._process_entity_behaviors()
         self._regenerate_player()
         self._ambient_sounds()
         self._update_npc_perceptions()
+
+    def _stasis_active(self) -> bool:
+        if getattr(self, "_stasis_pause_turn", None) == self.state.turn:
+            return True
+        player = self.state.player
+        return status_duration(player.statuses.get("stasis")) > 0
+
+    def _tick_stasis_status(self) -> None:
+        player = self.state.player
+        if "stasis" not in player.statuses:
+            return
+        self._stasis_pause_turn = self.state.turn
+        value = player.statuses.get("stasis")
+        if value == "permanent":
+            return
+        turns = status_duration(value) - 1
+        if turns <= 0:
+            player.statuses.pop("stasis", None)
+            player.status_display.pop("stasis", None)
+            player.status_expiry_text.pop("stasis", None)
+            self.state.add_message("Time resumes its grip.")
+        else:
+            player.statuses["stasis"] = turns
 
     def _ambient_sounds(self) -> None:
         if self.rng.random() > 0.12:
@@ -3101,7 +3186,16 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 break
         self.state.add_message(self.rng.choice(messages))
 
+    def _tick_behavior_modifiers(self) -> None:
+        for entity in self.state.entities.values():
+            if entity.kind not in {"player", "actor", "npc"} or entity.hp <= 0:
+                continue
+            tick_behavior_modifiers(entity)
+
     def _tick_environment(self) -> None:
+        if self._stasis_active():
+            self._tick_stasis_status()
+            return
         for entity in list(self.state.entities.values()):
             if entity.kind == "item" or entity.hp <= 0:
                 continue
@@ -3186,8 +3280,35 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 else:
                     entity.statuses["poisoned"] = turns
             self._tick_simple_statuses(entity)
+        self._tick_flow_fields()
         self._tick_fire_spread()
         self._tick_poison_spread()
+
+    def _tick_flow_fields(self) -> None:
+        if not self.state.tile_flows:
+            return
+        for entity in sorted(self.state.entities.values(), key=lambda e: e.id):
+            if entity.kind == "item" or entity.hp <= 0:
+                continue
+            flow = self.state.tile_flows.get(self.tile_key(entity.x, entity.y))
+            if not isinstance(flow, dict):
+                continue
+            raw_dx = flow.get("dx", 0)
+            raw_dy = flow.get("dy", 0)
+            dx = clamp_int(raw_dx, -1, 1) if raw_dx is not None else 0
+            dy = clamp_int(raw_dy, -1, 1) if raw_dy is not None else 0
+            if dx == 0 and dy == 0:
+                continue
+            before = (entity.x, entity.y)
+            moved = self.push_entity(entity, dx, dy, 1)
+            if not moved:
+                continue
+            if entity.id == self.state.player_id:
+                self.state.add_message("The current carries you.")
+            else:
+                self.state.add_message(f"The current carries {entity.name}.")
+            if (entity.x, entity.y) == before:
+                continue
 
     def _tick_fire_spread(self) -> None:
         fire_tiles = [
@@ -3350,6 +3471,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             "webbed": "The webbing falls away.",
             "silenced": "Your voice returns.",
             "invisible": "You become visible again.",
+            "sight_shrouded": "Your sight clears.",
             "berserk": "The rage subsides.",
             "burning": "The flames die out.",
         }
@@ -3365,6 +3487,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             "invisible",
             "marked",
             "revealed",
+            "sight_shrouded",
             "warded",
             "strained",
             "drained",
@@ -3386,14 +3509,20 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 entity.statuses.pop(status, None)
                 custom_expiry = entity.status_expiry_text.pop(status, None)
                 entity.status_display.pop(status, None)
+                if status == "sight_shrouded":
+                    entity.details.pop("sight_radius", None)
                 if entity.id == self.state.player_id:
                     msg = custom_expiry or _DEFAULT_EXPIRY.get(status)
                     if msg:
                         self.state.add_message(msg)
+                    if status == "sight_shrouded":
+                        self.update_fov()
             else:
                 entity.statuses[status] = turns
 
     def _tick_tile_durations(self) -> None:
+        if self._stasis_active():
+            return
         expired: list[str] = []
         for key, duration in list(self.state.tile_durations.items()):
             next_duration = duration - 1
@@ -3407,8 +3536,21 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 self.state.tiles[y][x] = FLOOR
             self.state.tile_durations.pop(key, None)
             self.state.tile_tags.pop(key, None)
+        expired_flows: list[str] = []
+        for key, flow in list(self.state.tile_flows.items()):
+            if not isinstance(flow, dict) or flow.get("duration") == "permanent":
+                continue
+            duration = clamp_int(flow.get("duration"), 0, 999) - 1
+            if duration <= 0:
+                expired_flows.append(key)
+            else:
+                flow["duration"] = duration
+        for key in expired_flows:
+            self.state.tile_flows.pop(key, None)
 
     def _tick_event_timers(self) -> None:
+        if self._stasis_active():
+            return
         remaining: list[dict[str, Any]] = []
         for event in self.state.event_timers:
             turns = clamp_int(event.get("turns"), 0, 999) - 1
@@ -3429,6 +3571,8 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         promise_id = str(event.get("promise_id") or "")
         if promise_id:
             self.fulfill_promise(promise_id, realized_in=f"turn {self.state.turn}")
+        if self._run_scheduled_payload(event):
+            return
         if event_type == "message":
             text = str(
                 event.get("text")
@@ -3495,6 +3639,8 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             self.state.add_message(f"{TILE_NAMES.get(tile, tile)} floods the area.")
         elif event_type == "curse":
             self._apply_cost({"type": "curse", **event})
+        elif event_type == "release_delayed_damage":
+            self._release_delayed_damage(event)
 
     def _persistent_anchor_alive(self, trigger: dict[str, Any]) -> bool:
         """An anchored persistent effect (or sympathetic link) ends when the thing it is
@@ -3592,6 +3738,26 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             names.append("on_enemy_death")
         self._fire_triggers(names, event)
 
+    def _fire_lethal_damage_triggers(
+        self,
+        target: Entity,
+        source: Entity | None,
+        amount: int,
+        damage_type: str,
+    ) -> list[str]:
+        event = {
+            "target": target,
+            "source": source,
+            "amount": amount,
+            "damage_type": damage_type,
+        }
+        names = ["on_lethal_damage"]
+        if target.id == self.state.player_id:
+            names.append("on_player_lethal_damage")
+        elif target.faction == "enemy":
+            names.append("on_enemy_lethal_damage")
+        return self._fire_triggers(names, event)
+
     def _fire_triggers(
         self, names: str | list[str], event: dict[str, Any] | None = None
     ) -> list[str]:
@@ -3651,25 +3817,29 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             # poison tile) has source=None and must not fire it. Target-side keeps the old
             # permissive default so non-damage events still fire by name alone.
             if role == "source":
-                return isinstance(subject, Entity)
-            return True
-        if not isinstance(subject, Entity):
+                target_matches = isinstance(subject, Entity)
+            else:
+                target_matches = True
+        elif not isinstance(subject, Entity):
             # Target role keeps the old permissive default (a non-damage event with no real
             # target still fires by name alone); a source-side criterion cannot match without
             # an attacker in the event.
-            return role == "target"
-        trigger_target = normalize_id(str(raw_target))
-        if trigger_target in {"player", "self", "you"}:
-            return subject.id == self.state.player_id
-        if trigger_target in {"enemy", "nearest_enemy", "all_enemies", "enemies"}:
-            return subject.faction == "enemy"
-        if trigger_target in {"source", "attacker", "caster"}:
-            return isinstance(event.get("source"), Entity)
-        return (
-            subject.id == trigger_target
-            or trigger_target in subject.tags
-            or trigger_target in normalize_id(subject.name).split("_")
-        )
+            target_matches = role == "target"
+        else:
+            trigger_target = normalize_id(str(raw_target))
+            if trigger_target in {"player", "self", "you"}:
+                target_matches = subject.id == self.state.player_id
+            elif trigger_target in {"enemy", "nearest_enemy", "all_enemies", "enemies"}:
+                target_matches = subject.faction == "enemy"
+            elif trigger_target in {"source", "attacker", "caster"}:
+                target_matches = isinstance(event.get("source"), Entity)
+            else:
+                target_matches = (
+                    subject.id == trigger_target
+                    or trigger_target in subject.tags
+                    or trigger_target in normalize_id(subject.name).split("_")
+                )
+        return target_matches and evaluate_condition(self, trigger.get("when"), event)
 
     def _fill_trigger_effect_defaults(
         self, effect: dict[str, Any], event: dict[str, Any]

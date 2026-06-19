@@ -73,7 +73,9 @@ Supported effect types:
 - `conjure_creature`: create one or more creatures from a safe template while allowing a creative name/faction/tags.
 - `transform_item`: alter an item or prop into a new item form.
 - `modify_inventory`: add, remove, or set carried item counts.
-- `transform_entity`: alter actor stats, name, glyph, material, or tags.
+- `transform_entity`: alter actor stats, name, glyph, material, or tags. It may set `max_hp`
+  as well as current `hp`, so aging/withered-body spells can reduce durability without a
+  bespoke effect.
 - `edit_memory`: add, alter, or erase a nearby NPC memory.
 - `animate_object`: turn a nearby prop into an actor.
 - `aura`: attach an ongoing damage or status emanation to an entity or tile.
@@ -82,13 +84,19 @@ Supported effect types:
 - `possess`: move player control into another living body.
 - `add_tag` / `remove_tag`: alter entity tags.
 - `add_resistance` / `add_weakness`: alter damage modifiers.
-- `set_flag`: set a persistent world flag.
+- `set_flag`: set a persistent world flag. `flag: "seal_stairs"` prevents stair ascent/descent
+  while true.
 - `schedule_event`: create a delayed event.
+- `delay_incoming`: capture incoming damage on a target and release it after a timer.
+- `accelerate_status`: resolve remaining damaging status ticks immediately.
+- `set_behavior`: temporarily change creature AI behavior.
+- `create_flow`: create a temporary tile current that moves creatures each turn.
 - `create_trigger`: create a charged reaction that fires when a later event happens.
 - `create_persistent_effect`: create an anchored trigger such as a sympathetic link or ward.
 - `create_promise`: speak a prophecy, rumor, threat, or place claim into the promise ledger.
 - `add_curse`: add a curse as an effect.
-- `message`: add log text.
+- `message`: add log text. Optional `spoof: true` marks deceptive/fake log text; it writes
+  only the message and does not mutate backing state.
 
 ## Costs
 
@@ -136,6 +144,36 @@ Useful shapes:
 - `cone`, `fan`: fill a cone from `origin` toward `target`.
 - `scatter`, `spray`: choose scattered tiles around `target`.
 
+## Flow Fields
+
+Use `create_flow` for environmental currents that move creatures once per turn: conveyor
+floors, wind, shifting sand, tilted rooms, gravity wells, vortexes, and magnetic pulls.
+
+Useful fields:
+
+- `target`, `center`, `x`/`y`: where the field is centered.
+- `radius`, `shape`, or `tiles`: which tiles receive a current.
+- `duration` / `turns`: how long the current lasts.
+- `dx` / `dy` or `direction`: a fixed vector. Directions include `north`, `south`, `east`,
+  and `west`.
+- `mode`: `inward` pulls each tile toward the center; `outward` pushes away from it.
+
+Each affected tile stores a current. During the environment tick, a living creature standing
+on that tile is pushed one step if the destination is open. Blockers stop the movement.
+
+```json
+{
+  "accepted": true,
+  "severity": "moderate",
+  "outcome_text": "The floor starts carrying the room eastward one unwilling footstep at a time.",
+  "effects": [
+    {"type": "create_flow", "target": "nearest_enemy", "radius": 3, "direction": "east", "duration": 4}
+  ],
+  "costs": [{"type": "mana", "amount": 4}],
+  "rejected_reason": null
+}
+```
+
 ## Statuses
 
 Statuses currently supported by engine rules include:
@@ -154,6 +192,7 @@ Statuses currently supported by engine rules include:
 - `frightened`
 - `marked`
 - `revealed`
+- `sight_shrouded`
 - `warded`
 - `regenerating`
 - `berserk`
@@ -161,12 +200,52 @@ Statuses currently supported by engine rules include:
 - `weakened`
 - `silenced`
 - `cursed`
+- `stasis`
+- `delayed_sink`
 - `strained`
 - `drained`
 - `jinxed`
 - `crawling_skin`
 
-Some statuses already affect behavior. For example, burning and poisoned deal damage over time, stunned and frozen prevent enemy actions, and rooted prevents enemy movement.
+Some statuses already affect behavior. For example, burning and poisoned deal damage over time,
+stunned and frozen prevent enemy actions, rooted prevents enemy movement, and `sight_shrouded`
+narrows the player's FOV. Use optional `sight_radius`/`radius` on the `add_status` effect to
+choose the temporary view radius.
+
+## Behavior Modifiers
+
+Use `set_behavior` for temporary changes to how creatures choose actions. This is not a
+faction change or a memory rewrite; it is a short-lived AI modifier stored on the target.
+
+Supported behaviors:
+
+- `dance`: move if possible, but do not attack.
+- `coward`: flee from visible blood, bleeding, or wounded creatures.
+- `duel`: lock onto a specific focus target.
+- `lowest_hp`: target the weakest visible living creature.
+- `mimic`: copy a focus target's last movement vector.
+- `freeze_dread`: skip the action while the dread holds.
+
+Useful fields:
+
+- `target`: a creature id, `nearest_enemy`, or a group such as `all_enemies`.
+- `behavior`: one of the supported behavior names.
+- `duration` / `turns`: how long it lasts.
+- `behavior_target`, `focus`, `lock_to`, `duel_target`, or `mimic_target`: the focus for
+  `duel` and `mimic`.
+
+```json
+{
+  "accepted": true,
+  "severity": "moderate",
+  "outcome_text": "The brute hears a tune with sharp little teeth and starts stepping instead of swinging.",
+  "effects": [
+    {"type": "set_behavior", "target": "nearest_enemy", "behavior": "dance", "duration": 3}
+  ],
+  "costs": [{"type": "mana", "amount": 4}],
+  "rejected_reason": null
+}
+```
 
 ## Examples
 
@@ -257,8 +336,17 @@ Supported trigger names include:
 - `on_enemy_hit`
 - `on_enemy_damaged`
 - `on_enemy_death`
+- `on_lethal_damage`
+- `on_curse_gained`
+- `on_enters_sight`
 
 Inside trigger effects, `target: "trigger_target"` means the entity that caused the trigger target condition, and `target: "trigger_source"` means the attacker/source when one exists.
+
+Triggers may include an optional `when` predicate. Supported predicate keys include
+`hp_below`, `hp_above`, `hp_parity`, `inventory_empty`, `on_terrain`, `step_multiple`,
+`count_visible`, and `same_spell_streak`. Examples: `"when": {"hp_below": 0.5}` fires only
+when the event target is below half HP; `"when": {"step_multiple": 3}` fires every third
+player step.
 
 ```json
 {

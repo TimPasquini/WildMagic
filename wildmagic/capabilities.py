@@ -103,8 +103,8 @@ Core effect catalog (always available):
 - teleport: target, x, y. ALWAYS include the destination x and y. When the player aimed at a marked square ("teleport me to the target"), use selected_target.x and selected_target.y.
 - push or pull: target, origin or dx/dy, distance.
 - create_tile or create_tiles: x/y or target, tile, radius, duration. Add hollow:true for a ring/perimeter pattern. Use ONE create_tiles effect to fill an area — never list individual coordinates. (For directional walls, lines, and cones, barrier-shaping mechanics are supplied when the spell needs them.)
-- add_status or remove_status: target, status, duration. Optional display_name (shown to player instead of the status key, e.g. "petrified" for frozen) and expiry_text (message when it wears off). For single target: an actor id, "player", or "nearest_enemy". For all enemies: "all_enemies". For everyone: "all".
-- add_resistance (fields: target, damage_type, amount), add_weakness (fields: target, damage_type, amount), set_flag, message.
+- add_status or remove_status: target, status, duration. Optional display_name (shown to player instead of the status key, e.g. "petrified" for frozen) and expiry_text (message when it wears off). For sight loss/blindness, use status "sight_shrouded" on the player with optional sight_radius/radius (0-4; default 2). For single target: an actor id, "player", or "nearest_enemy". For all enemies: "all_enemies". For everyone: "all".
+- add_resistance (fields: target, damage_type, amount), add_weakness (fields: target, damage_type, amount), set_flag, message. For "seal the stairs", use set_flag with flag:"seal_stairs", value:true. A message may include spoof:true for a deceptive/fake log line; it writes text only and does not mutate state.
 - aura: a STANDING emanation that re-fires every turn while it lasts — use it whenever a spell promises an ongoing field that keeps affecting whoever is nearby (a creature whose shadow burns adjacent foes, a corona of frost that slows attackers, a hexed circle of ground that bleeds anyone standing on it). Fields: kind "damage"|"status"; radius (1-4 typical); affects "enemies"|"allies"|"all"; turns (how many turns it persists); label (short flavor name). For kind "damage": amount, damage_type. For kind "status": status, duration (turns the status is refreshed to each tick), display_name. Anchor it by target: "player" or an actor id wreathes that entity; "tile" with x/y hexes the ground. To give a CONJURED creature an aura, nest the same fields under an "aura" key inside the conjure_creature/summon effect instead of emitting a separate aura effect. Every aura must carry a real mechanic — never emit one as pure description.
 
 Beyond these core effects, additional mechanics (summoning, polymorph, barriers, divination, triggers, delayed effects, prophecy, and more) are supplied below ONLY when the spell needs them. When a block of loaded mechanics is present below, use those effects; otherwise resolve with the core effects above.
@@ -501,23 +501,31 @@ _BARRIER_SHAPING = CapabilityCard(
         "wall of",
         "row of",
         "seal the",
+        "seal stairs",
         "block the",
+        "stairs",
+        "stairway",
+        "cave in",
+        "cave-in",
+        "collapse the",
         "divide",
         "cone",
         "beam",
     ),
     embed_description=(
         "Directional terrain shaped as a wall, line, barrier, path, cone, or beam between "
-        "the caster and a foe — not a disc centered on the caster."
+        "the caster and a foe, cave-ins that place blocking terrain, or sealing stairs — "
+        "not a disc centered on the caster."
     ),
-    index_line="barrier_shaping — directional terrain (walls, lines, barriers, cones) using create_tiles shape/origin",
+    index_line="barrier_shaping — directional terrain, cave-ins, and sealed stairs (create_tiles shape/origin, set_flag seal_stairs)",
     effect_types=(),  # uses create_tiles (a core effect); this card adds the shaping rules
     prompt_block=(
         "Directional terrain — 'wall', 'line', 'barrier', 'between me and X', 'in a line', 'path', "
         "'bridge' — MUST be a create_tiles with shape:'wall' or 'line', origin:'player', and target the "
         "foe (its id or 'nearest_enemy'); also shape:'cone' or 'scatter' for cones and bursts. Do NOT "
         "fall back to a player-centered radius disc, which throws away the direction the player asked for. "
-        "Use ONE create_tiles effect for a shape — never list individual coordinates."
+        "Use ONE create_tiles effect for a shape — never list individual coordinates. For a magical seal on the "
+        "stairs rather than a physical wall, use set_flag with flag:'seal_stairs', value:true."
     ),
     examples=(
         '{"accepted": true, "severity": "minor", "outcome_text": "Ice unrolls toward your enemy like a silver carpet.", "effects": [{"type": "create_tiles", "shape": "line", "origin": "player", "target": "nearest_enemy", "tile": "slick_ice", "duration": 4}], "costs": [{"type": "mana", "amount": 3}], "rejected_reason": null}',
@@ -539,6 +547,12 @@ _DIVINATION = CapabilityCard(
         "mark the",
         "mark every",
         "see through",
+        "blind",
+        "blinded",
+        "blackout",
+        "darken my sight",
+        "shroud my sight",
+        "steal my sight",
         "scout",
         "vision",
         "glowing",
@@ -549,19 +563,22 @@ _DIVINATION = CapabilityCard(
         "weaknesses",
     ),
     embed_description=(
-        "Revealing, tracking, locating, or marking: exposing hidden or invisible enemies, "
-        "tracking a target, sensing weaknesses, marking foes so they can be sensed."
+        "Revealing, tracking, locating, or marking targets, and perception curses such as "
+        "blindness, blackout, or sight-shrouding."
     ),
-    index_line="divination — reveal/track/locate/mark targets (uses add_status 'revealed')",
+    index_line="divination — reveal/track/locate/mark targets or shroud sight (add_status 'revealed'/'sight_shrouded')",
     effect_types=(),  # uses add_status (a core effect); this card adds the reveal pattern
     prompt_block=(
         "For tracking, glowing-shadow, locate, scry, or reveal spells, use add_status with status "
         "'revealed' on the target (an actor id, 'nearest_enemy', 'all_enemies', or 'all'). A revealed "
         "target can be sensed; use a longer duration for tracking spells. This is the mechanical "
-        "expression of 'reveal weaknesses', 'mark for sensing', 'show hidden things'."
+        "expression of 'reveal weaknesses', 'mark for sensing', 'show hidden things'. For blindness, blackout, "
+        "or sight-stealing spells, use add_status with status 'sight_shrouded' on the player and optional "
+        "sight_radius/radius (0 for total blackout, 1-4 for narrowed sight)."
     ),
     examples=(
         '{"accepted": true, "severity": "minor", "outcome_text": "A blue shadow pins the target\'s location in your mind.", "effects": [{"type": "add_status", "target": "nearest_enemy", "status": "revealed", "duration": 6}], "costs": [{"type": "mana", "amount": 2}], "rejected_reason": null}',
+        '{"accepted": true, "severity": "minor", "outcome_text": "A velvet dark folds itself across your eyes.", "effects": [{"type": "add_status", "target": "player", "status": "sight_shrouded", "display_name": "blinded", "sight_radius": 1, "duration": 3}], "costs": [{"type": "mana", "amount": 1}], "rejected_reason": null}',
     ),
     cost_hint="minor; mana",
 )
@@ -578,6 +595,14 @@ _TRIGGERS_REACTIONS = CapabilityCard(
         "react",
         "reaction",
         "contingency",
+        "when i would die",
+        "would die",
+        "would kill me",
+        "lethal",
+        "lethal damage",
+        "last breath",
+        "last-breath",
+        "death knocks",
         "if i am hit",
         "when i bleed",
         "ward that",
@@ -594,11 +619,21 @@ _TRIGGERS_REACTIONS = CapabilityCard(
     prompt_block=(
         "For 'next time X happens, Y happens' spells, use create_trigger. Fields: trigger "
         "('on_next_spell|on_player_hit|on_player_damaged|on_player_move|on_enemy_hit|on_enemy_damaged|"
-        "on_enemy_death'), target ('player|nearest_enemy|all_enemies|any'), charges, duration, name, "
-        "effects. Trigger effects may use target:'trigger_target' or target:'trigger_source'."
+        "on_enemy_death|on_lethal_damage|on_curse_gained|on_enters_sight'), target "
+        "('player|nearest_enemy|all_enemies|any'), charges, duration, name, effects. Trigger effects "
+        "may use target:'trigger_target' or target:'trigger_source'. Optional when predicates gate "
+        "the trigger: hp_below/hp_above/hp_parity, inventory_empty, on_terrain, step_multiple, "
+        "count_visible, same_spell_streak. Example when forms: {'hp_below': 0.5}, "
+        "{'step_multiple': 3}, {'op':'count_visible','faction':'enemies','min':2}. "
+        "For 'when I would die', 'when lethal damage would kill me', 'death must knock twice', "
+        "or any last-breath contingency, use create_trigger with trigger:'on_lethal_damage'; "
+        "do NOT resolve it as an immediate heal, because the healing must wait until lethal "
+        "damage is actually about to happen."
     ),
     examples=(
         '{"accepted": true, "severity": "moderate", "outcome_text": "Your wound learns to answer.", "effects": [{"type": "create_trigger", "name": "thorn-blood answer", "trigger": "on_player_hit", "target": "player", "charges": 1, "duration": 6, "effects": [{"type": "damage", "target": "trigger_source", "amount": 5, "damage_type": "physical"}, {"type": "add_status", "target": "trigger_source", "status": "bleeding", "duration": 3}]}], "costs": [{"type": "mana", "amount": 4}], "rejected_reason": null}',
+        '{"accepted": true, "severity": "major", "outcome_text": "Death must knock twice.", "effects": [{"type": "create_trigger", "name": "last-breath bargain", "trigger": "on_lethal_damage", "target": "player", "charges": 1, "duration": 8, "effects": [{"type": "heal", "target": "trigger_target", "amount": 8}]}], "costs": [{"type": "curse", "id": "wild_debt", "name": "Wild Debt", "description": "The spared breath is owed."}], "rejected_reason": null}',
+        '{"accepted": true, "severity": "moderate", "outcome_text": "A breath waits behind your last breath.", "effects": [{"type": "create_trigger", "name": "last-breath heal", "trigger": "on_lethal_damage", "target": "player", "charges": 1, "duration": 8, "effects": [{"type": "heal", "target": "trigger_target", "amount": 8}]}], "costs": [{"type": "mana", "amount": 4}], "rejected_reason": null}',
     ),
     cost_hint="moderate; mana",
     common_combos=("delayed_effects",),
@@ -622,21 +657,40 @@ _DELAYED_EFFECTS = CapabilityCard(
         "next turn",
         "future",
         "debt",
+        "delay my wounds",
+        "delay my damage",
+        "delay incoming damage",
+        "capture incoming damage",
+        "incoming damage",
+        "store my wounds",
+        "store my damage",
+        "wounds for later",
+        "release it afterward",
+        "release them afterward",
     ),
     embed_description=(
         "Effects that pay off on a timer rather than a condition: a summon that arrives in "
         "N turns, a scheduled blast, a delayed heal, a reckoning that comes due."
     ),
     index_line="delayed_effects — scheduled payoffs on a timer (in N turns, ...) via schedule_event",
-    effect_types=("schedule_event",),
+    effect_types=("schedule_event", "delay_incoming", "accelerate_status"),
     prompt_block=(
-        "For a delayed payoff or future consequence, use schedule_event. Fields: turns (number), "
-        "event_type ('summon|message|damage|heal|status|flood|curse|conjure'), plus event-specific "
-        "fields (name, hp, attack, faction, amount, tile, status, etc.). Effects happen now; the "
-        "scheduled event happens after `turns`."
+        "For a delayed payoff or future consequence, use schedule_event. Preferred fields: "
+        "turns (number), optional text/message, effects [normal effect objects], and/or costs "
+        "[normal cost objects]. Older event_type shorthands ('summon|message|damage|heal|status|"
+        "flood|curse|conjure') also work. Use delay_incoming for 'the next damage is delayed' "
+        "or 'store/capture/delay my wounds or incoming damage for later': target, turns/duration, optional name. It captures raw "
+        "incoming damage and releases it later, when resistance/triggers/death checks happen. "
+        "Do NOT express delayed wounds as add_status with status:'delayed_sink' or status:'warded'; "
+        "delayed_sink is an internal marker and warded is only ordinary protection. The model-facing "
+        "effect for this mechanic is always delay_incoming. "
+        "Use accelerate_status for 'speed up the poison/fire/bleeding': target, status "
+        "('poisoned|burning|bleeding')."
     ),
     examples=(
         '{"accepted": true, "severity": "major", "outcome_text": "Wounds close. In five turns, something hostile will arrive to collect.", "effects": [{"type": "heal", "target": "player", "amount": 8}, {"type": "schedule_event", "turns": 5, "event_type": "summon", "name": "wrath echo", "char": "W", "hp": 10, "attack": 4, "faction": "enemy"}], "costs": [{"type": "mana", "amount": 3}], "rejected_reason": null}',
+        '{"accepted": true, "severity": "moderate", "outcome_text": "Your wounds learn patience.", "effects": [{"type": "delay_incoming", "target": "player", "turns": 3, "name": "borrowed pain"}], "costs": [{"type": "mana", "amount": 3}], "rejected_reason": null}',
+        '{"accepted": true, "severity": "moderate", "outcome_text": "The next hurts wait outside your skin, counting.", "effects": [{"type": "delay_incoming", "target": "player", "turns": 3, "name": "held wound"}], "costs": [{"type": "mana", "amount": 3}], "rejected_reason": null}',
     ),
     cost_hint="varies; the delay itself is part of the price (a reckoning arriving later)",
     common_combos=("triggers_reactions",),
@@ -942,6 +996,97 @@ _PERSISTENT_EFFECT = CapabilityCard(
     common_combos=("sympathetic_link",),
 )
 
+_BEHAVIOR_CONTROL = CapabilityCard(
+    name="behavior_control",
+    triggers=(
+        "make them dance",
+        "make it dance",
+        "dance",
+        "duel",
+        "single combat",
+        "coward",
+        "cowardly",
+        "flee from blood",
+        "afraid of blood",
+        "target the weakest",
+        "lowest hp",
+        "weakest",
+        "mimic my movement",
+        "copy my movement",
+        "mirror my movement",
+        "existential dread",
+        "freeze with dread",
+        "freeze in dread",
+    ),
+    embed_description=(
+        "Temporary AI behavior changes: forcing a creature to dance instead of attacking, "
+        "flee from visible blood, duel a chosen target, hunt the weakest visible creature, "
+        "mimic another creature's movement, or freeze in dread."
+    ),
+    index_line="behavior_control -- temporarily change creature AI behavior (dance, coward, duel, lowest_hp, mimic, freeze_dread)",
+    effect_types=("set_behavior",),
+    prompt_block=(
+        "- set_behavior: target ('nearest_enemy', an entity id, or a group), behavior "
+        "('dance|coward|duel|lowest_hp|mimic|freeze_dread'), duration/turns, and optional "
+        "behavior_target/focus/lock_to for duel or mimic. These are temporary AI modifiers, "
+        "not faction changes: dance means move but do not attack; coward flees from visible "
+        "blood or bleeding; duel locks onto the focus target; lowest_hp hunts the weakest "
+        "visible creature; mimic copies the focus target's last movement; freeze_dread skips "
+        "its action."
+    ),
+    examples=(
+        '{"accepted": true, "severity": "moderate", "outcome_text": "The brute hears music no one else can hear and starts stepping around the beat instead of swinging.", "effects": [{"type": "set_behavior", "target": "nearest_enemy", "behavior": "dance", "duration": 3}], "costs": [{"type": "mana", "amount": 4}], "rejected_reason": null}',
+        '{"accepted": true, "severity": "moderate", "outcome_text": "A private law of honor snaps shut around the goblin: it wants only the brute now.", "effects": [{"type": "set_behavior", "target": "goblin_1", "behavior": "duel", "behavior_target": "brute_1", "duration": 5}], "costs": [{"type": "mana", "amount": 4}], "rejected_reason": null}',
+    ),
+    cost_hint="moderate; mana, sometimes a curse for strong or long-lived control",
+    common_combos=("faction_charm", "memory_edit"),
+)
+
+_ENVIRONMENT_FLOW = CapabilityCard(
+    name="environment_flow",
+    triggers=(
+        "conveyor",
+        "current",
+        "flow",
+        "river of force",
+        "wind",
+        "gust",
+        "pushes every turn",
+        "pulls every turn",
+        "shifting sand",
+        "tilt",
+        "tilted",
+        "slide",
+        "drift",
+        "gravity well",
+        "black hole",
+        "vortex",
+        "whirlpool",
+        "magnet",
+        "magnetic",
+    ),
+    embed_description=(
+        "Environmental drift fields: conveyors, wind, shifting sand, tilted rooms, vortexes, "
+        "gravity wells, and other terrain that moves creatures a step each turn."
+    ),
+    index_line="environment_flow -- create tile currents that move creatures each turn (conveyors, wind, gravity wells)",
+    effect_types=("create_flow",),
+    prompt_block=(
+        "- create_flow: target/center/x/y, radius or shape, duration/turns, and either a "
+        "fixed vector (dx/dy or direction 'north|south|east|west') or radial mode "
+        "('inward|outward'). Each affected tile stores a current; each turn, a creature "
+        "standing on one is pushed one tile if there is room. Use fixed vectors for wind, "
+        "conveyors, tilted rooms, and shifting sand. Use mode:'inward' for gravity wells, "
+        "black holes, whirlpools, or magnets; mode:'outward' for repulsion."
+    ),
+    examples=(
+        '{"accepted": true, "severity": "moderate", "outcome_text": "The floor remembers a river and starts carrying everything east.", "effects": [{"type": "create_flow", "target": "nearest_enemy", "radius": 3, "direction": "east", "duration": 4}], "costs": [{"type": "mana", "amount": 4}], "rejected_reason": null}',
+        '{"accepted": true, "severity": "major", "outcome_text": "A little black absence opens in the stones and all loose courage leans toward it.", "effects": [{"type": "create_flow", "target": "nearest_enemy", "radius": 4, "mode": "inward", "duration": 5}], "costs": [{"type": "mana", "amount": 5}], "rejected_reason": null}',
+    ),
+    cost_hint="moderate-major; mana, with stronger costs for large or long-lived fields",
+    common_combos=("barrier_shaping",),
+)
+
 
 CAPABILITY_CARDS: tuple[CapabilityCard, ...] = (
     _CONJURE_CREATURE,
@@ -959,6 +1104,8 @@ CAPABILITY_CARDS: tuple[CapabilityCard, ...] = (
     _MEMORY_EDIT,
     _SYMPATHETIC_LINK,
     _PERSISTENT_EFFECT,
+    _BEHAVIOR_CONTROL,
+    _ENVIRONMENT_FLOW,
 )
 
 

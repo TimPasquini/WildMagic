@@ -63,14 +63,19 @@ content replay without calling the provider. Used for regression testing.
 `GameState` dataclass and the `GameEngine` class declaration. Gameplay concerns are
 split into mixins, leaving engine.py with the infrastructure that everything else depends on:
 
-- `GameState` — the serialisable game world (tiles, entities, inventory, turn counter, flags, etc.)
+- `GameState` — the serialisable game world (tiles, entities, inventory, turn counter, flags, tile flows, etc.)
 - `GameEngine.__init__` — seeds RNG, builds initial state, dispatches to scenario generators
 - Utility queries: `in_bounds`, `tile_at`, `tile_key`, `is_visible`, `can_occupy`, `distance`, `entities_at`, `blocking_entity_at`, `living_enemies`, `is_hostile_to`
 - State validation: `validate_state`
-- FOV: `update_fov`, `has_line_of_sight`, `tile_blocks_sight`
+- FOV: `update_fov`, `effective_fov_radius`, `has_line_of_sight`, `tile_blocks_sight`.
+  The `sight_shrouded` status can temporarily reduce the player's view radius. FOV also
+  maintains `GameState.visible_entity_ids` so `on_enters_sight` triggers fire once when a
+  living actor/NPC newly enters the player's view.
 - Tile mutation: `set_tile`, `tile_tags_at`, `_reacting_tile`
 - Spawning: `spawn_actor`, `spawn_npc`, `next_entity_id`
-- Player actions: `attempt_player_move`, `wait_turn`, `open_door`, `open_adjacent_door`, `descend_stairs`, `ascend_stairs`, `teleport_entity`, `_move_to_nearest_open_tile`
+- Player actions: `attempt_player_move`, `wait_turn`, `open_door`, `open_adjacent_door`,
+  `descend_stairs`, `ascend_stairs`, `teleport_entity`, `_move_to_nearest_open_tile`. The
+  `seal_stairs` world flag blocks stair travel while set.
 - Standard spells (deterministic, no LLM): `cast_standard_bolt`, `cast_standard_frost`, `cast_standard_heal`, `cast_standard_ward`, `cast_standard_reveal`
 - NPC dialogue/trade/promises: `find_talk_target`, `dialogue_context_for_llm`, `lore_extraction_context`, `promises_for_context`, `promise_hooks_for_zone`, `add_promises`, `apply_dialogue_exchange`, `resolve_pending_trade`, `should_consider_trade`, `trade_context_for_llm`
 - LLM context building: `context_for_llm` (delegates to `state_view.spell_context_view`),
@@ -90,8 +95,8 @@ split into mixins, leaving engine.py with the infrastructure that everything els
   standard spark/frost spells aim at it. `context_for_llm` advertises it as
   `selected_target` so the resolver can reason about range/LOS. Cleared on zone change
   and stair transitions (coordinates become meaningless).
-- Environment tick: `_tick_environment`, `_tick_fire_spread`, `_tick_poison_spread`, `_apply_tile_entry`, `_ambient_sounds`, `_tick_simple_statuses`, `_tick_tile_durations`, `_tick_event_timers`
-- Trigger system: `_trigger_event`, `_tick_triggers`, `_fire_triggers`, `_fire_damage_triggers`, `_fire_death_triggers`, `_trigger_matches_target`, `_fill_trigger_effect_defaults`
+- Environment tick: `_tick_environment`, `_tick_flow_fields`, `_tick_fire_spread`, `_tick_poison_spread`, `_apply_tile_entry`, `_ambient_sounds`, `_tick_simple_statuses`, `_tick_tile_durations`, `_tick_event_timers`
+- Trigger system: `_trigger_event`, `_tick_triggers`, `_fire_triggers`, `_fire_damage_triggers`, `_fire_death_triggers`, `_fire_lethal_damage_triggers`, `_trigger_matches`, `_fill_trigger_effect_defaults`. Optional trigger `when` predicates are evaluated through `conditions.py`.
 - Curse enforcement: accepted wild-magic resolutions are checked against active mechanical
   curse limits before mutation. Semantic curses stay LLM-facing context; known mechanical
   curses can enforce range, area radius, line of sight, or forbidden effect families.
@@ -113,7 +118,8 @@ for `actions.summarize_state`/replay records and `inspection_view` for CLI/GUI i
 Everything here is pure reads; `tile_counts` lives here too. See
 `docs/WILD_MAGIC_STATE_SURFACE_PLAN.md` (Stage 2). Imports only leaf modules
 (`models`, `capabilities`, `spell_contract`, `templates`), never `engine`, so it sits below
-the engine in the import order despite reading from it at call time.
+the engine in the import order despite reading from it at call time. Active `tile_flows`
+surface through tile detail cards and replay/inspection summaries.
 
 ### `wildmagic/refs.py`
 Normalized references + selectors for resolver JSON (Stage 3). `normalize_ref(value)` turns a
@@ -125,6 +131,19 @@ JSON is unchanged; typed refs add explicit entity/tile/room/faction targeting. R
 by `engine.resolve_target`/`resolve_target_group` and by `effects.effect_position`/
 `resolve_placement`. Pure resolution (reads engine, never mutates); imports only `normalize`,
 never `engine`.
+
+### `wildmagic/conditions.py`
+Pure predicate evaluator for trigger `when` clauses. Supports small deterministic predicates
+such as `hp_below`, `hp_above`, `hp_parity`, `inventory_empty`, `on_terrain`,
+`step_multiple`, `count_visible`, and `same_spell_streak`. It reads engine/state/event data
+only and never mutates or calls providers, so conditional triggers remain replay-safe.
+
+### `wildmagic/behaviors.py`
+Normalization and storage helpers for temporary AI behavior modifiers. `set_behavior` writes
+modifiers into `Entity.details["behavior_modifiers"]`, and `ai.py` reads them to alter target
+selection or action choice (`dance`, `coward`, `duel`, `lowest_hp`, `mimic`,
+`freeze_dread`). The helpers also tick modifier durations and keep the behavior vocabulary
+separate from ordinary status names.
 
 ### `wildmagic/operations.py`
 Engine operation primitives + state deltas (Stages 6-7). `StateDelta` is the compact,
@@ -174,7 +193,9 @@ NPC perception and turn execution:
 `can_sense`, `_select_target`, `_update_npc_perceptions`, `_enemy_turns`, `_enemy_single_action`,
 `_try_enemy_summon`, `_ally_turns`, `_npc_turns`, `_process_entity_behaviors`,
 `_behavior_targets`, `next_path_step`, `_flee_step`, `path_neighbors`.
-Also holds the `_AURA_RE` regex used for aura parsing.
+Reads temporary behavior modifiers from `behaviors.py`: duel/lowest-HP target selection,
+dance/no-attack movement, cowardly flight from visible blood, mimic movement, and
+freeze-dread no-ops. Also holds the `_AURA_RE` regex used for aura parsing.
 
 ### `wildmagic/generation.py` — `_GenerationMixin`
 All map and world generation (41 methods):
@@ -219,7 +240,9 @@ Wild magic resolution and every effect/cost handler:
   `create_tile/set_tile`, `add_status`, `remove_status`, `summon`, `spawn_item`,
   `conjure_item`, `conjure_creature`, `transform_item`, `modify_inventory`,
   `transform_entity`, `change_faction`, `add_tag/remove_tag`, `add_resistance/add_weakness`,
-  `set_flag`, `schedule_event`, `create_trigger/ward`, `add_curse`, `message`
+  `set_flag`, `schedule_event`, `delay_incoming`, `accelerate_status`, `set_behavior`,
+  `create_flow`, `create_trigger/ward`, `create_persistent_effect`, `create_promise`, `possess`,
+  `edit_memory`, `animate_object`, `aura`, `add_trait`, `add_curse`, `message`
 - `_apply_cost` — dispatches on `cost["type"]`: `mana`, `health/hp`, `max_health`,
   `max_mana`, `item`, `curse`, `status`
 - Placement helpers: `effect_position`, `resolve_placement`, `random_visible_floor`,
@@ -624,5 +647,6 @@ Shared leaves (imported by many, import nothing above them):
     geometry.py
     determinism.py
     normalize.py
+    conditions.py
     promises.py
 ```

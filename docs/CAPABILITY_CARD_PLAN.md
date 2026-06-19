@@ -44,7 +44,7 @@ been **removed**. A coverage test guards that core + cards still cover every eff
 
 ## 2. Live cards (built, engine-backed)
 
-Fifteen cards in `CAPABILITY_CARDS`, content lifted from the old monolith (plus the three
+Seventeen cards in `CAPABILITY_CARDS`, content lifted from the old monolith (plus the three
 promoted 2026-06-13, `disfigure` added 2026-06-14, and `sympathetic_link` + `persistent_effect`
 promoted 2026-06-16).
 
@@ -52,19 +52,21 @@ promoted 2026-06-16).
 |---|---|---|---|
 | `conjure_creature` | `summon`, `conjure_creature` | Summoning — Allies / Aura Bearers & Wards / Hazardous Creatures; monolith summon line + the whole behavior-tags block | `conjure_item` |
 | `conjure_item` | `conjure_item`, `spawn_item`, `transform_item`, `modify_inventory` | "glass teeth", "webbing", "transmute the chalk"; monolith conjure_item/spawn_item lines + item templates | — |
-| `transform_entity` | `transform_entity` | "turn the wolf into a chicken", "petrify", Strange & Esoteric polymorphs | `disfigure` |
+| `transform_entity` | `transform_entity` | "turn the wolf into a chicken", "petrify", aging/withered-body stat changes, Strange & Esoteric polymorphs | `disfigure` |
 | `disfigure` | *(none — uses core `add_status`/`damage`/`add_weakness`; introduces the `weakened` status)* | "turn his legs to iron", "boil his brain", "wither his sword-arm", "rot his flesh" — targeted body-part maiming | — |
 | `faction_charm` | `change_faction`, `add_tag`, `remove_tag` | "charm/befriend", "make the weapon defect", "ally for one turn" | `transform_entity` |
-| `barrier_shaping` | *(none — refines core `create_tiles`)* | Terrain "wall of ice across the corridor", "line of ice east", "between me and them"; the directional-shape balance rules | — |
-| `divination` | *(none — refines core `add_status` 'revealed')* | Information & Divination section; the reveal/track balance rule | — |
-| `triggers_reactions` | `create_trigger` | Combo & Conditional "next time X…"; the create_trigger rule | `delayed_effects` |
-| `delayed_effects` | `schedule_event` | "in five turns…", "comes back to collect", debt-later spells | `triggers_reactions` |
+| `barrier_shaping` | *(none — refines core `create_tiles`/`set_flag`)* | Terrain "wall of ice across the corridor", "line of ice east", "between me and them"; cave-ins; sealed stairs; the directional-shape balance rules | — |
+| `divination` | *(none — refines core `add_status` 'revealed'/'sight_shrouded')* | Information & Divination section; reveal/track/sight-shroud balance rules | — |
+| `triggers_reactions` | `create_trigger` | Combo & Conditional "next time X…"; predicate-gated triggers; lethal-damage and curse-gained hooks | `delayed_effects` |
+| `delayed_effects` | `schedule_event`, `delay_incoming`, `accelerate_status` | "in five turns…", "comes back to collect", debt-later spells, delayed wounds, accelerated poison/fire/bleeding ticks | `triggers_reactions` |
 | `prophecy` | `create_promise` | "I prophesy…", "somewhere north a chapel waits"; the create_promise block | — |
 | `possession` | `possess` | "take over the guard", "see through the eyes of", "ride the beast" | — |
 | `memory_edit` | `edit_memory` (NEW handler) | "make the nearest enemy forget me", "plant a false memory", "convince the guard…" | `faction_charm` |
 | `structure_animation` | `animate_object` (NEW handler) | "make the brass door angry", "the statue steps down", "persuade the door to bite" | `conjure_creature` |
 | `sympathetic_link` | `create_persistent_effect` (`kind: "sympathetic_link"`) | "whatever wounds me wounds him", "bind the goblin's pain to the ogre", "tie their heartbeats together" | `persistent_effect` |
 | `persistent_effect` | `create_persistent_effect` | "hex the ogre so anyone who strikes it rots", "ward my ally so attackers are burned", "make my blade bleed whatever I strike" | `sympathetic_link` |
+| `behavior_control` | `set_behavior` | "make them dance", "duel the brute", "flee from blood", "target the weakest", "mimic my movement" | `faction_charm`, `memory_edit` |
+| `environment_flow` | `create_flow` | "conveyor floor", "shifting sand", "tilt the room", "wind pushes them", "gravity well", "black hole" | `barrier_shaping` |
 
 The last three were promoted from planned (2026-06-13): `possess` already had an engine
 handler; `edit_memory` (edits the NPC's `NPCProfile.memory`; forgetting the caster also
@@ -124,6 +126,34 @@ skin→`add_weakness`). It introduces **one** new mechanic: the `weakened` statu
 path, so the card unlocks **no new effect type**. It shares trigger overlap with
 `transform_entity` (both fire on "turn his X"); the prompt block disambiguates — disfigure is
 *partial* (a status on a living creature), transform is *whole-body polymorph*.
+
+**`delayed_effects` expanded** to own two timer-adjacent effects in addition to
+`schedule_event`: `delay_incoming` captures raw incoming damage packets on a target and
+releases them later through the normal damage path, and `accelerate_status` immediately
+resolves the remaining damaging ticks of `poisoned`, `burning`, or `bleeding`. `schedule_event`
+now also accepts generalized delayed payloads: `effects[]`, `costs[]`, and/or a message, while
+preserving the older `event_type` shorthands.
+
+**`triggers_reactions` expanded** with optional `when` predicates on `create_trigger`:
+`hp_below`, `hp_above`, `hp_parity`, `inventory_empty`, `on_terrain`, `step_multiple`,
+`count_visible`, and `same_spell_streak`. It also owns the new event hooks
+`on_lethal_damage` (a pre-death intercession; if the target can survive the same blow after
+trigger effects, death is prevented), `on_curse_gained`, and `on_enters_sight`.
+
+**`behavior_control` added** as a typed, temporary AI-modifier card. It owns
+`set_behavior`, which stores short-lived behavior modifiers in an entity's details and is
+read by `ai.py`: `dance` moves without attacking, `coward` flees visible blood or bleeding,
+`duel` locks onto a focus target, `lowest_hp` hunts the weakest visible creature, `mimic`
+copies a focus target's last movement vector, and `freeze_dread` skips the action. This is
+distinct from `faction_charm` and `memory_edit`: it changes tactical choice for a duration,
+not allegiance or remembered facts.
+
+**`environment_flow` added** as the standing-field movement card. It owns `create_flow`,
+which stores per-tile drift vectors in `GameState.tile_flows`. `_tick_environment` moves each
+living entity on a flow tile one step per turn in deterministic entity-id order, then
+`_tick_tile_durations` expires the flow durations. Fixed vectors cover conveyors, wind,
+tilted floors, and shifting sand; radial `inward`/`outward` modes cover gravity wells,
+black holes, magnets, whirlpools, and repulsion fields.
 
 Two cards (`barrier_shaping`, `divination`) unlock **no new effect type** — they're
 *prompt-only refinements* of a core effect. They still earn cardhood: each carries the
@@ -204,6 +234,12 @@ one prompt, but it can resolve any one of them well when shown only that one.
   `_fill_trigger_effect_defaults`, anchor-death pruning in `_tick_triggers`. Tests in
   `tests/test_persistent_effects.py`; full suite green.
 - `item_enchantment` consciously deferred pending an item-instance model (see §2/§3).
+- Expanded `delayed_effects` end to end: generalized scheduled `effects[]`/`costs[]`
+  payloads, `delay_incoming`, `accelerate_status`, and broad `stasis` timer pausing. Tests in
+  `tests/test_delayed_effects.py`; full suite green.
+- Expanded `triggers_reactions` with trigger `when` predicates, `on_lethal_damage`,
+  `on_curse_gained`, `on_enters_sight`, player step counting, and spell-streak state. Tests in
+  `tests/test_condition_triggers.py`; full suite green.
 
 **Remaining, in order** (see `CAPABILITY_ROUTING.md` §11):
 

@@ -304,7 +304,13 @@ def _validate_effect_against_curses(
 
 def _effect_radius(effect: dict[str, Any]) -> int:
     effect_type = normalize_id(str(effect.get("type") or ""))
-    if effect_type in {"area_damage", "area_status", "create_tiles", "aura"}:
+    if effect_type in {
+        "area_damage",
+        "area_status",
+        "create_tiles",
+        "aura",
+        "create_flow",
+    }:
         return clamp_int(effect.get("radius"), 0, 99)
     return 0
 
@@ -344,6 +350,7 @@ def _effect_positions(
         "create_tile",
         "set_tile",
         "create_tiles",
+        "create_flow",
         "aura",
     }:
         positions.append(engine.effect_position(effect))

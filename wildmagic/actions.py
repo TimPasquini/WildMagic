@@ -2083,7 +2083,9 @@ class GameSession:
             )
             return False, True, wild_magic_record, context
 
-        outcome = self.engine.apply_wild_magic_resolution(resolution.data)
+        resolution_data = dict(resolution.data)
+        resolution_data.setdefault("spell", spell)
+        outcome = self.engine.apply_wild_magic_resolution(resolution_data)
         wild_magic_record["deltas"] = list(outcome.deltas)
         if outcome.technical_failure:
             wild_magic_record["technical_failure"] = True

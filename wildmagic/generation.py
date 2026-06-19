@@ -461,6 +461,7 @@ class _GenerationMixin:
         state.explored.clear()
         state.tile_tags.clear()
         state.tile_durations.clear()
+        state.tile_flows.clear()
         state.room_profiles.clear()
         state.tile_rooms.clear()
         state.entities = {}
@@ -760,6 +761,7 @@ class _GenerationMixin:
         state.explored.clear()
         state.tile_tags.clear()
         state.tile_durations.clear()
+        state.tile_flows.clear()
         state.room_profiles.clear()
         state.tile_rooms.clear()
         state.entities = {}
@@ -912,6 +914,7 @@ class _GenerationMixin:
         state.explored.clear()
         state.tile_tags.clear()
         state.tile_durations.clear()
+        state.tile_flows.clear()
         state.room_profiles.clear()
         state.tile_rooms.clear()
         state.entities = {}
@@ -1173,6 +1176,7 @@ class _GenerationMixin:
         state.visible.clear()
         state.tile_tags.clear()
         state.tile_durations.clear()
+        state.tile_flows.clear()
         state.room_profiles.clear()
         state.tile_rooms.clear()
         state.entities = {}
@@ -1527,6 +1531,7 @@ class _GenerationMixin:
         state.visible.clear()
         state.tile_tags.clear()
         state.tile_durations.clear()
+        state.tile_flows.clear()
         state.room_profiles.clear()
         state.tile_rooms.clear()
         state.entities = {}
@@ -1845,6 +1850,7 @@ class _GenerationMixin:
         state.entities = {}
         state.tile_tags = {}
         state.tile_durations = {}
+        state.tile_flows = {}
         state.room_profiles = {}
         state.tile_rooms = {}
         state.explored = set()
@@ -1877,6 +1883,7 @@ class _GenerationMixin:
         state.visible.clear()
         state.tile_tags.clear()
         state.tile_durations.clear()
+        state.tile_flows.clear()
         state.room_profiles.clear()
         state.tile_rooms.clear()
         state.room_profiles.clear()
@@ -2578,6 +2585,7 @@ class _GenerationMixin:
         state.visible.clear()
         state.tile_tags.clear()
         state.tile_durations.clear()
+        state.tile_flows.clear()
 
         zone_rng = random.Random(stable_seed(state.rng_seed, "llm_town", zx, zy))
         self._scatter_terrain_features(zone_rng)
@@ -2791,6 +2799,7 @@ class _GenerationMixin:
             tiles=[row[:] for row in state.tiles],
             tile_tags={key: list(value) for key, value in state.tile_tags.items()},
             tile_durations=dict(state.tile_durations),
+            tile_flows={key: dict(value) for key, value in state.tile_flows.items()},
             entities={
                 entity_id: entity
                 for entity_id, entity in state.entities.items()
@@ -2940,6 +2949,9 @@ class _GenerationMixin:
                 key_: list(value) for key_, value in snapshot.tile_tags.items()
             }
             state.tile_durations = dict(snapshot.tile_durations)
+            state.tile_flows = {
+                key_: dict(value) for key_, value in snapshot.tile_flows.items()
+            }
             state.explored = set(snapshot.explored)
             state.entities = dict(snapshot.entities)
             state.zone_type = snapshot.zone_type
@@ -3357,6 +3369,7 @@ class _GenerationMixin:
             tiles=[row[:] for row in state.tiles],
             tile_tags={key: list(value) for key, value in state.tile_tags.items()},
             tile_durations=dict(state.tile_durations),
+            tile_flows={key: dict(value) for key, value in state.tile_flows.items()},
             entities={
                 entity_id: entity
                 for entity_id, entity in state.entities.items()
@@ -3377,6 +3390,9 @@ class _GenerationMixin:
             key: list(value) for key, value in snapshot.tile_tags.items()
         }
         state.tile_durations = dict(snapshot.tile_durations)
+        state.tile_flows = {
+            key: dict(value) for key, value in snapshot.tile_flows.items()
+        }
         state.explored = set(snapshot.explored)
         state.entities = dict(snapshot.entities)
         state.zone_type = snapshot.zone_type

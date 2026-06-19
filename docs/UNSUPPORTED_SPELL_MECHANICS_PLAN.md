@@ -30,6 +30,7 @@ today. The triage below leans on these:
 | **Durable world memory** | `operations.py` Stage-7 lanes | traits, place/faction/world notes, faction standing, deeds, promises. |
 | **Observable mutations** | `operations.py::StateDelta`, `WildMagicOutcome.deltas` | Every mutation is recorded; replay reproduces it without the LLM. |
 | **Curse enforcement** | `curses.py`; engine curse checks | Accepted resolutions are validated against mechanical curse limits before mutation. |
+| **Capability routing + schema narrowing** | `capabilities.py`; `state_view.py`; `spell_contract.per_cast_response_schema`; `wild_magic.py` | Each cast already receives routed card context, card-driven state slices, and a per-cast effect enum when Ollama schema mode is enabled. New mechanics should plug into this existing path rather than build a new routing layer. |
 
 **Two front-ends, not one.** `main.py`/`ui.py` is a Pygame GUI; `cli.py` is a terminal
 front-end; `autoplay.py` is headless. The state-surface plan's explicit non-goal — *"Do not
@@ -65,7 +66,7 @@ one-off?
 ### Cat 1 — Time & Turn Manipulation
 *The richest "looks impossible, mostly isn't" category, because `schedule_event` + triggers + the per-cast snapshot already exist.*
 
-- **Already expressible (D0–D1):** delay damage then apply (#4 → `schedule_event`), accelerate poison ticks (#16 → status-tick burst), borrow future mana (#11 → `schedule_event` mana cost + the existing **Wild Debt** curse), freeze all status durations (#14 → "stasis" flag in the tick), age an enemy (#15 → max-HP/speed debuff), anchor-and-revert-on-death (#17 → reuse the snapshot machinery + an `on_death` trigger). **V2–V3, D1.**
+- **Already expressible (D0–D1):** delay damage then apply (#4 → `schedule_event`), accelerate poison ticks (#16 → status-tick burst), borrow future mana (#11 → `schedule_event` mana cost + the existing **Wild Debt** curse), freeze all status durations (#14 → "stasis" flag in the tick), age an enemy (#15 → max-HP/speed debuff), anchor-and-revert-on-death (#17 → reuse the snapshot machinery + an `on_lethal_damage` trigger). **V2–V3, D1.**
 - **Tractable but real work (D2):** take an extra turn (#6), steal/transfer a turn (#18), 2:1 time-slow (#9) — all are action-economy and touch the turn loop but don't require a full initiative rewrite.
 - **Architectural (D3):** rewind the room N turns (#1, #13), fast-forward the sim (#5), split-timeline pick-best (#8), initiative swap (#10) — need a rolling state-history ring buffer or a real initiative queue. #1 is the flagship "big swing" (sketch in §5.F).
 - **Verdict:** **highest-yield category.** Do the D1 cluster first (§5.A).
@@ -160,6 +161,11 @@ Every plan below must honor the same invariants (they are not repeated per plan)
   the LLM at fire time unless the verdict is recorded at the apply point (the deed pattern).
 - **Curses:** new effect families should be nameable in the curse "forbidden families" check
   in `curses.py` so curses can still constrain them.
+- **Routing/schema:** dynamic per-cast schema narrowing and card-driven context slices already
+  exist. New effects should add `EffectSpec` metadata, capability-card ownership, and resolver
+  examples so they are available through the live routed path.
+- **Bias toward simple generality:** do not pre-emptively add special balance carve-outs.
+  Let broad mechanics land first; patch exploits only after playtesting shows they are real.
 - **Per change, run:** `ruff check`, `py_compile` sweep, `python -m wildmagic.smoke_test`,
   `pytest -q`, and a `--provider mock` CLI playtest (pattern in the state-surface plan).
 
@@ -172,40 +178,58 @@ Unlocks #4 (delay damage), #11 (future mana), #16 (accelerate poison), scheduled
 (#155 lava ring), and is the substrate for #2's timed payoffs.
 
 **What exists:** `schedule_event` + `engine._tick_event_timers` + the `_DELAYED_EFFECTS`
-card already run an effects array "in N turns." The **Wild Debt** semantic curse template in
-`curses.py` already models "borrow now, pay later."
+card already support delayed consequences. The generalized payload work below turns that
+into a reusable delayed `effects[]`/`costs[]` executor. The **Wild Debt** semantic curse
+template in `curses.py` already models "borrow now, pay later."
+
+**Implemented:** generalized scheduled `effects[]`/`costs[]` payloads, `delay_incoming`,
+`accelerate_status`, and broad `stasis` timer pausing are live. Remaining time work should
+build on those primitives rather than adding another delayed-execution path.
 
 **Changes:**
 1. **`delay_incoming` effect (new) — the delayed-damage buffer (#4).** A status-like marker
    on an entity: damage routed to it is captured into a buffer instead of applied, and a
-   `schedule_event` releases the sum after N turns. Implement as: `add_status delayed_sink`
-   read in `combat.damage_entity` (divert to `entity.details["delayed_damage"]`), plus a
-   scheduled event that applies the accumulated total and clears the marker. Small hook in
-   the one chokepoint (`damage_entity`) keeps it transactional and replay-safe.
+   `schedule_event` releases the stored packets after N turns. Implement as:
+   `add_status delayed_sink` read in `combat.damage_entity` (divert to
+   `entity.details["delayed_damage"]`), plus a scheduled event that applies the accumulated
+   packets and clears the marker. **Do not apply resistances, damage triggers, or death
+   checks when damage is captured**; store the intended raw amount/type/source and let the
+   normal `damage_entity` path apply resistances, triggers, and death handling when the
+   delayed damage is released. Small hook in the one chokepoint (`damage_entity`) keeps it
+   transactional and replay-safe.
 2. **`accelerate_status` effect (new) — burst remaining ticks (#16).** Reads a target's
    status (e.g. `poisoned`), computes remaining ticks × per-tick damage from the existing
    poison logic, applies it at once via `operations.apply_damage`, and clears the status.
    Pure reuse of existing tick math; no new tick loop.
 3. **Future-mana debt (#11) — no new effect.** Resolve as a `schedule_event` whose payload
-   is a `mana` cost, plus an `add_curse` of the existing **Wild Debt** template for flavor and
-   so it shows in the curse UI. This is a **prompt example + normalizer alias**, not code,
-   once #1 lands the "scheduled cost" path (schedule_event today carries effects; allow it to
-   carry a `costs` array too — a one-line extension to the handler).
-4. **Freeze all durations (#14)** — a `stasis` flag checked at the top of
+   includes a `mana` cost, plus an `add_curse` of the existing **Wild Debt** template for
+   flavor and so it shows in the curse UI. This is a **prompt example + normalizer alias**,
+   not a bespoke debt effect, once #1 lands generalized scheduled payloads.
+4. **Generalized scheduled payloads.** Upgrade `schedule_event` from a branchy
+   `event_type` executor into a small delayed payload runner that can carry `effects[]`,
+   `costs[]`, and/or a message. Preserve the existing event-type shorthands for backward
+   compatibility by normalizing them into payload arrays before storage or at fire time.
+   This makes future debt, temporary duplicates, delayed hazards, and delayed punishments all
+   use the same mechanic.
+5. **Freeze all durations (#14)** — a `stasis` flag checked at the top of
    `_tick_simple_statuses`/`_tick_tile_durations`/`_tick_event_timers` to skip decrements for
-   N turns. One guard in three tick functions.
+   N turns. Keep it general: if a timer is in the shared timer system, stasis pauses it. Do
+   not add special-case exemptions for debts, curses, or consequences until playtesting shows
+   a real balance problem. One guard in three tick functions.
 
 **Touchpoints:** `spell_contract.SUPPORTED_EFFECTS` (+`delay_incoming`, `accelerate_status`),
 `effect_registry.py` (two `EffectSpec`s, owned by `_DELAYED_EFFECTS`), `effects._apply_effect`
-(two handlers; extend the `schedule_event` handler for `costs`), `combat.damage_entity` (sink
-divert), `engine` tick functions (stasis guard), `resolution_parsing.py` (aliases:
+(two handlers; generalize the `schedule_event` handler for payload arrays),
+`combat.damage_entity` (sink divert), `engine` tick functions (stasis guard),
+`resolution_parsing.py` (aliases:
 "delay/postpone damage", "speed up the poison"), `capabilities._DELAYED_EFFECTS` (mechanics
 text + examples).
 
 **Tests:** scheduled release applies the summed damage on the right turn and rolls back if
-the cast fails; `accelerate_status` on a 3-tick poison deals exactly 3× per-tick and removes
-the status; stasis skips exactly N decrements; replay reproduces a delayed payoff with the
-mock provider.
+the cast fails; delayed damage applies resistances/triggers only on release; scheduled
+`effects[]` and `costs[]` both fire through the same executor; `accelerate_status` on a
+3-tick poison deals exactly 3× per-tick and removes the status; stasis skips exactly N
+decrements; replay reproduces a delayed payoff with the mock provider.
 
 ---
 
@@ -220,6 +244,9 @@ step), #170 (on-sight freeze), #178 (curse redirect), #179 (free repeat cast), #
 fires by event name (`_fire_triggers`, `_fire_damage_triggers`, `_fire_death_triggers`) and
 already matches by `target`/tag (`_trigger_matches`). Events: `on_next_spell`, `on_damaged`,
 `on_deal_damage`, `on_player_hit`, `on_player_move`, `on_enemy_death`.
+
+**Implemented:** trigger `when` predicates, `on_lethal_damage`, `on_curse_gained`,
+`on_enters_sight`, player step counting, and spell-streak state are live.
 
 **Changes:**
 1. **A tiny condition predicate, optional on any trigger.** Add a `when` object to the
@@ -236,8 +263,11 @@ already matches by `target`/tag (`_trigger_matches`). Events: `on_next_spell`, `
      the nearest enemy instead).
    - `on_lethal_damage` — fired in `combat.damage_entity` *before* death is committed when a
      hit would reduce HP ≤ 0, with a chance for a trigger to intercede (#161 swap-and-give,
-     #17 anchor-revert). This is the highest-value hook and the only D2 one (it must be
-     careful about ordering vs. `_on_entity_death`).
+     #17 anchor-revert). Keep the first pass general: any normal trigger payload may run, and
+     if the target is alive after the payload resolves, death is prevented. Do not add a
+     special allowlist of "death-preventing" effects up front; patch only if playtesting finds
+     an exploit. This is the highest-value hook and the only D2 one (it must be careful about
+     ordering vs. `_on_entity_death`).
 3. **Step counter** on the player (`GameState`) incremented in `attempt_player_move`, read by
    `step_multiple`. Serializes for free.
 4. **Death-chain / adjacency** (#166): a trigger whose `on_enemy_death` payload re-scans
@@ -249,12 +279,14 @@ already matches by `target`/tag (`_trigger_matches`). Events: `on_next_spell`, `
 `combat.damage_entity` (`on_lethal_damage`); `normalize.py` (new trigger-name aliases);
 `capabilities._TRIGGERS_REACTIONS` (document conditions + examples); `effect_registry`.
 
-**Tests:** each predicate true/false path; `on_lethal_damage` can both intercept (swap,
-prevent death) and pass through; death-chain terminates and respects the visited-set;
-`on_enters_sight` fires once per entry not per turn; everything round-trips under replay.
+**Tests:** each predicate true/false path; `on_lethal_damage` runs ordinary trigger payloads
+and prevents death if the target is alive afterward, otherwise death proceeds; death-chain
+terminates and respects the visited-set; `on_enters_sight` fires once per entry not per turn;
+everything round-trips under replay.
 
 **Risk:** `on_lethal_damage` ordering. Keep death committal in one place
-(`_on_entity_death`) and let the hook return a "handled/prevented" verdict before it runs.
+(`_on_entity_death`) and decide prevention by the target's post-trigger HP/alive state before
+death handling runs.
 
 ---
 
@@ -269,30 +301,36 @@ prevent death) and pass through; death-chain terminates and respects the visited
 gate action (`frozen`, `webbed`, `confused`). `change_faction`/`possess` already exist for the
 allegiance-level cases.
 
+**Implemented:** `set_behavior` is live through the `behavior_control` capability card.
+Behavior modifiers are stored on entity details with durations and are read by AI target
+selection / action logic. The initial behaviors are `coward`, `duel`, `dance`, `lowest_hp`,
+`freeze_dread`, and `mimic`.
+
 **Changes:**
-1. **A `behavior` status family** — values carried in `entity.statuses` (e.g.
-   `behavior:coward`, `behavior:duel:<id>`, `behavior:dance`, `behavior:lowest_hp`). Reuses
-   the existing status duration/serialization; no new storage.
+1. **A `set_behavior` effect with duration.** Prefer a dedicated effect over colon-encoded
+   `add_status` strings. It can still store values in an existing per-entity status/details
+   shape for serialization, but the resolver emits a clear typed payload such as
+   `{"type": "set_behavior", "target": "enemy_1", "behavior": "dance", "duration": 3}`.
+   Initial behaviors: `coward`, `duel`, `dance`, `lowest_hp`, `freeze_dread`, `mimic`.
 2. **AI read points** (the whole change is localized to `ai.py`):
-   - `_select_target`: if `behavior:lowest_hp`, pick the lowest-HP visible entity regardless
-     of faction (#51); if `behavior:duel:<id>`, lock to that id and ignore the player (#58).
-   - `_enemy_single_action`: if `behavior:dance`, allow `next_path_step` movement but suppress
-     the attack branch (#55); if `behavior:coward` and blood/`bleeding` is visible, force
-     `_flee_step` (#48); if `behavior:freeze_dread`, no-op the turn (#53).
-   - `behavior:mimic:<id>`: mirror the referenced entity's last move vector (#46) — store the
+   - `_select_target`: if `lowest_hp`, pick the lowest-HP visible entity regardless of faction
+     (#51); if `duel:<id>`, lock to that id and ignore the player (#58).
+   - `_enemy_single_action`: if `dance`, allow `next_path_step` movement but suppress the
+     attack branch (#55); if `coward` and blood/`bleeding` is visible, force `_flee_step`
+     (#48); if `freeze_dread`, no-op the turn (#53).
+   - `mimic:<id>`: mirror the referenced entity's last move vector (#46) — store the
      last move delta on the entity (cheap) and apply its inverse/copy.
-3. **Resolver surface:** these are emitted as `add_status` with a `behavior` key, or via the
-   `_FACTION_CHARM`/`_MEMORY_EDIT` cards which already own social mechanics. Add the behavior
-   vocab to those cards' mechanics text.
+3. **Resolver surface:** these are emitted as `set_behavior` through the dedicated
+   `behavior_control` card. It may combo with `_FACTION_CHARM`/`_MEMORY_EDIT`, but allegiance
+   and memory remain separate mechanics.
 
-**Touchpoints:** `ai.py` (read points); `models.MECHANICAL_STATUSES` (register the family so
-ticking/validation accepts it); `spell_contract`/`normalize` (accept `behavior:*` status
-keys); `capabilities` (card text); `effect_registry` if a dedicated `set_behavior` effect is
-preferred over overloading `add_status` (recommended for clarity).
+**Touchpoints:** `behaviors.py` (modifier normalization/storage helpers), `ai.py` (read
+points); `spell_contract.SUPPORTED_EFFECTS` (+`set_behavior`); `effects._apply_effect`
+(handler); `Entity.details` storage; `capabilities` (card text); `effect_registry`.
 
-**Tests:** a `behavior:dance` enemy moves but never attacks across N turns; `lowest_hp`
-retargets when HP order changes; `duel` ignores an in-range player; coward flees only while
-blood is visible; all expire correctly and serialize.
+**Tests:** `tests/test_behavior_control.py` covers dance movement without attacking,
+lowest-HP retargeting, duel lock, coward flight from blood, mimic movement, expiry, contract
+registration, and routing.
 
 **Design note:** keep these as *statuses with durations*, not permanent rewrites, so they fit
 the wild-magic "strange, temporary, costed" frame and clear naturally.
@@ -309,31 +347,36 @@ vector), #134 (black hole), #181 (scent trail the AI follows).
 card already promises a region pull/pin field; `_tick_environment` already iterates tiles each
 turn; `push_entity` already moves entities along a vector with wall stops.
 
+**Implemented:** `create_flow` is live through the `environment_flow` capability card.
+Per-tile flow vectors live in `GameState.tile_flows`, move entities during `_tick_environment`,
+expire with the other tile timers, and persist through zone/floor snapshots.
+
 **Changes:**
-1. **A `flow` tile property** — a per-tile (dx, dy) drift vector + optional duration, stored
-   in the tile-aura/duration structures `set_tile` already manages. A `create_flow` effect (or
-   an `aura kind:"flow"`) writes a region of drift vectors.
+1. **A `flow` tile property** — implemented as `GameState.tile_flows`, a per-tile (dx, dy)
+   drift vector + duration. The `create_flow` effect writes a region of drift vectors.
 2. **A drift pass in `_tick_environment`** — for each entity standing on a flow tile, attempt
    a `push_entity` of one step along the vector (respecting blockers, the same way fire/poison
    spread already respects the grid). Order entities deterministically (by id) so replay is
-   stable.
-3. **Gravity well (#134) as a radial flow** — a standing field anchored at a tile whose drift
-   vector at each point points inward; reuse the `aura` radius machinery to stamp the field.
+   stable. Put the drift pass after fire/poison/status tile entry effects and before timer/
+   trigger expiry, so standing on a hazardous tile still matters before forced movement and
+   any movement-triggered consequences see the resulting position.
+3. **Gravity well (#134) as a radial flow** — implemented as `create_flow` with
+   `mode:"inward"`, where each tile's drift vector points toward the center.
 4. **Scent/lure field (#181)** — the *same* structure, but read by `ai.py` pathing instead of
    moving the entity: a decaying scalar the enemy pathing is biased toward. This is why #181,
    #195 (noise wakes sleepers), and #134 collapse into one subsystem.
 
-**Touchpoints:** `models.py` (tile flow field on the tile-duration/aura store), `effects.py`
-(`create_flow` handler or `aura kind:"flow"`), `engine._tick_environment` (drift pass),
-`ai.py` (optional lure bias), `capabilities._GRAVITY_CONTROL` (extend its mechanics to name
-flow), `effect_registry`.
+**Touchpoints:** `GameState.tile_flows`, `ZoneSnapshot.tile_flows`, `effects.py`
+(`create_flow` handler), `engine._tick_environment` (drift pass), `state_view.py` (flow tile
+surface), `capabilities._ENVIRONMENT_FLOW`, `effect_registry`.
 
-**Tests:** an entity on a north-conveyor moves one tile north per turn until it hits a wall;
-a gravity well pulls entities one ring inward per turn; drift order is deterministic under a
-fixed seed; flow expires; replay reproduces positions exactly.
+**Tests:** `tests/test_flow_fields.py` covers fixed-vector drift, blocked movement, expiry,
+radial inward pull, deterministic movement order, contract registration, and routing.
 
 **Risk:** interaction with player agency — a conveyor that moves the player must not eat the
 player's turn silently. Surface it in the log and let it resolve on `finish_player_turn`.
+Forced flow movement is an environmental consequence of the turn, not a separate player
+action.
 
 ---
 
@@ -341,19 +384,19 @@ player's turn silently. Surface it in the log and let it resolve on `finish_play
 
 Independent small spells that each reuse one existing system; land opportunistically.
 
-- **Age an enemy (#15):** `transform_entity`/`_DISFIGURE`-adjacent — reduce `max_hp` (clamp
-  current HP) and apply `slowed`. No new system; possibly just a prompt example + a
-  `max_health`-debuff path mirroring the existing `max_health` *cost*.
-- **Sight-shroud (#72, #185, #198):** an `add_status sight_radius:N` read by `update_fov`
-  when computing the player's view radius. Front-end-agnostic (changes FOV, not rendering),
-  so it works identically in Pygame, CLI, and headless. Also covers the "blackout/blindness"
+- **Age an enemy (#15):** implemented through existing `transform_entity` support for
+  `max_hp` (clamping current HP) plus ordinary `add_status slowed`/`weakened` when needed.
+- **Sight-shroud (#72, #185, #198):** implemented as `add_status` with
+  `status:"sight_shrouded"` and optional `sight_radius`/`radius`, read by `update_fov` when
+  computing the player's view radius. Front-end-agnostic (changes FOV, not rendering), so it
+  works identically in Pygame, CLI, and headless. Also covers the "blackout/blindness"
   diegetic versions from Cat 4/10.
-- **Deceptive log line (#66):** a `message` variant flagged `spoof:true` that the engine
-  writes verbatim into the shared log without a backing mutation — clearly bounded, and the
-  resolver already controls `message`.
-- **Seal stairs (#142) / cave-in (#145):** a `seal_stairs` flag checked in
-  `descend_stairs`/`ascend_stairs`, and a `create_tiles wall` cave-in that runs the existing
-  `_floor_reachable` guard so it can never trap the player.
+- **Deceptive log line (#66):** documented as a `message` variant flagged `spoof:true` that
+  the engine writes verbatim into the shared log without a backing mutation — clearly bounded,
+  and the resolver already controls `message`.
+- **Seal stairs (#142) / cave-in (#145):** implemented as a `seal_stairs` flag checked in
+  `descend_stairs`/`ascend_stairs`, plus a spell-tile guard for blocking `create_tiles` that
+  keeps the player from being boxed in or disconnected from all stairs.
 
 These are mostly prompt/normalizer work plus a few-line handler each.
 
@@ -407,14 +450,16 @@ rather than refuse.
 
 ## 7. Recommended sequencing
 
-1. **Milestone A — Time & Conditionals (§5.A + §5.B).** Shared schedule/trigger plumbing;
-   biggest spell-count payoff per unit work; includes the D1 anchor-revert (#17).
-2. **Milestone B — Social & Behavior (§5.C).** One subsystem in `ai.py`; unlocks the faction
+1. **Milestone A1 — generalized scheduled payloads (§5.A).** Build delayed `effects[]`/
+   `costs[]`, delayed damage capture/release, accelerated status ticks, and general stasis.
+2. **Milestone A2 — Conditionals v2 (§5.B).** Add trigger predicates and event hooks once the
+   delayed executor is in place; includes the D1 anchor-revert (#17).
+3. **Milestone B — Social & Behavior (§5.C).** One subsystem in `ai.py`; unlocks the faction
    category's "designed" spells.
-3. **Milestone C — Environment (§5.D).** Flow fields; folds in the diegetic scent/noise spells
+4. **Milestone C — Environment (§5.D).** Flow fields; folds in the diegetic scent/noise spells
    from Cats 7/10.
-4. **Continuous — §5.E** wins land alongside A–C as small PRs.
-5. **Optional spike — §5.F** room rewind, only if time-magic becomes a pillar.
+5. **Continuous — §5.E** wins land alongside A–C as small PRs.
+6. **Optional spike — §5.F** room rewind, only if time-magic becomes a pillar.
 
 Each milestone follows the state-surface plan's discipline: new effects get an `EffectSpec`,
 a capability-card home, a schema enum entry, normalizer aliases, drift tests, and a mock-CLI

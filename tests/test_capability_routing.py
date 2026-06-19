@@ -111,6 +111,16 @@ def test_reveal_selects_divination() -> None:
     assert "divination" in _names(selected)
 
 
+def test_blindness_selects_divination() -> None:
+    selected = cap.select_cards("blind me with a total blackout")
+    assert "divination" in _names(selected)
+
+
+def test_seal_stairs_selects_barrier_shaping() -> None:
+    selected = cap.select_cards("seal the stairs behind me")
+    assert "barrier_shaping" in _names(selected)
+
+
 def test_prophecy_selects_prophecy() -> None:
     selected = cap.select_cards("I prophesy a blade waits for me somewhere north")
     assert "prophecy" in _names(selected)
@@ -119,6 +129,16 @@ def test_prophecy_selects_prophecy() -> None:
 def test_trigger_phrasing_selects_triggers_reactions() -> None:
     selected = cap.select_cards("the next time an enemy hits me, answer with thorns")
     assert "triggers_reactions" in _names(selected)
+
+
+def test_last_breath_phrasing_selects_triggers_reactions() -> None:
+    selected = cap.select_cards("when I would die, heal me instead")
+    assert "triggers_reactions" in _names(selected)
+
+
+def test_delayed_wound_phrasing_selects_delayed_effects() -> None:
+    selected = cap.select_cards("delay my wounds for three turns")
+    assert "delayed_effects" in _names(selected)
 
 
 def test_possession_phrasing_selects_possession() -> None:

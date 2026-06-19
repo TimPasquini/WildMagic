@@ -88,6 +88,9 @@ def tile_card(x: int, y: int, engine: "GameEngine") -> dict[str, Any]:
         "tags": sorted(engine.tile_tags_at(x, y)),
         "duration": engine.state.tile_durations.get(key),
     }
+    flow = engine.state.tile_flows.get(key)
+    if isinstance(flow, dict):
+        detail["flow"] = dict(flow)
     room = engine.room_profile_at(x, y)
     if room is not None:
         detail["room"] = {
@@ -113,7 +116,12 @@ def nearby_tile_details(engine: "GameEngine", radius: int = 5) -> list[dict[str,
             tile = engine.tile_at(x, y)
             key = engine.tile_key(x, y)
             duration = engine.state.tile_durations.get(key)
-            if tile != FLOOR or duration is not None or key in engine.state.tile_tags:
+            if (
+                tile != FLOOR
+                or duration is not None
+                or key in engine.state.tile_tags
+                or key in engine.state.tile_flows
+            ):
                 details.append(tile_card(x, y, engine))
     return details[:60]
 
@@ -380,6 +388,9 @@ def state_summary(engine: "GameEngine") -> dict[str, Any]:
         "experience": state.experience,
         "flags": dict(sorted(state.flags.items())),
         "tile_counts": tile_counts(state.tiles),
+        "tile_flows": {
+            key: dict(value) for key, value in sorted(state.tile_flows.items())
+        },
         "current_room": room_card(current_room, engine, include_secrets=True)
         if current_room
         else None,

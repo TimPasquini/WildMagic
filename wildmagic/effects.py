@@ -7,12 +7,17 @@ from typing import Any
 
 from . import refs
 from . import operations
+from .behaviors import SUPPORTED_BEHAVIORS, normalize_behavior, upsert_behavior_modifier
 from .curses import build_curse, merge_curse, validate_resolution_against_curses
 from .geometry import bresenham_line, sign, unique_points
 from .models import (
     BLOCKING_TILES,
+    DOOR,
     FLOOR,
+    ICE_WALL,
     MECHANICAL_STATUSES,
+    STAIRS_DOWN,
+    STAIRS_UP,
     TILE_NAMES,
     WALL,
     Entity,
@@ -31,6 +36,7 @@ from .normalize import (
     parse_tile_key,
     sanitize_char,
     sanitize_name,
+    status_duration,
     tile_from_name,
 )
 from .promises import Objective, WorldPromise, parse_spatial_hint
@@ -70,6 +76,48 @@ _REF_FIELDS = {
 
 class _EffectsMixin:
     """Effect/cost application and placement helpers extracted from GameEngine."""
+
+    def _spell_tile_preserves_player_escape(
+        self,
+        x: int,
+        y: int,
+        tile: str,
+        pending_blocked: set[tuple[int, int]] | None = None,
+    ) -> bool:
+        if tile not in BLOCKING_TILES or tile == DOOR:
+            return True
+        player = self.state.player
+        blocked = set(pending_blocked or set())
+        blocked.add((x, y))
+        player_xy = (player.x, player.y)
+        if player_xy in blocked:
+            return False
+
+        has_exit = False
+        for nx, ny in (
+            (player.x + 1, player.y),
+            (player.x - 1, player.y),
+            (player.x, player.y + 1),
+            (player.x, player.y - 1),
+        ):
+            if not self.in_bounds(nx, ny) or (nx, ny) in blocked:
+                continue
+            if self.state.tiles[ny][nx] in BLOCKING_TILES:
+                continue
+            has_exit = True
+            break
+        if not has_exit:
+            return False
+
+        stairs = [
+            (sx, sy)
+            for sy, row in enumerate(self.state.tiles)
+            for sx, existing in enumerate(row)
+            if existing in {STAIRS_DOWN, STAIRS_UP} and (sx, sy) != player_xy
+        ]
+        if not stairs:
+            return True
+        return any(self._floor_reachable(player_xy, goal, blocked) for goal in stairs)
 
     def apply_wild_magic_resolution(
         self, resolution: dict[str, Any]
@@ -124,6 +172,14 @@ class _EffectsMixin:
             if outcome_text:
                 self.state.add_message(outcome_text)
                 messages.append(outcome_text)
+
+            spell_text = normalize_id(str(resolution.get("spell") or "")).strip("_")
+            if spell_text:
+                if spell_text == self.state.last_spell_text:
+                    self.state.same_spell_streak += 1
+                else:
+                    self.state.last_spell_text = spell_text
+                    self.state.same_spell_streak = 1
 
             for message in self._fire_triggers(
                 "on_next_spell",
@@ -234,6 +290,10 @@ class _EffectsMixin:
             else:
                 self.state.curses[curse.id] = curse
             self.state.stats.curses_gained += 1
+            self._fire_triggers(
+                "on_curse_gained",
+                {"target": player, "source": player, "curse": curse},
+            )
             return f"Curse gained: {curse.name}."
         if cost_type == "status":
             raw_status = str(cost.get("status") or cost.get("id") or "strained")
@@ -294,12 +354,13 @@ class _EffectsMixin:
                 else 5
             )
             damage_type = str(effect.get("damage_type") or "arcane")
-            actual = self.calculate_actual_damage(target, amount, damage_type)
-            is_player_dmg = target.id == self.state.player_id and actual > 0
-            self.state.add_message(
-                f"{target.name} {self._verb(target, 'take', 'takes')} {actual} {damage_type} damage.",
-                is_danger=is_player_dmg,
-            )
+            if not self._damage_would_be_delayed(target):
+                actual = self.calculate_actual_damage(target, amount, damage_type)
+                is_player_dmg = target.id == self.state.player_id and actual > 0
+                self.state.add_message(
+                    f"{target.name} {self._verb(target, 'take', 'takes')} {actual} {damage_type} damage.",
+                    is_danger=is_player_dmg,
+                )
             self.damage_entity(target, amount, damage_type, source=self.state.player)
             return []
         if effect_type == "area_damage":
@@ -327,12 +388,19 @@ class _EffectsMixin:
                     continue
                 if not area_damage_affects(entity, affects, self.state.player_id):
                     continue
-                actual = self.calculate_actual_damage(entity, amount, damage_type)
-                hit.append(
-                    f"{entity.name} {self._verb(entity, 'take', 'takes')} {actual} {damage_type}"
-                )
+                if self._damage_would_be_delayed(entity):
+                    hit.append(f"{entity.name}'s {damage_type} damage is delayed")
+                else:
+                    actual = self.calculate_actual_damage(entity, amount, damage_type)
+                    hit.append(
+                        f"{entity.name} {self._verb(entity, 'take', 'takes')} {actual} {damage_type}"
+                    )
                 actuals.append(entity)
-                if entity.id == self.state.player_id and actual > 0:
+                if (
+                    entity.id == self.state.player_id
+                    and not self._damage_would_be_delayed(entity)
+                    and self.calculate_actual_damage(entity, amount, damage_type) > 0
+                ):
                     is_player_dmg = True
             if not hit:
                 return ["The blast spends itself on empty stone."]
@@ -476,6 +544,7 @@ class _EffectsMixin:
                 if str(tag).strip()
             )
             changed = 0
+            pending_blocked: set[tuple[int, int]] = set()
             tile_specs = effect.get("tiles")
             if isinstance(tile_specs, list):
                 first_spec_tile: str | None = None
@@ -493,8 +562,14 @@ class _EffectsMixin:
                         for tag in coerce_list(spec.get("tags", list(tags)))
                         if str(tag).strip()
                     )
+                    if not self._spell_tile_preserves_player_escape(
+                        tx, ty, spec_tile, pending_blocked
+                    ):
+                        continue
                     if self.set_tile(tx, ty, spec_tile, spec_duration, spec_tags):
                         changed += 1
+                        if spec_tile in {WALL, ICE_WALL}:
+                            pending_blocked.add((tx, ty))
                 if first_spec_tile is not None:
                     tile = first_spec_tile
             else:
@@ -523,17 +598,31 @@ class _EffectsMixin:
                     "spray",
                 }:
                     for tx, ty in self.shape_points(effect, x, y)[:200]:
+                        if not self._spell_tile_preserves_player_escape(
+                            tx, ty, tile, pending_blocked
+                        ):
+                            continue
                         if self.set_tile(tx, ty, tile, duration, tags):
                             changed += 1
+                            if tile in {WALL, ICE_WALL}:
+                                pending_blocked.add((tx, ty))
                 else:
                     for tx, ty in self.points_in_radius(x, y, radius)[:200]:
                         if hollow and math.hypot(tx - x, ty - y) <= inner_radius:
                             continue
+                        if not self._spell_tile_preserves_player_escape(
+                            tx, ty, tile, pending_blocked
+                        ):
+                            continue
                         if self.set_tile(tx, ty, tile, duration, tags):
                             changed += 1
+                            if tile in {WALL, ICE_WALL}:
+                                pending_blocked.add((tx, ty))
             return [
                 f"Terrain changes to {TILE_NAMES.get(tile, 'strange')} on {changed} tile(s)."
             ]
+        if effect_type == "create_flow":
+            return self._apply_create_flow(effect)
         if effect_type == "add_status":
             target_str = normalize_id(str(effect.get("target") or "nearest_enemy"))
             status = normalize_id(str(effect.get("status") or "strange"))
@@ -556,10 +645,21 @@ class _EffectsMixin:
             if group_targets:
                 for ent in group_targets:
                     operations.apply_status(self, ent, status, dur_val)
+                    if status == "sight_shrouded":
+                        ent.details["sight_radius"] = clamp_int(
+                            effect.get(
+                                "sight_radius",
+                                effect.get("radius", effect.get("fov_radius", 2)),
+                            ),
+                            0,
+                            99,
+                        )
                     if display_name != status.replace("_", " "):
                         ent.status_display[status] = display_name
                     if expiry_text:
                         ent.status_expiry_text[status] = expiry_text
+                if any(ent.id == self.state.player_id for ent in group_targets):
+                    self.update_fov()
                 return [
                     f"{display_name.title()} spreads to {len(group_targets)} target(s)."
                 ]
@@ -567,10 +667,21 @@ class _EffectsMixin:
             if not target or target.kind == "item":
                 return []
             operations.apply_status(self, target, status, dur_val)
+            if status == "sight_shrouded":
+                target.details["sight_radius"] = clamp_int(
+                    effect.get(
+                        "sight_radius",
+                        effect.get("radius", effect.get("fov_radius", 2)),
+                    ),
+                    0,
+                    99,
+                )
             if display_name != status.replace("_", " "):
                 target.status_display[status] = display_name
             if expiry_text:
                 target.status_expiry_text[status] = expiry_text
+            if target.id == self.state.player_id and status == "sight_shrouded":
+                self.update_fov()
             return [
                 f"{target.name} {self._verb(target, 'are', 'is')} now {display_name}."
             ]
@@ -580,11 +691,23 @@ class _EffectsMixin:
                 return []
             status = normalize_id(str(effect.get("status") or ""))
             if status:
+                status = STATUS_FLAVOR_ALIASES.get(status, status)
                 target.statuses.pop(status, None)
+                target.status_display.pop(status, None)
+                target.status_expiry_text.pop(status, None)
+                if status == "sight_shrouded":
+                    target.details.pop("sight_radius", None)
+                    if target.id == self.state.player_id:
+                        self.update_fov()
                 return [
                     f"{target.name} {self._verb(target, 'are', 'is')} no longer {status.replace('_', ' ')}."
                 ]
             target.statuses.clear()
+            target.status_display.clear()
+            target.status_expiry_text.clear()
+            target.details.pop("sight_radius", None)
+            if target.id == self.state.player_id:
+                self.update_fov()
             if target.id == self.state.player_id:
                 return ["All statuses leave you."]
             return [f"All statuses leave {target.name}."]
@@ -871,16 +994,15 @@ class _EffectsMixin:
                 return self._incur_wild_debt()
             return [f"World flag set: {flag}."]
         if effect_type == "schedule_event":
-            event = dict(
-                effect.get("event") if isinstance(effect.get("event"), dict) else effect
-            )
-            event.pop("type", None)
-            event["turns"] = clamp_int(effect.get("turns", event.get("turns")), 1, 999)
-            event["event_type"] = str(
-                effect.get("event_type") or event.get("event_type") or "message"
-            )
+            event = self._normalize_scheduled_event(effect)
             self.state.event_timers.append(event)
             return [f"Something has been scheduled in {event['turns']} turn(s)."]
+        if effect_type == "delay_incoming":
+            return self._apply_delay_incoming(effect)
+        if effect_type == "accelerate_status":
+            return self._apply_accelerate_status(effect)
+        if effect_type == "set_behavior":
+            return self._apply_set_behavior(effect)
         if effect_type in {"create_trigger", "trigger", "ward"}:
             trigger_name = normalize_trigger_name(
                 str(effect.get("trigger") or effect.get("on") or "on_next_spell")
@@ -895,6 +1017,8 @@ class _EffectsMixin:
                 "on_enemy_hit": "Predator's mark",
                 "on_enemy_damaged": "Predator's mark",
                 "on_enemy_death": "Death-pact",
+                "on_lethal_damage": "Last-breath pact",
+                "on_curse_gained": "Curse covenant",
                 "on_next_spell": "Spell chain",
                 "on_player_move": "Footstep echo",
             }
@@ -918,6 +1042,8 @@ class _EffectsMixin:
                 "duration": effect.get("duration", effect.get("turns", 6)),
                 "effects": [dict(raw) for raw in effects[:8] if isinstance(raw, dict)],
             }
+            if isinstance(effect.get("when"), dict):
+                trigger["when"] = dict(effect["when"])
             if trigger["duration"] != "permanent":
                 trigger["expires_turn"] = self.state.turn + clamp_int(
                     trigger["duration"], 1, 999
@@ -948,6 +1074,386 @@ class _EffectsMixin:
             text = str(effect.get("text") or "").strip()
             return [text] if text else []
         return []
+
+    def _normalize_scheduled_event(self, effect: dict[str, Any]) -> dict[str, Any]:
+        event = dict(
+            effect.get("event") if isinstance(effect.get("event"), dict) else effect
+        )
+        event.pop("type", None)
+        event["turns"] = clamp_int(effect.get("turns", event.get("turns")), 1, 999)
+        event["event_type"] = str(
+            effect.get("event_type") or event.get("event_type") or "message"
+        )
+
+        effects = coerce_list(event.get("effects") or event.get("effect"))
+        if effects:
+            event["effects"] = [
+                dict(raw) for raw in effects[:8] if isinstance(raw, dict)
+            ]
+            event.pop("effect", None)
+        costs = coerce_list(event.get("costs") or event.get("cost"))
+        if costs:
+            event["costs"] = [dict(raw) for raw in costs[:6] if isinstance(raw, dict)]
+            event.pop("cost", None)
+        return event
+
+    def _run_scheduled_payload(self, event: dict[str, Any]) -> bool:
+        """Run a generalized delayed payload if this timer carries one.
+
+        Legacy event_type timers still flow through engine._trigger_event's old branches when
+        no payload arrays are present. New timers can carry normal effects/costs and reuse the
+        same application paths as a spell cast.
+        """
+        effects = [
+            raw for raw in coerce_list(event.get("effects")) if isinstance(raw, dict)
+        ]
+        costs = [
+            raw for raw in coerce_list(event.get("costs")) if isinstance(raw, dict)
+        ]
+        if not effects and not costs:
+            return False
+        text = str(event.get("text") or event.get("message") or "").strip()
+        if text:
+            self.state.add_message(text)
+        for raw_effect in effects[:8]:
+            for message in self._apply_effect(raw_effect):
+                self.state.add_message(message)
+        for raw_cost in costs[:6]:
+            message = self._apply_cost(raw_cost)
+            if message:
+                self.state.add_message(message)
+        return True
+
+    def _damage_would_be_delayed(self, entity: Entity | None) -> bool:
+        if entity is None or entity.kind == "item" or entity.hp <= 0:
+            return False
+        if entity.details.get("_releasing_delayed_damage"):
+            return False
+        return "delayed_sink" in entity.statuses and isinstance(
+            entity.details.get("delayed_damage"), dict
+        )
+
+    def _capture_delayed_damage(
+        self,
+        entity: Entity,
+        amount: int,
+        damage_type: str,
+        source: Entity | None = None,
+    ) -> bool:
+        if not self._damage_would_be_delayed(entity):
+            return False
+        sink = entity.details.get("delayed_damage")
+        if not isinstance(sink, dict):
+            return False
+        packets = sink.setdefault("packets", [])
+        if not isinstance(packets, list):
+            packets = []
+            sink["packets"] = packets
+        packets.append(
+            {
+                "amount": clamp_int(amount, 1, 999),
+                "damage_type": normalize_id(str(damage_type or "arcane")),
+                "source_id": source.id if isinstance(source, Entity) else None,
+            }
+        )
+        name = str(sink.get("name") or "delayed wound")
+        self.state.add_message(
+            f"{entity.name}'s {name} holds {clamp_int(amount, 1, 999)} {damage_type} damage for later.",
+            is_danger=entity.id == self.state.player_id,
+        )
+        return True
+
+    def _apply_delay_incoming(self, effect: dict[str, Any]) -> list[str]:
+        target_str = normalize_id(str(effect.get("target") or "player"))
+        targets = self.resolve_target_group(target_str)
+        if not targets:
+            target = self.resolve_target(target_str)
+            targets = [target] if target else []
+        targets = [
+            target
+            for target in targets[:8]
+            if target is not None and target.kind != "item" and target.hp > 0
+        ]
+        if not targets:
+            return ["The delayed wound finds no living body to hold it."]
+        turns = clamp_int(effect.get("turns", effect.get("duration", 3)), 1, 99)
+        label = (
+            str(effect.get("name") or "delayed wound").strip()[:40] or "delayed wound"
+        )
+        for target in targets:
+            sink_id = self.next_entity_id("delay")
+            target.statuses["delayed_sink"] = "permanent"
+            target.status_display["delayed_sink"] = label
+            target.status_expiry_text["delayed_sink"] = "The borrowed wound comes due."
+            target.details["delayed_damage"] = {
+                "id": sink_id,
+                "name": label,
+                "packets": [],
+            }
+            self.state.event_timers.append(
+                {
+                    "turns": turns,
+                    "event_type": "release_delayed_damage",
+                    "target": target.id,
+                    "sink_id": sink_id,
+                }
+            )
+        if len(targets) == 1:
+            target = targets[0]
+            if target.id == self.state.player_id:
+                return [f"Your incoming damage will arrive in {turns} turn(s)."]
+            return [f"{target.name}'s incoming damage will arrive in {turns} turn(s)."]
+        return [f"Incoming damage is delayed for {len(targets)} target(s)."]
+
+    def _release_delayed_damage(self, event: dict[str, Any]) -> None:
+        target_id = str(event.get("target") or "")
+        target = self.state.entities.get(target_id)
+        if target is None or target.kind == "item" or target.hp <= 0:
+            return
+        sink = target.details.get("delayed_damage")
+        if not isinstance(sink, dict):
+            return
+        if event.get("sink_id") and sink.get("id") != event.get("sink_id"):
+            return
+        packets = [
+            packet
+            for packet in coerce_list(sink.get("packets"))
+            if isinstance(packet, dict)
+        ]
+        target.details.pop("delayed_damage", None)
+        target.statuses.pop("delayed_sink", None)
+        target.status_display.pop("delayed_sink", None)
+        target.status_expiry_text.pop("delayed_sink", None)
+        if not packets:
+            self.state.add_message(f"{target.name}'s delayed wound fades empty.")
+            return
+        target.details["_releasing_delayed_damage"] = True
+        try:
+            self.state.add_message(
+                f"{target.name}'s delayed wound comes due.",
+                is_danger=target.id == self.state.player_id,
+            )
+            for packet in packets[:20]:
+                if target.hp <= 0:
+                    break
+                amount = clamp_int(packet.get("amount"), 1, 999)
+                damage_type = normalize_id(str(packet.get("damage_type") or "arcane"))
+                source = self.state.entities.get(str(packet.get("source_id") or ""))
+                source_entity = source if isinstance(source, Entity) else None
+                actual = self.calculate_actual_damage(target, amount, damage_type)
+                self.state.add_message(
+                    f"{target.name} {self._verb(target, 'take', 'takes')} {actual} delayed {damage_type} damage.",
+                    is_danger=target.id == self.state.player_id and actual > 0,
+                )
+                self.damage_entity(target, amount, damage_type, source=source_entity)
+        finally:
+            target.details.pop("_releasing_delayed_damage", None)
+
+    _ACCELERATED_STATUS_DAMAGE = {
+        "poisoned": ("poison", 1),
+        "burning": ("fire", 1),
+        "bleeding": ("blood", 1),
+    }
+
+    def _apply_accelerate_status(self, effect: dict[str, Any]) -> list[str]:
+        target = self.resolve_target(effect.get("target") or "nearest_enemy")
+        if not target or target.kind == "item" or target.hp <= 0:
+            return ["The accelerated affliction finds no living target."]
+        status = normalize_id(str(effect.get("status") or "poisoned"))
+        status = STATUS_FLAVOR_ALIASES.get(status, status)
+        damage_spec = self._ACCELERATED_STATUS_DAMAGE.get(status)
+        if damage_spec is None:
+            return [f"{status.replace('_', ' ')} has no damaging ticks to accelerate."]
+        if status not in target.statuses:
+            return [f"{target.name} is not {status.replace('_', ' ')}."]
+        turns = max(0, status_duration(target.statuses.get(status)))
+        target.statuses.pop(status, None)
+        target.status_display.pop(status, None)
+        target.status_expiry_text.pop(status, None)
+        if turns <= 0:
+            return [
+                f"{target.name}'s {status.replace('_', ' ')} has already spent itself."
+            ]
+        damage_type, amount = damage_spec
+        self.state.add_message(
+            f"{target.name}'s {status.replace('_', ' ')} burns through {turns} tick(s) at once.",
+            is_danger=target.id == self.state.player_id,
+        )
+        for _ in range(turns):
+            if target.hp <= 0:
+                break
+            self.damage_entity(target, amount, damage_type, source=self.state.player)
+        target.statuses.pop(status, None)
+        target.status_display.pop(status, None)
+        target.status_expiry_text.pop(status, None)
+        return []
+
+    def _apply_set_behavior(self, effect: dict[str, Any]) -> list[str]:
+        behavior = normalize_behavior(
+            effect.get("behavior")
+            or effect.get("mode")
+            or effect.get("ai")
+            or effect.get("status")
+        )
+        if behavior not in SUPPORTED_BEHAVIORS:
+            return ["The behavior has no shape the creature can act on."]
+        target_text = effect.get("target") or "nearest_enemy"
+        targets = self.resolve_target_group(target_text)
+        if not targets:
+            target = self.resolve_target(target_text)
+            targets = [target] if target is not None else []
+        targets = [
+            target
+            for target in targets[:12]
+            if target.kind in {"actor", "npc"} and target.hp > 0
+        ]
+        if not targets:
+            return ["No mind is near enough to bend that way."]
+        focus_id = self._behavior_focus_id(effect)
+        duration = effect.get("duration", effect.get("turns", 3))
+        label = str(effect.get("name") or effect.get("label") or "").strip()
+        for target in targets:
+            upsert_behavior_modifier(
+                target,
+                behavior,
+                duration=duration,
+                target_id=focus_id,
+                label=label,
+            )
+        behavior_text = behavior.replace("_", " ")
+        if len(targets) == 1:
+            return [f"{targets[0].name}'s behavior bends toward {behavior_text}."]
+        return [f"{len(targets)} minds bend toward {behavior_text}."]
+
+    def _behavior_focus_id(self, effect: dict[str, Any]) -> str | None:
+        for key in (
+            "behavior_target",
+            "focus",
+            "lock_to",
+            "duel_target",
+            "mimic_target",
+            "copy",
+            "source",
+            "anchor",
+        ):
+            if key not in effect:
+                continue
+            target = self.resolve_target(effect.get(key))
+            if target is not None and target.kind in {"player", "actor", "npc"}:
+                return target.id
+        behavior = normalize_behavior(effect.get("behavior") or effect.get("mode"))
+        if behavior in {"duel", "mimic"}:
+            return self.state.player_id
+        return None
+
+    _FLOW_DIRECTIONS = {
+        "north": (0, -1),
+        "n": (0, -1),
+        "up": (0, -1),
+        "south": (0, 1),
+        "s": (0, 1),
+        "down": (0, 1),
+        "east": (1, 0),
+        "e": (1, 0),
+        "right": (1, 0),
+        "west": (-1, 0),
+        "w": (-1, 0),
+        "left": (-1, 0),
+        "northeast": (1, -1),
+        "north_east": (1, -1),
+        "ne": (1, -1),
+        "northwest": (-1, -1),
+        "north_west": (-1, -1),
+        "nw": (-1, -1),
+        "southeast": (1, 1),
+        "south_east": (1, 1),
+        "se": (1, 1),
+        "southwest": (-1, 1),
+        "south_west": (-1, 1),
+        "sw": (-1, 1),
+    }
+
+    def _apply_create_flow(self, effect: dict[str, Any]) -> list[str]:
+        center_x, center_y = self.effect_position(effect)
+        duration = effect.get("duration", effect.get("turns", 4))
+        duration_value: int | str = (
+            "permanent" if duration == "permanent" else clamp_int(duration, 1, 999)
+        )
+        points = self._flow_points(effect, center_x, center_y)
+        changed = 0
+        for tx, ty in points[:200]:
+            dx, dy = self._flow_vector_for_tile(effect, tx, ty, center_x, center_y)
+            if dx == 0 and dy == 0:
+                continue
+            self.state.tile_flows[self.tile_key(tx, ty)] = {
+                "dx": dx,
+                "dy": dy,
+                "duration": duration_value,
+            }
+            changed += 1
+        if changed == 0:
+            return ["The current cannot find a direction to flow."]
+        return [f"A magical current takes hold on {changed} tile(s)."]
+
+    def _flow_points(
+        self, effect: dict[str, Any], center_x: int, center_y: int
+    ) -> list[tuple[int, int]]:
+        tile_specs = effect.get("tiles")
+        if isinstance(tile_specs, list):
+            points = []
+            for spec in tile_specs[:200]:
+                if not isinstance(spec, dict):
+                    continue
+                points.append(
+                    (
+                        clamp_int(spec.get("x"), 0, self.state.width - 1),
+                        clamp_int(spec.get("y"), 0, self.state.height - 1),
+                    )
+                )
+            return unique_points(points)
+        shape = normalize_id(str(effect.get("shape") or effect.get("pattern") or ""))
+        if shape in {
+            "line",
+            "beam",
+            "path",
+            "corridor",
+            "ray",
+            "bridge",
+            "wall",
+            "barrier",
+            "cone",
+            "fan",
+            "scatter",
+            "spray",
+        }:
+            return self.shape_points(effect, center_x, center_y)
+        radius = clamp_int(effect.get("radius"), 0, 12)
+        return self.points_in_radius(center_x, center_y, radius)
+
+    def _flow_vector_for_tile(
+        self, effect: dict[str, Any], tx: int, ty: int, center_x: int, center_y: int
+    ) -> tuple[int, int]:
+        if "dx" in effect or "dy" in effect:
+            raw_dx = effect.get("dx", 0)
+            raw_dy = effect.get("dy", 0)
+            return (
+                sign(clamp_int(raw_dx, -1, 1) if raw_dx is not None else 0),
+                sign(clamp_int(raw_dy, -1, 1) if raw_dy is not None else 0),
+            )
+        direction = normalize_id(
+            str(effect.get("direction") or effect.get("dir") or "")
+        )
+        if direction in self._FLOW_DIRECTIONS:
+            return self._FLOW_DIRECTIONS[direction]
+        mode = normalize_id(str(effect.get("mode") or effect.get("kind") or ""))
+        if mode in {"inward", "pull", "gravity", "gravity_well", "toward_center"}:
+            return sign(center_x - tx), sign(center_y - ty)
+        if mode in {"outward", "push", "repel", "away", "away_from_center"}:
+            return sign(tx - center_x), sign(ty - center_y)
+        origin = self.resolve_target(effect.get("origin") or effect.get("source"))
+        if origin is not None:
+            return sign(center_x - origin.x), sign(center_y - origin.y)
+        return 0, 0
 
     def _resolution_ref_error(self, resolution: dict[str, Any]) -> str | None:
         for effect in coerce_list(resolution.get("effects")):
@@ -1435,6 +1941,8 @@ class _EffectsMixin:
         """Resolve every standing aura once per turn -- entity-borne (creatures,
         items, props) and ground-anchored alike. Auras with a finite life count
         down and are pruned when spent."""
+        if self._stasis_active():
+            return
         for owner in list(self.state.entities.values()):
             auras = getattr(owner, "auras", None)
             if not auras or not owner.alive:
@@ -1853,6 +2361,7 @@ class _EffectsMixin:
         if dx == 0 and dy == 0:
             return 0
         moved = 0
+        from_x, from_y = entity.x, entity.y
         for _ in range(distance):
             tx = entity.x + dx
             ty = entity.y + dy
@@ -1864,6 +2373,8 @@ class _EffectsMixin:
             self._apply_tile_entry(entity)
             if entity.hp <= 0:
                 break
+        if moved:
+            entity.details["last_move_delta"] = [entity.x - from_x, entity.y - from_y]
         return moved
 
     def _conjure_item(self, effect: dict[str, Any]) -> list[str]:

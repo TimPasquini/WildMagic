@@ -187,12 +187,24 @@ class _CombatMixin:
     ) -> int:
         if entity.kind == "item" or entity.hp <= 0:
             return 0
+        capture_delayed = getattr(self, "_capture_delayed_damage", None)
+        if capture_delayed is not None and capture_delayed(
+            entity, amount, damage_type, source
+        ):
+            return 0
         is_player = entity.id == self.state.player_id
         was_taking_damage = self.state._player_taking_damage
         if is_player:
             self.state._player_taking_damage = True
         try:
             actual = self.calculate_actual_damage(entity, amount, damage_type)
+            if actual > 0 and entity.hp - actual <= 0:
+                self._fire_lethal_damage_triggers(entity, source, actual, damage_type)
+                if entity.hp <= 0:
+                    return 0
+                actual = self.calculate_actual_damage(entity, amount, damage_type)
+                if actual <= 0:
+                    return 0
             hp_before = entity.hp
             entity.hp -= actual
             if entity.id == self.state.player_id:

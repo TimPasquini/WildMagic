@@ -5,6 +5,7 @@ import math
 import re
 
 from .game_data import NPC_PERCEPTION_RADIUS
+from .behaviors import active_behavior
 from .models import BLOCKING_TILES, DOOR, Entity
 from .normalize import status_duration
 
@@ -52,6 +53,30 @@ class _AIMixin:
 
         Falls back to `default` (the player) when nothing qualifies at all.
         """
+        duel = active_behavior(actor, "duel")
+        if duel is not None:
+            duel_target = self.state.entities.get(str(duel.get("target_id") or ""))
+            if (
+                duel_target is not None
+                and duel_target.id != actor.id
+                and duel_target.hp > 0
+                and duel_target.kind in {"player", "actor", "npc"}
+            ):
+                return duel_target
+        if active_behavior(actor, "lowest_hp") is not None:
+            candidates = [
+                other
+                for other in self.state.entities.values()
+                if other.id != actor.id
+                and other.kind in {"player", "actor", "npc"}
+                and other.hp > 0
+                and self.can_sense(actor, other)
+            ]
+            if candidates:
+                return min(
+                    candidates,
+                    key=lambda other: (other.hp, self.distance(actor, other)),
+                )
         hostiles = [
             other
             for other in self.state.entities.values()
@@ -139,25 +164,39 @@ class _AIMixin:
     def _enemy_single_action(self, enemy: Entity, player: Entity) -> None:
         if "pacifist" in enemy.tags or "noncombatant" in enemy.tags:
             return
+        if active_behavior(enemy, "freeze_dread") is not None:
+            self.state.add_message(f"{enemy.name} is held by dread.")
+            return
+        if active_behavior(enemy, "mimic") is not None:
+            self._try_mimic_move(enemy)
+            return
         # Who this enemy actually moves against -- the player by default, but
         # FACTION_HOSTILITIES can put nearer, more pressing targets in range
         # (Imperial soldiers vs. Hollowmere townsfolk, etc).
         target = self._select_target(enemy, player)
+        dance = active_behavior(enemy, "dance") is not None
+        blood_source = self._visible_blood_source(enemy)
         # Scavengers are cowardly by nature: they keep their distance and only
         # turn to fight when flight is impossible (cornered).
+        if active_behavior(enemy, "coward") is not None and blood_source is not None:
+            step = self._flee_step(enemy, blood_source.x, blood_source.y)
+            if step is not None:
+                self._move_actor_to(enemy, step)
+            return
         if "scavenger" in enemy.tags and 1.5 < self.distance(enemy, target) <= 6:
             step = self._flee_step(enemy, target.x, target.y)
             if step is not None:
-                enemy.x, enemy.y = step
-                self._apply_tile_entry(enemy)
+                self._move_actor_to(enemy, step)
                 return
         if "frightened" in enemy.statuses and self.distance(enemy, target) <= 8:
             step = self._flee_step(enemy, target.x, target.y)
             if step is not None:
-                enemy.x, enemy.y = step
-                self._apply_tile_entry(enemy)
+                self._move_actor_to(enemy, step)
             return
         if self.distance(enemy, target) <= 1.5:
+            if dance:
+                self._dance_step(enemy)
+                return
             self.attack(enemy, target)
             return
         if any(status in enemy.statuses for status in ["rooted", "webbed"]):
@@ -165,9 +204,7 @@ class _AIMixin:
         if "confused" in enemy.statuses:
             dx, dy = self.rng.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
             if self.can_occupy(enemy.x + dx, enemy.y + dy):
-                enemy.x += dx
-                enemy.y += dy
-                self._apply_tile_entry(enemy)
+                self._move_actor_to(enemy, (enemy.x + dx, enemy.y + dy))
             return
         # Stationary hazards never give chase; they only ever strike what comes within reach.
         if "stationary" in enemy.tags:
@@ -190,14 +227,11 @@ class _AIMixin:
                 return
             step = self.next_path_step(enemy, target.x, target.y)
             if step is not None:
-                enemy.x, enemy.y = step
-                self._apply_tile_entry(enemy)
+                self._move_actor_to(enemy, step)
         elif "disciplined" not in enemy.tags:
             dx, dy = self.rng.choice([(1, 0), (-1, 0), (0, 1), (0, -1), (0, 0)])
             if (dx or dy) and self.can_occupy(enemy.x + dx, enemy.y + dy):
-                enemy.x += dx
-                enemy.y += dy
-                self._apply_tile_entry(enemy)
+                self._move_actor_to(enemy, (enemy.x + dx, enemy.y + dy))
 
     def _try_enemy_summon(self, summoner: Entity) -> bool:
         """A summoner calls a minion of its own kind instead of moving. Returns True if it acted."""
@@ -238,6 +272,11 @@ class _AIMixin:
         for ally in allies:
             if any(s in ally.statuses for s in ["stunned", "frozen"]):
                 continue
+            if active_behavior(ally, "freeze_dread") is not None:
+                continue
+            if active_behavior(ally, "mimic") is not None:
+                self._try_mimic_move(ally)
+                continue
             if "slowed" in ally.statuses and self.state.turn % 2 == 1:
                 continue
             if "pacifist" in ally.tags or "noncombatant" in ally.tags:
@@ -259,8 +298,7 @@ class _AIMixin:
                     elif not any(s in ally.statuses for s in ["rooted", "webbed"]):
                         step = self.next_path_step(ally, target.x, target.y)
                         if step is not None:
-                            ally.x, ally.y = step
-                            self._apply_tile_entry(ally)
+                            self._move_actor_to(ally, step)
                 continue
             if not enemies:
                 continue
@@ -282,18 +320,19 @@ class _AIMixin:
                     closest = min(enemies, key=lambda e: self.distance(ally, e))
                     step = self.next_path_step(ally, closest.x, closest.y)
                     if step is not None:
-                        ally.x, ally.y = step
-                        self._apply_tile_entry(ally)
+                        self._move_actor_to(ally, step)
                 continue
             # Default: chase and melee.
             target = min(enemies, key=lambda e: self.distance(ally, e))
             if self.distance(ally, target) <= 1.5:
-                self.attack(ally, target)
+                if active_behavior(ally, "dance") is not None:
+                    self._dance_step(ally)
+                else:
+                    self.attack(ally, target)
             elif not any(s in ally.statuses for s in ["rooted", "webbed"]):
                 step = self.next_path_step(ally, target.x, target.y)
                 if step is not None:
-                    ally.x, ally.y = step
-                    self._apply_tile_entry(ally)
+                    self._move_actor_to(ally, step)
 
     def _npc_turns(self) -> None:
         """Ordinary townsfolk have no combat AI -- when something hostile closes
@@ -324,8 +363,63 @@ class _AIMixin:
             nearest = min(threats, key=lambda e: self.distance(e, npc))
             step = self._flee_step(npc, nearest.x, nearest.y)
             if step is not None:
-                npc.x, npc.y = step
-                self._apply_tile_entry(npc)
+                self._move_actor_to(npc, step)
+
+    def _move_actor_to(self, entity: Entity, step: tuple[int, int]) -> None:
+        from_x, from_y = entity.x, entity.y
+        entity.x, entity.y = step
+        entity.details["last_move_delta"] = [entity.x - from_x, entity.y - from_y]
+        self._apply_tile_entry(entity)
+
+    def _dance_step(self, entity: Entity) -> bool:
+        choices = [
+            (entity.x + 1, entity.y),
+            (entity.x - 1, entity.y),
+            (entity.x, entity.y + 1),
+            (entity.x, entity.y - 1),
+        ]
+        self.rng.shuffle(choices)
+        for step in choices:
+            if self.can_occupy(*step):
+                self._move_actor_to(entity, step)
+                return True
+        return False
+
+    def _try_mimic_move(self, entity: Entity) -> bool:
+        mod = active_behavior(entity, "mimic")
+        if mod is None:
+            return False
+        source = self.state.entities.get(
+            str(mod.get("target_id") or self.state.player_id)
+        )
+        if source is None:
+            return False
+        raw_delta = source.details.get("last_move_delta")
+        if not isinstance(raw_delta, (list, tuple)) or len(raw_delta) != 2:
+            return False
+        dx = 1 if int(raw_delta[0]) > 0 else -1 if int(raw_delta[0]) < 0 else 0
+        dy = 1 if int(raw_delta[1]) > 0 else -1 if int(raw_delta[1]) < 0 else 0
+        if dx == 0 and dy == 0:
+            return False
+        step = (entity.x + dx, entity.y + dy)
+        if self.can_occupy(*step):
+            self._move_actor_to(entity, step)
+            return True
+        return False
+
+    def _visible_blood_source(self, actor: Entity) -> Entity | None:
+        candidates = [
+            entity
+            for entity in self.state.entities.values()
+            if entity.id != actor.id
+            and entity.kind in {"player", "actor", "npc"}
+            and entity.hp > 0
+            and ("bleeding" in entity.statuses or entity.hp < entity.max_hp)
+            and self.can_sense(actor, entity)
+        ]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda entity: self.distance(actor, entity))
 
     _AURA_RE = re.compile(r"^aura_([a-z]+)(?:_(\d+))?$")
 

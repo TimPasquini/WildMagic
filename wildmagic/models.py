@@ -165,6 +165,7 @@ MECHANICAL_STATUSES = {
     "frightened",
     "marked",
     "revealed",
+    "sight_shrouded",
     "warded",
     "strained",
     "drained",
@@ -176,6 +177,8 @@ MECHANICAL_STATUSES = {
     "empowered",
     "weakened",
     "cursed",
+    "stasis",
+    "delayed_sink",
 }
 
 
@@ -695,6 +698,7 @@ class ZoneSnapshot:
     tiles: list[list[str]]
     tile_tags: dict[str, list[str]]
     tile_durations: dict[str, int]
+    tile_flows: dict[str, dict[str, Any]]
     entities: dict[str, Entity]
     explored: set[str]
     zone_type: str
