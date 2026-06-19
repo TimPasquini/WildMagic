@@ -287,6 +287,20 @@ background Ollama settings by default; lore `num_gpu` defaults to `0` unless ove
 Extracted promises are stored in the unified Promise Ledger rather than a separate lore
 claim list.
 
+### `wildmagic/file_lore_cards.py`
+Parser for file-backed authored lore cards under `content/lore/`. Each Markdown file has a
+`toml lore` block for topic metadata and one or more `## Level N` sections with `toml meta`
+router descriptions, triggers, optional subjects, version, and draft flags. The parser
+returns neutral `FileLoreSection` records, rejects malformed metadata and duplicate section
+names, and excludes draft sections from the live load path unless explicitly requested.
+
+### `wildmagic/lore_cards.py`
+Pure access-gate and relevance-selection functions for authored world knowledge. The live
+`LORE_CARDS` registry is now adapted from `content/lore/*.md` via
+`wildmagic/file_lore_cards.py`. `LoreCard` records carry stable ids, access tags/thresholds,
+router triggers/descriptions, injected text, and file-source metadata. This module still has
+no provider calls; `lore_router.py` injects optional model routing.
+
 ### `wildmagic/canon.py`
 Materialized canon generation for room, object, and text details (`examine`, `read`,
 `investigate`). Defines `CanonProvider` plus Ollama/mock/auto providers,
@@ -500,6 +514,13 @@ wildness-banded wonder lines, and `wildness_base` (effective wildness = base + d
 regions. Consumed by `engine.region` (a property over `state.region_id`), generation,
 ambience, and the wild-magic prompt builder (`region_style` in the LLM context, spliced
 into the system prompt by `_wild_prompt_messages` in `wild_magic.py`).
+
+### `content/lore/`
+File-backed authored lore-card source of truth. Each topic is a Markdown file with fenced
+TOML metadata and gated `## Level N` sections. Level 0 sections are public/common
+knowledge; higher sections are exposed only when the knower's lore stat reaches that level.
+Router-facing descriptions and injected bodies both come from these files, but inaccessible
+sections are omitted from model-facing prompts.
 
 ### `wildmagic/npc_quests.py`
 Quest-promise producer logic and data. Defines the `QUEST_ITEMS` dictionary mapping special unique quest items to their visual/materials/tags specs. When an NPC request is heard, `register_heard_quest_item()` appends a `WorldPromise(kind="quest")` with typed fetch objective/reward data. Quest item placement happens when that promise's reserved site realizes; there is no independent random zone-entry quest-item spawner. `generate_npc_quest()` still supplies request fields for procedural NPC profiles.

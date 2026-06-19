@@ -792,6 +792,483 @@ produce different results.
 
 ---
 
+# 200 Unsupported Wild Magic Spells
+
+This document outlines 200 creative, interesting wild magic spells that cannot currently be resolved by the engine's standard schemas and effects. They are organized into 10 thematic categories. For each category, we explain the general engine systems and mechanics that would need to be implemented to support them.
+
+---
+
+## 1. Time & Turn Manipulation
+*Spells in this category manipulate the game loop, turn queues, history logs, or temporal states of entities.*
+* **Underlying Missing Mechanics**: A room-state undo/history stack, turn-scheduling queue modifications, staggered damage buffers, state checkpointing/snapshotting, non-uniform turn-tick speeds, and dynamic action point systems.
+
+1. **"Rewind the room's state by exactly three turns."**
+   * *Limitation*: Requires a full history/undo stack of tile states, entity positions/HP, and player inventory.
+2. **"Stop time for three turns, allowing only the player to act."**
+   * *Limitation*: Requires a temporal suspension layer in the main game loop that halts NPC ticks.
+3. **"Lock the nearest enemy in a time loop, repeating their last action forever."**
+   * *Limitation*: Requires tracking and replaying individual action queues.
+4. **"Delay all damage dealt to me this turn by 5 turns, then apply it all at once."**
+   * *Limitation*: Requires a delayed damage buffer / staggered damage pool.
+5. **"Fast-forward the entire room's simulation by 10 turns in a single instant."**
+   * *Limitation*: Requires running a multi-turn tick loop without player input.
+6. **"Take an extra turn immediately after this one ends."**
+   * *Limitation*: Requires turn-queue/action point manipulation in the engine.
+7. **"The next three spells I cast will resolve simultaneously in three turns."**
+   * *Limitation*: Requires a spell queuing and delay registry.
+8. **"Split my timeline: perform two different moves this turn, then select the best outcome."**
+   * *Limitation*: Requires state branching, snapshotting, and UI-level selection.
+9. **"Slow time down, reducing enemy turn speed relative to mine (2:1 actions)."**
+   * *Limitation*: Requires non-uniform turn-tick intervals or speed ratios.
+10. **"Swap my initiative with the fastest enemy."**
+    * *Limitation*: Requires initiative/turn-ordering variables instead of strict player-then-enemy rounds.
+11. **"Borrow mana from my future self 10 turns from now."**
+    * *Limitation*: Requires a debt system that automatically drains mana later or inflicts a status.
+12. **"Turn the target's past actions into physical obstacles behind them."**
+    * *Limitation*: Requires logging coordinates of past actions and spawning wall/ice tiles there.
+13. **"Make the dungeon's clocks tick backward, healing all entities for recent damage."**
+    * *Limitation*: Requires temporal backtracking or a damage log.
+14. **"Freeze the cooldowns/durations of all active statuses in the room."**
+    * *Limitation*: Requires freezing duration decrements in the status-tick engine.
+15. **"Age the nearest enemy by 50 years, reducing their max HP and speed."**
+    * *Limitation*: Requires an aging mechanic or life-stage variables.
+16. **"Accelerate the poison in the goblin's veins, dealing all its remaining ticks of damage instantly."**
+    * *Limitation*: Requires status tick acceleration logic.
+17. **"Anchor this turn; if I die within 5 turns, I will revert to this exact position and HP."**
+    * *Limitation*: Requires saving a partial state checkpoint and triggering it on death.
+18. **"Steal the goblin's next turn and give it to a summoned ally."**
+    * *Limitation*: Requires transferring action points between entities.
+19. **"Loop the current turn until I land a critical hit."**
+    * *Limitation*: Requires conditional simulation looping and rollback.
+20. **"Send the nearest enemy 5 turns into the future."**
+    * *Limitation*: Requires temporarily removing an entity from the grid and rescheduling their spawn.
+
+---
+
+## 2. Space & Map Geometry
+*Spells in this category manipulate grid coordinates, pathfinding algorithms, camera perspectives, and Euclidean space.*
+* **Underlying Missing Mechanics**: Coordinate rotation transformations, non-Euclidean grid mapping, toroidal map wrapping, dynamic grid array resizing, and portal link registries.
+
+21. **"Rotate the room 90 degrees clockwise, shifting all entities and falling items."**
+    * *Limitation*: Requires rotating coordinates of tiles, props, and entities, plus a gravity-slide pass.
+22. **"Fold the map down the middle, merging opposite tiles."**
+    * *Limitation*: Requires non-Euclidean grid mapping or coordinate-folding transformations.
+23. **"Turn the corridor into an infinite loop: walking off the east edge teleports you to the west edge."**
+    * *Limitation*: Requires toroidal map wrapping / periodic boundary coordinates.
+24. **"Compress the distance between me and the exit portal."**
+    * *Limitation*: Requires modifying pathfinding weights or direct coordinate compression.
+25. **"Expand the size of the target tile to a 3x3 area, pushing adjacent tiles outward."**
+    * *Limitation*: Requires dynamic map resizing and tile insertion.
+26. **"Make the floor behave like a conveyer belt, sliding entities 1 tile north each turn."**
+    * *Limitation*: Requires passive terrain-driven vectors / grid flow fields.
+27. **"Connect the north wall to the south wall via a wormhole."**
+    * *Limitation*: Requires portal link mechanics and teleportation triggers on entry.
+28. **"Collapse the ceiling, creating dynamic rubble that fills spaces based on structural integrity."**
+    * *Limitation*: Requires structural physics or collapse algorithms.
+29. **"Swap the positions of the entire layout of this room with the layout of the next room."**
+    * *Limitation*: Requires multi-room structure tracking and swap mutations.
+30. **"Make all walls in this room behave like portals to the opposite wall."**
+    * *Limitation*: Requires global edge-wrapping rules.
+31. **"Create a pocket dimension: a door that leads to a safe 5x5 room outside the map."**
+    * *Limitation*: Requires managing secondary sub-maps/levels and entry/exit anchors.
+32. **"Pinch space, pulling all walls 1 tile closer to the center."**
+    * *Limitation*: Requires map contraction code.
+33. **"Turn the floor into a sphere, making coordinates wrap around like a globe."**
+    * *Limitation*: Requires spherical grid geometry calculation.
+34. **"Tilt the board, causing all loose objects and enemies to slide toward the east wall."**
+    * *Limitation*: Requires a global slide/physics pass across all actors and items.
+35. **"Erase the coordinates of the target tile, creating an impassable void."**
+    * *Limitation*: Requires handling null/missing coordinates in grid-lookup logic.
+36. **"Make all distance calculations use taxicab (Manhattan) distance instead of Euclidean."**
+    * *Limitation*: Requires toggling global pathfinding/distance algorithms.
+37. **"Link the positions of two enemies so that whenever one moves, the other moves in the opposite direction."**
+    * *Limitation*: Requires mirrored movement constraint triggers.
+38. **"Turn the room into a mirror maze, creating optical illusions of walls."**
+    * *Limitation*: Requires rendering/collision separation and pathfinding confusion.
+39. **"Grow the dungeon room dynamically, adding a 3-tile wide perimeter of new floor."**
+    * *Limitation*: Requires expanding array dimensions or dynamic grid generation.
+40. **"Turn the floor tiles into a grid of shifting sand that slowly moves entities clockwise."**
+    * *Limitation*: Requires vector flow fields on top of standard terrain.
+
+---
+
+## 3. Faction Dynamics & Social Manipulation
+*Spells in this category affect NPC relationships, AI behavior trees, shared memories, and group dynamics.*
+* **Underlying Missing Mechanics**: Dynamic social graphs, boss/minion AI grouping, memory-sharing networks, puppet movement controls, trading/dialogue UI integration, and stat inheritance pipelines.
+
+41. **"Soul-bind the goblin and the orc: any damage taken by one is split equally between them."**
+    * *Limitation*: Requires a damage-sharing registry or sympathetic bond effect.
+42. **"Make the goblin fall in love with the player, defending them from all attacks."**
+    * *Limitation*: Requires complex behavior trees, defensive AI packages, and a charm/faction layer.
+43. **"Make the nearest orc the leader and command all goblins to follow its targets."**
+    * *Limitation*: Requires boss/minion AI grouping and behavior rules.
+44. **"Infect the goblin with a hivemind: it shares all memory and target vision with all other enemies."**
+    * *Limitation*: Requires an shared NPC memory/vision network.
+45. **"Make the enemies form a democratic union, refusing to attack unless they vote on it."**
+    * *Limitation*: Requires multi-agent decision systems and consensus checks in AI loop.
+46. **"Curse the goblin to mimic my movements exactly."**
+    * *Limitation*: Requires puppet-movement AI mirroring player input.
+47. **"Transmute the faction of the room: allies become enemies and enemies become allies."**
+    * *Limitation*: Requires global faction inversion.
+48. **"Infuse the goblin with the spirit of a coward, making it flee whenever it sees blood."**
+    * *Limitation*: Requires dynamic behavior traits that override standard pathfinding.
+49. **"Make the nearest enemy believe it is the shopkeeper and try to sell me its weapon."**
+    * *Limitation*: Requires swapping combat AI with trading UI/dialogue logic.
+50. **"Bind the enemies in a chain: if one dies, the next inherits its remaining HP and items."**
+    * *Limitation*: Requires death event handlers that distribute stats to survivors.
+51. **"Make all enemies target the creature with the lowest current health, even if it's their ally."**
+    * *Limitation*: Requires rewriting AI targeting heuristics to check health ratios.
+52. **"Create a conspiracy: two enemies secretly plan to betray their leader in 3 turns."**
+    * *Limitation*: Requires delayed faction changes and coordinated AI plans.
+53. **"Convince the goblin that the dungeon is a simulation and make it refuse to move out of existential dread."**
+    * *Limitation*: Requires a specialized 'existential dread' behavior script.
+54. **"Steal the goblin's memory of its allies, making it treat everyone as strangers."**
+    * *Limitation*: Requires wiping NPC faction lists or social graphs.
+55. **"Force all nearby creatures to dance, preventing attacks but allowing movement."**
+    * *Limitation*: Requires a status that restricts action types but allows coordinate changes.
+56. **"Make the nearest enemy my defense attorney, absorbing legal/narrative blame for my crimes."**
+    * *Limitation*: Requires faction proxy layers and reputation/blame trackers.
+57. **"Instill class consciousness: goblin minions turn on their elite captains."**
+    * *Limitation*: Requires minion-vs-boss faction tags and AI overrides.
+58. **"Put the goblin and the orc in a duel: they must fight each other until one dies."**
+    * *Limitation*: Requires locking AI targets to each other and ignoring the player.
+59. **"Inflict collective guilt: whenever an enemy attacks me, all other enemies take 1 damage."**
+    * *Limitation*: Requires global reaction triggers based on combat events.
+60. **"Make the goblin believe it is my long-lost sibling, giving me their inheritance."**
+    * *Limitation*: Requires procedural story generation, quest injection, or custom dialogues.
+
+---
+
+## 4. Interface & Player Perception
+*Spells in this category directly alter the graphical user interface, inputs, sound files, screen assets, and render pipelines.*
+* **Underlying Missing Mechanics**: UI state scrambling, Pygame rendering transforms, keyboard input remapping, post-processing screen filters, auditory triggers, and fake log message generation.
+
+61. **"Scramble my HUD: hide my health bar and randomise the visible numbers."**
+    * *Limitation*: Requires UI layer modification and state hiding.
+62. **"Flip the game screen upside down."**
+    * *Limitation*: Requires Pygame window rotation/rendering transformation.
+63. **"Reverse my directional keys: pressing Up moves Down, and Left moves Right."**
+    * *Limitation*: Requires keyboard input mapping redirection.
+64. **"Filter the screen to grayscale, making it impossible to see color-based hazards."**
+    * *Limitation*: Requires post-processing shaders or color rendering filters.
+65. **"Double-vision: render two of every entity on the screen, only one of which is real."**
+    * *Limitation*: Requires rendering fake entities and visual duplicates.
+66. **"Write fake messages into the game log to confuse me (e.g. 'You take 5 damage')."**
+    * *Limitation*: Requires UI log spoofing and separating system messages from fake logs.
+67. **"Cover the screen in virtual cobwebs that I must clear by clicking them with the mouse."**
+    * *Limitation*: Requires Pygame overlay interactive elements.
+68. **"Make all glyphs on the screen look like a question mark (?)."**
+    * *Limitation*: Requires overriding glyph rendering rules.
+69. **"The next time I take damage, play a loud jump-scare noise and shake the window."**
+    * *Limitation*: Requires audio playback and screen shake rendering logic.
+70. **"Blur the screen, making the text and layout harder to read."**
+    * *Limitation*: Requires a visual blur shader in Pygame.
+71. **"Make my mouse cursor attract nearby items on the screen."**
+    * *Limitation*: Requires mouse-position tracking in grid space and item gravity.
+72. **"Hide the map entirely: I can only see the tile I am standing on."**
+    * *Limitation*: Requires fog-of-war override to limit sight radius to 0.
+73. **"Split the game window into four smaller mirrored screens."**
+    * *Limitation*: Requires viewport subdivision and camera rendering passes.
+74. **"Display the health bars of enemies as riddles instead of numbers."**
+    * *Limitation*: Requires text replacement logic in the UI health overlay.
+75. **"Change the game's font to comic sans for 10 turns."**
+    * *Limitation*: Requires runtime font switching and layout recalculation.
+76. **"Render my character as invisible to the camera, but still present on the map."**
+    * *Limitation*: Requires separating entity visibility to the rendering engine vs AI visibility.
+77. **"Scramble the letters of all items in my inventory list."**
+    * *Limitation*: Requires UI string obfuscation.
+78. **"Show the paths that enemies plan to take on the screen as glowing lines."**
+    * *Limitation*: Requires exposing AI pathfinding routes to the rendering layer.
+79. **"The next action must be typed in Morse code."**
+    * *Limitation*: Requires custom input parsing rules.
+80. **"Put a virtual magnifying glass over my character."**
+    * *Limitation*: Requires magnifying render pass centered on player coordinate.
+
+---
+
+## 5. Meta-Magic & LLM Interface Control
+*Spells in this category manipulate the LLM call parameters, prompt histories, resolution methods, and token logic.*
+* **Underlying Missing Mechanics**: LLM caching and bypasses, prompt blacklisting, style injection pipelines, dynamic Ollama options adjustments, and audit log analysis.
+
+81. **"The next spell I cast will be resolved deterministically without the LLM, repeating this spell's exact output."**
+    * *Limitation*: Requires bypassing the LLM call and repeating a cached output.
+82. **"Swap my prompt input with the goblin's spell list: I cast what they want, they cast what I want."**
+    * *Limitation*: Requires enemy spellcaster capability routing.
+83. **"Ban the word 'damage' from the LLM prompt for the rest of this run."**
+    * *Limitation*: Requires a prompt-filtering/blacklisting engine.
+84. **"Force the LLM to write its response in the voice of a pirate."**
+    * *Limitation*: Requires injecting style prompts dynamically into the system message builder.
+85. **"The next spell must be a combination of two spells typed in the same prompt."**
+    * *Limitation*: Requires splitting input and managing dual LLM resolutions.
+86. **"Disable all fallbacks: if the next spell fails to parse, crash the engine."**
+    * *Limitation*: Requires dynamic adjustment of settings or error handlers.
+87. **"Make the LLM explain why it chose this spell outcome in the log."**
+    * *Limitation*: Requires pulling the raw 'thinking' or a separate reasoning field into the game log.
+88. **"Increase the temperature of the next spell's LLM call to 2.0."**
+    * *Limitation*: Requires dynamic parameter overrides per-cast.
+89. **"Force the LLM to generate exactly three distinct effects of different severities."**
+    * *Limitation*: Requires schema constraint enforcement in the prompt.
+90. **"Swap the provider to Ollama for the next turn, regardless of settings."**
+    * *Limitation*: Requires runtime provider switching.
+91. **"Make the next spell cost double mana but guarantee it is accepted."**
+    * *Limitation*: Requires overriding the LLM acceptance check or hardcoding success.
+92. **"The next spell will use a different model, like a larger llama model, to resolve."**
+    * *Limitation*: Requires model fallback chain changes on the fly.
+93. **"The next spell I cast will copy the last spell resolved by the LLM in the audit logs."**
+    * *Limitation*: Requires parsing the `wild_magic_audit.jsonl` file at runtime.
+94. **"Block all 'moderate' severity spells; force the LLM to only resolve minor or major outcomes."**
+    * *Limitation*: Requires strict schema filtering by severity.
+95. **"The LLM must resolve my spell by using only words starting with the letter 'S'."**
+    * *Limitation*: Requires linguistic constraint parsing/generation.
+96. **"The next spell prompt is sent to the LLM with a picture of the current Pygame screen."**
+    * *Limitation*: Requires multi-modal LLM integration and screenshot capabilities.
+97. **"If the LLM rejects my spell, I get a full mana refund."**
+    * *Limitation*: Requires changing turn-resolution rules for rejected spells.
+98. **"Force the LLM to resolve the spell as a curse, even if I asked for a blessing."**
+    * *Limitation*: Requires forcing the output schema to contain certain cost types.
+99. **"The next spell will be generated by two different LLMs, applying the average of their effects."**
+    * *Limitation*: Requires multi-provider consensus resolution.
+100. **"Lock the LLM prompt to the 'Wild Stream' category only."**
+    * *Limitation*: Requires dynamic capability card filtering based on category.
+
+---
+
+## 6. Dynamic Item & Economy Interactions
+*Spells in this category affect inventory properties, weapon attributes, transaction records, and shop metrics.*
+* **Underlying Missing Mechanics**: Dynamic item merging, weapon sentient triggers, transaction ledgers, item-to-actor transformations, and transient inventory tracking.
+
+101. **"Merge my sword and my shield into a Bladed Shield."**
+    * *Limitation*: Requires combining item structures, stats, and tags dynamically.
+102. **"Make my sword sentient: it will shout comments in the log based on what I attack."**
+    * *Limitation*: Requires item triggers, dialogues, and item-based update loops.
+103. **"Open a tab at the dungeon bank: borrow 100 gold now, but take 1 damage every 5 turns."**
+    * *Limitation*: Requires bank ledger, currency, and debt trackers.
+104. **"Turn all gold coins in my inventory into biting beetles that attack from my pocket."**
+    * *Limitation*: Requires item-to-entity transformation in inventory.
+105. **"Disenchant the nearest prop to absorb its magical tags as mana."**
+    * *Limitation*: Requires item destruction and tag-to-resource conversion tables.
+106. **"Forger's Magic: duplicate an item in my inventory, but it dissolves in 10 turns."**
+    * *Limitation*: Requires transient item tracking with durations.
+107. **"Curse the goblin's weapon to strike its owner if they miss."**
+    * *Limitation*: Requires item-level triggers and curses on equipment.
+108. **"Melt all metal weapons in the room into a single puddle of molten iron."**
+    * *Limitation*: Requires coordinate scanning, item removal, and spawning a custom terrain tile.
+109. **"Turn my inventory into a slot machine: spend 1 gold to randomize one item."**
+    * *Limitation*: Requires inventory randomization and slot UI integration.
+110. **"Make all items in the room weightless, allowing me to carry infinite items."**
+    * *Limitation*: Requires weight/inventory capacity rules in models.
+111. **"Enchant my boots to leave a trail of gold coins as I walk."**
+    * *Limitation*: Requires movement triggers spawning items.
+112. **"Swap the items held by the goblin with the items in my pack."**
+    * *Limitation*: Requires inventory swapping between actors.
+113. **"Make the nearest chest tell me a joke; if I laugh (press Y), it opens."**
+    * *Limitation*: Requires interactive dialogue screens on chests.
+114. **"Transmute all food items in my inventory into health potions."**
+    * *Limitation*: Requires item-type filtering and conversion maps.
+115. **"Create a magnet item that pulls all dropped weapons in the room toward it."**
+    * *Limitation*: Requires tick-based item attraction physics.
+116. **"Turn the target's armor into a heavy burden, reducing their dodge chance based on their gold count."**
+    * *Limitation*: Requires gold-to-stat scaling mechanics.
+117. **"Bind my weapon to my soul: if I am disarmed, it teleports back to my hand."**
+    * *Limitation*: Requires equipment slot tracking and disarm event reactions.
+118. **"Turn my shield into a mirror that reflects the first spell cast at me back to the caster."**
+    * *Limitation*: Requires spell reflection flags on items.
+119. **"Make all items in this room float 1 tile off the ground, avoiding floor hazards."**
+    * *Limitation*: Requires item state height/levitation flags.
+120. **"Infuse my weapon with the memory of the last creature it killed, giving it +2 attack against that type."**
+    * *Limitation*: Requires tracking kill history on individual items.
+
+---
+
+## 7. Esoteric Physics & Fluid Dynamics
+*Spells in this category introduce vector physics, cellular automata grids, reflection calculations, and vertical space.*
+* **Underlying Missing Mechanics**: Dynamic flow field grids, raycasting/reflection solvers, cellular automata engines (for heat/gas propagation), mass-attraction calculations, and a vertical Z-axis coordinate layer.
+
+121. **"Shift the gravity vector: all entities fall toward the west wall."**
+    * *Limitation*: Requires global horizontal gravity loops.
+122. **"Create a pressure system: wind blows from the center of the room outward, pushing everything."**
+    * *Limitation*: Requires dynamic vector wind fields updating each turn.
+123. **"Make water tiles flow like a river, carrying entities and items along a path."**
+    * *Limitation*: Requires path-based fluid movement vectors.
+124. **"Turn the air into a thick liquid, slowing all movement but reducing falling damage."**
+    * *Limitation*: Requires medium viscosity properties on floors/rooms.
+125. **"Mirror Beam: fire a light bolt that bounces off walls until it hits an entity."**
+    * *Limitation*: Requires raycasting and reflective boundary calculation.
+126. **"Thermal conduction: fire on one tile heats adjacent tiles, turning water to steam and grass to ash."**
+    * *Limitation*: Requires cellular automata temperature grids.
+127. **"Create a vacuum: remove all air from a 3x3 area, suffocating entities and extinguishing fires."**
+    * *Limitation*: Requires gas simulation or oxygen density maps.
+128. **"Magnetize the room: all metal-wearing entities are pulled toward the center."**
+    * *Limitation*: Requires polarity attributes on entities and magnetic pull equations.
+129. **"Make all entities bounce off walls like billiard balls when pushed."**
+    * *Limitation*: Requires elastic collision vectors.
+130. **"Create a siphon: link two pools of water so that draining one fills the other."**
+    * *Limitation*: Requires linked fluid volume tracking.
+131. **"Frictionless world: all entities slide in their direction of movement until they hit a wall."**
+    * *Limitation*: Requires momentum/inertia physics tracking.
+132. **"Make the air combustible: any fire spell will detonate the entire room's air tiles."**
+    * *Limitation*: Requires atmospheric gas state and chain reaction triggers.
+133. **"Ice expansion: freeze a water tile, causing it to expand and crush adjacent doors or walls."**
+    * *Limitation*: Requires freezing pressure algorithms.
+134. **"Create a black hole: a gravity well that pulls all entities 1 tile closer each turn."**
+    * *Limitation*: Requires gravitational pull scales based on distance.
+135. **"Turn the player into a helium balloon, allowing them to float over pits."**
+    * *Limitation*: Requires flight status coupled with wind vectors.
+136. **"Sound wave resonance: shouting in a small room shatters all glass items and ice walls."**
+    * *Limitation*: Requires room volume and acoustic resonance calculation.
+137. **"Light refraction: bend light to make the player appear 2 tiles away from their actual position."**
+    * *Limitation*: Requires separating visual render coordinate from physics coordinate.
+138. **"Acid erosion: acid damage permanently dissolves armor defense ratings on hit."**
+    * *Limitation*: Requires persistent item stat degradation.
+139. **"Dynamic lighting: make all shadows block line of sight completely."**
+    * *Limitation*: Requires shadow-casting field-of-view algorithms.
+140. **"Create a geyser: water shoots up from a tile, tossing anyone on it 3 tiles high."**
+    * *Limitation*: Requires vertical axis (Z-axis) coordinates and falling damage.
+
+---
+
+## 8. Dungeon Architecture & World-State Rules
+*Spells in this category mutate permanent level properties, spawning tables, structural generation, and global game rules.*
+* **Underlying Missing Mechanics**: Theme-based tile mapping, stairs blockade, runtime dungeon carvers, weather maps, day/night cycles, and global event triggers.
+
+141. **"Change the level's theme from 'Cave' to 'Library', changing all walls to bookshelves."**
+    * *Limitation*: Requires theme-based tile mapping and prop re-generation.
+142. **"Seal the entire level, preventing any stairs from functioning for 20 turns."**
+    * *Limitation*: Requires stairs blockade and exit locking.
+143. **"Make the dungeon grow a new corridor connecting two dead ends."**
+    * *Limitation*: Requires dungeon generation maze-solving and carving routines at runtime.
+144. **"Weather system: make it rain inside the dungeon, wetting all tiles and putting out fires."**
+    * *Limitation*: Requires global weather ticks and rain effect maps.
+145. **"Trigger a cave-in, replacing random floor tiles with wall tiles."**
+    * *Limitation*: Requires tile transmutation with safety checks for player blockage.
+146. **"Day/Night cycle: make the dungeon alternate between day (bright) and night (pitch black) every 10 turns."**
+    * *Limitation*: Requires global day/night cycle logic and vision modifiers.
+147. **"Change the level's gravity: double all falling damage and jump heights."**
+    * *Limitation*: Requires global physics parameter modification.
+148. **"Summon a shopkeeper room at the end of the hall."**
+    * *Limitation*: Requires room template carving and merchant entity spawning on active maps.
+149. **"Rewrite the spawning rules: all future enemies on this floor spawn as slimes."**
+    * *Limitation*: Requires overriding the floor's spawn tables.
+150. **"Collapse the stairs down, forcing me to find another way or rebuild them."**
+    * *Limitation*: Requires stair destruction and alternative path generation.
+151. **"Turn the dungeon into a garden: all walls grow flowers and enemies become passive."**
+    * *Limitation*: Requires global entity behavior and tile aesthetic modification.
+152. **"The dungeon is now haunted: spawn a ghost every time an enemy dies."**
+    * *Limitation*: Requires linking death events to ghost spawns globally.
+153. **"Mirror the entire map layout horizontally."**
+    * *Limitation*: Requires flipping the coordinate grid of all tiles, items, and entities.
+154. **"Make all doors sentient: they will lock themselves unless I say 'please' in the log."**
+    * *Limitation*: Requires door interaction dialogue gates.
+155. **"Flood the entire level with lava, starting from the edges and closing in."**
+    * *Limitation*: Requires a battle-royale style shrinking ring of hazard tiles.
+156. **"Create a coordinate grid: I can teleport to any tile by typing its exact X/Y coordinate."**
+    * *Limitation*: Requires coordinate overlay rendering and coordinate-based targeting input.
+157. **"Put the level in lock-down: spawn security sentinels at all entry points."**
+    * *Limitation*: Requires alarm level state and sentinel spawn zones.
+158. **"Turn the dungeon into a museum: all enemies stand on pedestals and won't attack unless touched."**
+    * *Limitation*: Requires museum status overrides on AI.
+159. **"Grow a labyrinth: fill all open spaces with temporary walls that dissolve in 20 turns."**
+    * *Limitation*: Requires maze-generation carving over open spaces.
+160. **"Merge this level with the level below: create holes in the floor that lead directly to the next map."**
+    * *Limitation*: Requires multi-level coordinate mapping and vertical falling transitions.
+
+---
+
+## 9. Complex Conditionals & Logic Gates
+*Spells in this category execute dynamic evaluations of mathematical, environmental, or logical conditions during gameplay.*
+* **Underlying Missing Mechanics**: Event hooks, conditional loops, logic-gate traps, NPC-side LLM triggers, visibility counters, chain reaction algorithms, and string evaluation engines.
+
+161. **"Trigger: If I take damage that would kill me, swap my position with the attacker and give them the damage."**
+    * *Limitation*: Requires advanced death-prevention event hooks.
+162. **"If the nearest enemy has an odd number of HP, deal 5 damage; if even, heal them for 5."**
+    * *Limitation*: Requires conditional math checks in spell execution.
+163. **"Create an XOR trap: if one entity stands on it, nothing happens; if two stand on it, it explodes."**
+    * *Limitation*: Requires multi-entity position monitoring and logic gates.
+164. **"Curse: Every time I cast a spell, the nearest enemy casts a random spell of the same severity."**
+    * *Limitation*: Requires mirroring spell triggers with LLM calls for NPCs.
+165. **"If there are more than three enemies visible, summon an ally; otherwise, gain 2 mana."**
+    * *Limitation*: Requires conditional branching based on visibility counts.
+166. **"The next time an enemy dies, trigger a chain reaction: all adjacent enemies of the same type explode."**
+    * *Limitation*: Requires recursive adjacent entity scanning and chain explosions.
+167. **"Link my health to my mana: taking damage drains mana first; if mana is 0, drain health."**
+    * *Limitation*: Requires mana-shield redirection logic in damage application.
+168. **"If I stand on water, my fire spells deal double damage; if I stand on fire, my water spells heal me."**
+    * *Limitation*: Requires terrain-state conditional spell modifiers.
+169. **"Every third step I take triggers a small explosion at my feet."**
+    * *Limitation*: Requires step counter state on the player actor.
+170. **"Trigger: If an enemy moves into my line of sight, freeze them for 1 turn."**
+    * *Limitation*: Requires vision-entry triggers.
+171. **"If I have no items in my inventory, my attacks deal double damage."**
+    * *Limitation*: Requires empty-inventory conditional stat buffs.
+172. **"Create a trigger that fires only if the player does NOT take damage for 5 turns."**
+    * *Limitation*: Requires consecutive turn tracking without damage events.
+173. **"If the target's name contains the letter 'g', they are poisoned; if not, they are hasted."**
+    * *Limitation*: Requires string checking on entity names.
+174. **"Create a sympathetic link: if I heal, the target takes damage of the same amount."**
+    * *Limitation*: Requires inverting healing events into damage events.
+175. **"If the dungeon seed is odd, spawn a chest; if even, spawn a trap."**
+    * *Limitation*: Requires exposing the game's seed state to spell conditions.
+176. **"Curse the goblin to only move when I move."**
+    * *Limitation*: Requires synchronous move triggers locking NPC action ticks to player input.
+177. **"If the number of walls in my line of sight is greater than 10, turn them all to floor."**
+    * *Limitation*: Requires counting visible walls and batch transmuting them.
+178. **"Trigger: The next time I gain a curse, transfer it to the nearest enemy instead."**
+    * *Limitation*: Requires redirecting curse-application event targets.
+179. **"If I have cast the same spell twice in a row, the third cast is free."**
+    * *Limitation*: Requires spell history tracking and cost exemptions.
+180. **"Link the target's defense to the player's current gold: more gold means less defense."**
+    * *Limitation*: Requires dynamic modifier links from player state to NPC stats.
+
+---
+
+## 10. Sensory, Audio & Visual Effects
+*Spells in this category add decorative, ambient, or perceptual indicators that alter sound, rendering trails, particles, and light maps.*
+* **Underlying Missing Mechanics**: Pathfinding scent-diffusion grids, audio sound system triggers, frame history rendering buffers, dark lighting masks, dynamic light radius calculations, and sprite shader parameters.
+
+181. **"Scent Trail: make the player leave a scent trail that draws enemies from far away."**
+    * *Limitation*: Requires pathfinding scent-diffusion grids.
+182. **"Play a custom audio warning sound when an enemy approaches within 3 tiles."**
+    * *Limitation*: Requires audio system integration and distance triggers.
+183. **"Visual echo: render a trail of ghost images behind my character as I move."**
+    * *Limitation*: Requires rendering frame history buffers.
+184. **"Echo chamber: all sound logs are printed twice in the text feed."**
+    * *Limitation*: Requires modifying the UI log insertion function.
+185. **"Blackout: turn off all ambient light, making the screen black except for a small radius around light sources."**
+    * *Limitation*: Requires dark lighting masks and dynamic light radius rendering.
+186. **"Color siphon: drain the color from the target, making them gray and turning the player vibrant gold."**
+    * *Limitation*: Requires per-entity color blending or shader parameters.
+187. **"Make my character leave a trail of glowing blue particles that illuminate the map."**
+    * *Limitation*: Requires particle system spawners and path illumination.
+188. **"Heartbeat sync: make the Pygame window pulse in size according to the player's current health."**
+    * *Limitation*: Requires window size scaling or viewport zoom oscillation.
+189. **"Hallucinatory sounds: write random sound descriptions in the log."**
+    * *Limitation*: Requires ambient sound description injection.
+190. **"Thermal vision: highlight all warm-blooded entities in bright orange and cold ones in blue."**
+    * *Limitation*: Requires temperature attributes on entities and custom render modes.
+191. **"Silhouette rendering: make all entities behind walls visible as bright outlines."**
+    * *Limitation*: Requires wall-occlusion rendering overlays.
+192. **"Play a triumph sound effect if I kill an enemy with a spell."**
+    * *Limitation*: Requires audio player hooks on kill events.
+193. **"Make the dungeon's glyphs dance: letters swap places every turn."**
+    * *Limitation*: Requires randomized glyph rendering offsets.
+194. **"Sparkler: my character constantly emits harmless, decorative sparks that bounce off walls."**
+    * *Limitation*: Requires particle collision physics.
+195. **"Footstep sounds: make my movements loud, waking sleeping enemies up."**
+    * *Limitation*: Requires noise propagation grids and enemy sleep states.
+196. **"Paint the floor: my footsteps color the tiles blue, making them permanently revealed."**
+    * *Limitation*: Requires custom tile color flags and rendering path tracking.
+197. **"Invisibility shimmer: when invisible, render the player as a transparent refractive distortion."**
+    * *Limitation*: Requires custom sprite shaders.
+198. **"Blindness: turn the entire screen pitch black, leaving only the text log visible."**
+    * *Limitation*: Requires disabling game grid rendering while keeping UI elements.
+199. **"Spotlight: cast a bright beam of light from my face toward my target, revealing items in a cone."**
+    * *Limitation*: Requires cone-shaped light casting calculations.
+200. **"Spell flash: flash the entire screen white whenever a major spell resolves."**
+    * *Limitation*: Requires full-screen color overlays and screen flash timers.
+
+
+
+
 *The LLM interprets spell intent freely. Poetic or indirect phrasing often produces more
 creative results than technical descriptions. Experiment liberally — unexpected interpretations
 are part of the magic.*

@@ -394,3 +394,4 @@ If a stage changes resolver prompts, schema, normalization, or effect applicatio
    Build per-cast schemas from selected cards, log the narrowed effect set, and compare
    live outputs before enforcing it.
 
+D

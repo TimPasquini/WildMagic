@@ -1,10 +1,12 @@
 # Lore Cards — Tiered World-Knowledge for Dialogue, Books, and Beyond
 
-Status: **M1–M3 implemented (2026-06-17)** — `wildmagic/lore_cards.py` (gate + selection,
-pure), `wildmagic/lore_router.py` (provider wiring), `NPCProfile.lore` + generation seeding,
-dialogue `world_knowledge` injection, and book THREADS injection; `tests/test_lore_cards.py`
-(29 cases) green, full suite green, live path smoke-tested. M4 (deeper L2–L4 tiers + audit-log
-tuning) deferred per designer. See §13 for what shipped vs. what's deferred. Companion to
+Status: **M1–M3 implemented; file-backed registry live (2026-06-18)** —
+`content/lore/*.md` is the authored source of truth, `wildmagic/file_lore_cards.py` parses
+it, `wildmagic/lore_cards.py` adapts those sections into the gate + selection API, and
+`wildmagic/lore_router.py` provides optional provider wiring. `NPCProfile.lore`, generation
+seeding, dialogue `world_knowledge` injection, and book THREADS injection remain on the
+same public path. Deeper L2–L4 tiers + audit-log tuning are still deferred. See §13 for what
+shipped vs. what's deferred. Companion to
 `WORLDBUILDING.md` (the
 world fact this system serves), `CAPABILITY_ROUTING.md` + `CAPABILITY_CARD_PLAN.md` (the
 routing pattern this mirrors), and `WORLD_PROMISES.md` (the *dynamic* lore system this sits
@@ -29,8 +31,8 @@ every prompt.
 - **One growing registry, many consumers.** Dialogue and book generation are the v1
   consumers; the same registry should later serve examine/read flavor, rumor seeding, quest
   text, the (deferred) player codex, and anything else that wants grounded world fact.
-- **Authored now, extensible later.** Levels 0–1 are carved by hand from `WORLDBUILDING.md`
-  this pass; levels 2–4 are stubbed and filled in later (possibly LLM-drafted then frozen).
+- **Authored now, extensible later.** Levels 0–1 are carved by hand into `content/lore/*.md`;
+  levels 2–4 should be added only when there is real canon to freeze.
 
 ## 2. The model (tiers, tags, access)
 
@@ -188,8 +190,9 @@ is **not needed for latency**, only as the cheap prefilter/gate and the offline 
 
 ## 6. Data model
 
-New module `wildmagic/lore_cards.py` — **pure data + pure functions**, no HTTP/provider logic
-(mirrors `capabilities.py` / `spell_contract.py`).
+`wildmagic/lore_cards.py` remains **pure data + pure functions**, no HTTP/provider logic
+(mirrors `capabilities.py` / `spell_contract.py`). The live registry is loaded from
+`content/lore/*.md` through `wildmagic/file_lore_cards.py`.
 
 ```python
 @dataclass(frozen=True)
@@ -201,8 +204,11 @@ class LoreCard:
     index_line: str            # one-line gloss the router sees in the candidate menu
     text: str                  # the fact block injected into the consuming prompt
     version: int = 1           # bump on content change (future: cache invalidation for frozen book canon)
+    topic: str = ""            # file-backed topic id, when loaded from content/lore
+    level: int | None = None   # file-backed lore level, when loaded from content/lore
+    source: str = ""           # source file path for file-backed cards
 
-LORE_CARDS: tuple[LoreCard, ...] = (...)   # the registry
+LORE_CARDS: tuple[LoreCard, ...] = (...)   # file-backed live registry
 _BY_NAME: dict[str, LoreCard] = {c.name: c for c in LORE_CARDS}
 ```
 
@@ -441,14 +447,18 @@ the floor and is enough to make locals feel knowledgeable and outsiders shallow.
   subject-matching is both better and keeps the canon pipeline replay-safe (no extra recorded
   LLM call). Upgrading books to the generative router (with explicit foreground/background
   purpose plumbing) remains available if wanted.
+- ✅ **File-backed authoring.** `content/lore/*.md` now contains the live authored card
+  source. `wildmagic/file_lore_cards.py` parses Markdown plus fenced TOML metadata, and
+  `lore_cards.py` adapts sections into the existing `LoreCard` API. Existing dialogue/book
+  consumers keep the same routing path.
 - **M4 — L2–L4 + tuning (deferred per designer).** Fill deeper tiers (hand or
   LLM-drafted-then-frozen); add the `lore_router_audit.jsonl` log (§12 — **not yet built**) and
   tune thresholds/triggers/caps from it.
 
 ## 14. Initial carve map (L0/L1 from `WORLDBUILDING.md`)
 
-One-line, **folksy** L0 (the reputation a traveler would repeat) + short L1 per realm/tradition;
-deeper tiers stubbed. Names illustrative. Note `empire` (the whole) vs `vigovia` (the heartland).
+One-line, **folksy** L0 (the reputation a traveler would repeat) + short L1 per realm/tradition.
+Names illustrative. Note `empire` (the whole) vs `vigovia` (the heartland).
 
 | Card | tags | thr | gist (from the doc) |
 |---|---|---|---|
