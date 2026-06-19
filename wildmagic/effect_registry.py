@@ -222,7 +222,7 @@ _EFFECT_META: dict[str, tuple[str, tuple[str, ...]]] = {
     ),
     "edit_memory": (
         "Add, alter, or erase a nearby NPC memory.",
-        ("target", "op", "text", "subject"),
+        ("target", "op", "text", "subject", "strength", "shareable", "privacy"),
     ),
     "animate_object": (
         "Turn a nearby prop into an actor.",

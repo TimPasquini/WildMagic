@@ -86,8 +86,17 @@ def _score_reply(message: str, reply: str, context: dict[str, Any]) -> dict[str,
         grounding_terms.update(re.findall(r"[a-z]{4,}", str(npc.get(key, "")).lower()))
     for trait in npc.get("traits") or []:
         grounding_terms.update(re.findall(r"[a-z]{4,}", str(trait).lower()))
-    for memory in npc.get("things_i_have_noticed") or []:
-        grounding_terms.update(re.findall(r"[a-z]{4,}", str(memory).lower()))
+    for bucket in (
+        "things_i_personally_witnessed",
+        "things_i_overheard",
+        "gossip_i_have_heard",
+    ):
+        for memory in npc.get(bucket) or []:
+            grounding_terms.update(re.findall(r"[a-z]{4,}", str(memory).lower()))
+    conversation_memory = npc.get("conversation_memory")
+    if isinstance(conversation_memory, dict):
+        for memory in conversation_memory.get("older_summaries") or []:
+            grounding_terms.update(re.findall(r"[a-z]{4,}", str(memory).lower()))
     grounding_hits = sorted(term for term in grounding_terms if term in lower_reply)
 
     score = 10

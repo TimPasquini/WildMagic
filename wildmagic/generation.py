@@ -919,6 +919,8 @@ class _GenerationMixin:
         state.tile_rooms.clear()
         state.entities = {}
         state.npc_profiles = {}
+        state.gossip_edges = {}
+        state.gossip_spread_days.clear()
 
         zone_rng = random.Random(stable_seed(state.rng_seed, "hollowmere"))
         self._scatter_terrain_features(zone_rng)
@@ -1181,6 +1183,8 @@ class _GenerationMixin:
         state.tile_rooms.clear()
         state.entities = {}
         state.npc_profiles = {}
+        state.gossip_edges = {}
+        state.gossip_spread_days.clear()
         state.region_id = region_id
 
     def _register_hub_room(
@@ -1536,6 +1540,8 @@ class _GenerationMixin:
         state.tile_rooms.clear()
         state.entities = {}
         state.npc_profiles = {}
+        state.gossip_edges = {}
+        state.gossip_spread_days.clear()
         state.region_id = "warren"
 
         rng = random.Random(stable_seed(state.rng_seed, "warren"))

@@ -28,6 +28,8 @@ from .models import (
     CharacterProfile,
     Entity,
     GameStats,
+    GossipEdge,
+    NPCMemoryRecord,
     NPCProfile,
     CanonRecord,
     RoomProfile,
@@ -41,6 +43,7 @@ from .semantics import (
     place_anchor,
     WORLD_ANCHOR,
 )
+from .determinism import stable_seed
 from .bonds import (
     DRIFT_THRESHOLD,
     derive_disposition,
@@ -289,6 +292,7 @@ class GameState:
     messages: list[str] = field(default_factory=list)
     message_count: int = 0
     npc_profiles: dict[str, NPCProfile] = field(default_factory=dict)
+    gossip_edges: dict[str, GossipEdge] = field(default_factory=dict)
     pending_trade: dict[str, Any] | None = None
     flags: dict[str, Any] = field(default_factory=dict)
     last_talked_npc_name: str | None = None
@@ -332,6 +336,9 @@ class GameState:
     # (Phase D). Minted by the daily tick when standing crosses a threshold and the faction
     # can spend; realized (spawned) when the player next enters a zone.
     pending_backlash: list[dict[str, Any]] = field(default_factory=list)
+    # Days whose social graph spread has already run. Keeps repeated manual/day replay ticks
+    # from pushing gossip another hop in the same in-world day.
+    gossip_spread_days: set[int] = field(default_factory=set)
     # A stable handle for the player's *soul*, independent of the body being worn.
     # Body-swap reassigns player_id (the controlled body) but leaves this untouched, so
     # deeds and legend bind to the actor across possessions (§1.7).
@@ -697,6 +704,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             reward_item=reward_item,
             reward_qty=reward_qty,
         )
+        self.seed_gossip_edges_for_current_zone()
         return entity
 
     def spawn_prop(
@@ -776,6 +784,171 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         rumors, and readouts use (e.g. ['defiant', 'uncanny'])."""
         return [tag for tag, _weight in self.state.legend_ledger.top_tags(actor, n)]
 
+    def _gossip_zone(self) -> tuple[int, int]:
+        return (self.state.zone_x, self.state.zone_y)
+
+    def _gossip_edge_id(self, from_id: str, to_id: str) -> str:
+        zx, zy = self._gossip_zone()
+        return f"zone:{zx},{zy}:{from_id}->{to_id}"
+
+    def seed_gossip_edges_for_current_zone(self) -> int:
+        """Create placeholder same-zone directed gossip edges for realized NPCs."""
+        state = self.state
+        zone = self._gossip_zone()
+        npc_ids = sorted(
+            entity.id
+            for entity in state.entities.values()
+            if entity.kind == "npc" and entity.alive and entity.id in state.npc_profiles
+        )
+        created = 0
+        for from_id in npc_ids:
+            for to_id in npc_ids:
+                if from_id == to_id:
+                    continue
+                edge_id = self._gossip_edge_id(from_id, to_id)
+                if edge_id in state.gossip_edges:
+                    continue
+                state.gossip_edges[edge_id] = GossipEdge(
+                    id=edge_id,
+                    from_id=from_id,
+                    to_id=to_id,
+                    zone=zone,
+                    relationship="zone",
+                    trust=0.65,
+                    contact_chance=0.45,
+                    privacy_bias=0.0,
+                    created_turn=state.turn,
+                    created_day=state.day,
+                )
+                created += 1
+        return created
+
+    def _gossip_contact_occurs(self, edge: GossipEdge, day: int) -> bool:
+        roll = stable_seed(self.state.rng_seed, "gossip_contact", day, edge.id) % 10000
+        return roll < int(max(0.0, min(edge.contact_chance, 1.0)) * 10000)
+
+    def _gossip_memory_key(self, record: NPCMemoryRecord) -> str:
+        return record.source_event_id or record.id or record.claim
+
+    def _memory_can_spread(self, record: NPCMemoryRecord, edge: GossipEdge) -> bool:
+        if not record.shareable:
+            return False
+        if record.hops >= 2:
+            return False
+        if record.privacy == "secret":
+            return False
+        if (
+            record.privacy == "intimate"
+            and edge.privacy_bias < 0.5
+            and edge.trust < 0.8
+        ):
+            return False
+        if record.bucket == "conversation":
+            return (
+                record.subtype in {"conversation_summary", "conversation_gossip"}
+                and record.salience >= 2
+            )
+        return record.bucket in {"observation", "overheard", "gossip"}
+
+    def _spreadable_memories(
+        self, source_profile: NPCProfile, edge: GossipEdge
+    ) -> list[NPCMemoryRecord]:
+        candidates = [
+            record
+            for record in source_profile.memory_records
+            if self._memory_can_spread(record, edge)
+        ]
+        return sorted(
+            candidates,
+            key=lambda record: (
+                record.salience,
+                record.spread_weight,
+                record.confidence,
+                record.turn,
+                record.id,
+            ),
+            reverse=True,
+        )
+
+    def _receiver_knows_memory(
+        self, receiver_profile: NPCProfile, record: NPCMemoryRecord
+    ) -> bool:
+        source_key = self._gossip_memory_key(record)
+        return any(
+            self._gossip_memory_key(known) == source_key
+            for known in receiver_profile.memory_records
+        )
+
+    def spread_daily_gossip(self, day: int | None = None) -> int:
+        """Deterministically copy shareable memories across same-zone gossip edges."""
+        state = self.state
+        day = state.day if day is None else day
+        if day in state.gossip_spread_days:
+            return 0
+        state.gossip_spread_days.add(day)
+        self.seed_gossip_edges_for_current_zone()
+        zone = self._gossip_zone()
+        spread_count = 0
+        for edge in sorted(state.gossip_edges.values(), key=lambda edge: edge.id):
+            if edge.zone != zone or edge.created_day > day:
+                continue
+            if not self._gossip_contact_occurs(edge, day):
+                continue
+            source_entity = state.entities.get(edge.from_id)
+            receiver_entity = state.entities.get(edge.to_id)
+            if (
+                source_entity is None
+                or receiver_entity is None
+                or source_entity.kind != "npc"
+                or receiver_entity.kind != "npc"
+                or not source_entity.alive
+                or not receiver_entity.alive
+            ):
+                continue
+            source_profile = state.npc_profiles.get(edge.from_id)
+            receiver_profile = state.npc_profiles.get(edge.to_id)
+            if source_profile is None or receiver_profile is None:
+                continue
+            for record in self._spreadable_memories(source_profile, edge):
+                if self._receiver_knows_memory(receiver_profile, record):
+                    continue
+                confidence = round(
+                    max(0.05, min(record.confidence * edge.trust * 0.75, 1.0)),
+                    3,
+                )
+                tags = list(dict.fromkeys([*record.tags, "gossip"]))
+                if record.provenance == "implanted":
+                    tags = list(dict.fromkeys([*tags, "implanted_origin"]))
+                receiver_profile.add_memory(
+                    NPCMemoryRecord(
+                        id="",
+                        claim=record.claim,
+                        provenance="gossip",
+                        bucket="gossip",
+                        subtype="shared_memory",
+                        subject=record.subject,
+                        subject_refs=list(record.subject_refs),
+                        tags=tags,
+                        source_npc_id=edge.from_id,
+                        source_name=source_profile.name,
+                        speaker_names=list(record.speaker_names),
+                        place_key=record.place_key,
+                        turn=state.turn,
+                        confidence=confidence,
+                        salience=max(1, record.salience - 1),
+                        privacy="social"
+                        if record.privacy in {"public", "social"}
+                        else record.privacy,
+                        shareable=record.hops + 1 < 2,
+                        spread_weight=max(0.1, record.spread_weight * 0.5),
+                        hops=record.hops + 1,
+                        source_event_id=self._gossip_memory_key(record),
+                    )
+                )
+                spread_count += 1
+                break
+        return spread_count
+
     def record_deed(
         self,
         deed_type: str,
@@ -830,7 +1003,27 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         for witness in witnesses:
             profile = state.npc_profiles.get(witness.id)
             if profile is not None:
-                profile.remember(f"I saw you {deed.summary}.")
+                salience = max(1, min(5, int(round(deed.magnitude * 10))))
+                profile.add_memory(
+                    NPCMemoryRecord(
+                        id=f"{witness.id}:deed:{deed.id}",
+                        claim=f"The player {deed.summary}.",
+                        provenance="firsthand",
+                        bucket="observation",
+                        subtype="witnessed_deed",
+                        subject="the player",
+                        subject_refs=[state.player_soul_id],
+                        tags=["deed", deed.type, *deed.target_tags],
+                        place_key=deed.place_key,
+                        turn=state.turn,
+                        confidence=1.0,
+                        salience=salience,
+                        privacy="social",
+                        shareable=deed.visibility != "secret",
+                        spread_weight=1.0 + deed.magnitude,
+                        source_event_id=deed.id,
+                    )
+                )
         return deed
 
     def _resolve_role_deltas(
@@ -932,6 +1125,8 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             applied_any = True
         # Causal compression keeps the chronicle/voices reading a few arcs, not raw deeds.
         state.deed_ledger.compress()
+        if self.spread_daily_gossip(day=day):
+            applied_any = True
         state.simulated_through_turn = max(state.simulated_through_turn, state.turn)
         return applied_any
 
@@ -969,7 +1164,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             # depart), so a gradual drift down through the band still fires exactly one
             # estrangement moment when loyalty finally falls past the drift line.
             pledged = "follower" in profile.traits
-            personal = 1.5 if profile.memory else 1.0
+            personal = profile.player_memory_multiplier(state.player_soul_id)
             drift_bond(profile.bond, legend, profile.traits, personal=personal)
             if profile.bond.is_follower() and not pledged:
                 self._fire_bond_moment(profile, "join")

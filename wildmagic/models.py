@@ -391,6 +391,136 @@ class Curse:
 
 
 @dataclass
+class NPCMemoryRecord:
+    """Structured NPC memory.
+
+    `claim` is intentionally neutral. Dialogue rendering adds "I saw..." or
+    "someone told me..." framing from provenance instead of storing that framing here.
+    """
+
+    id: str
+    claim: str
+    provenance: str = "firsthand"
+    bucket: str = "observation"
+    subtype: str = ""
+    subject: str = ""
+    subject_refs: list[str] = field(default_factory=list)
+    tags: list[str] = field(default_factory=list)
+    source_npc_id: str | None = None
+    source_name: str | None = None
+    speaker_names: list[str] = field(default_factory=list)
+    place_key: str = ""
+    turn: int = 0
+    confidence: float = 1.0
+    salience: int = 1
+    privacy: str = "social"
+    shareable: bool = True
+    spread_weight: float = 1.0
+    hops: int = 0
+    source_event_id: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "claim": self.claim,
+            "provenance": self.provenance,
+            "bucket": self.bucket,
+            "subtype": self.subtype,
+            "subject": self.subject,
+            "subject_refs": list(self.subject_refs),
+            "tags": list(self.tags),
+            "source_npc_id": self.source_npc_id,
+            "source_name": self.source_name,
+            "speaker_names": list(self.speaker_names),
+            "place_key": self.place_key,
+            "turn": self.turn,
+            "confidence": self.confidence,
+            "salience": self.salience,
+            "privacy": self.privacy,
+            "shareable": self.shareable,
+            "spread_weight": self.spread_weight,
+            "hops": self.hops,
+            "source_event_id": self.source_event_id,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "NPCMemoryRecord":
+        return cls(
+            id=str(data.get("id") or ""),
+            claim=str(data.get("claim") or data.get("text") or ""),
+            provenance=str(data.get("provenance") or "firsthand"),
+            bucket=str(data.get("bucket") or "observation"),
+            subtype=str(data.get("subtype") or ""),
+            subject=str(data.get("subject") or ""),
+            subject_refs=[str(ref) for ref in data.get("subject_refs") or []],
+            tags=[str(tag) for tag in data.get("tags") or []],
+            source_npc_id=data.get("source_npc_id"),
+            source_name=data.get("source_name"),
+            speaker_names=[str(name) for name in data.get("speaker_names") or []],
+            place_key=str(data.get("place_key") or ""),
+            turn=int(data.get("turn") or 0),
+            confidence=float(data.get("confidence", 1.0)),
+            salience=int(data.get("salience") or 1),
+            privacy=str(data.get("privacy") or "social"),
+            shareable=bool(data.get("shareable", True)),
+            spread_weight=float(data.get("spread_weight", 1.0)),
+            hops=int(data.get("hops") or 0),
+            source_event_id=str(data.get("source_event_id") or ""),
+        )
+
+
+@dataclass
+class GossipEdge:
+    """Deterministic social connection used for daily memory spread."""
+
+    id: str
+    from_id: str
+    to_id: str
+    zone: tuple[int, int]
+    relationship: str = "zone"
+    trust: float = 0.65
+    contact_chance: float = 0.45
+    privacy_bias: float = 0.0
+    created_turn: int = 0
+    created_day: int = 0
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "from_id": self.from_id,
+            "to_id": self.to_id,
+            "zone": list(self.zone),
+            "relationship": self.relationship,
+            "trust": self.trust,
+            "contact_chance": self.contact_chance,
+            "privacy_bias": self.privacy_bias,
+            "created_turn": self.created_turn,
+            "created_day": self.created_day,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "GossipEdge":
+        raw_zone = data.get("zone") or (0, 0)
+        zone_values = list(raw_zone) if isinstance(raw_zone, (list, tuple)) else [0, 0]
+        zone = (
+            int(zone_values[0]) if len(zone_values) > 0 else 0,
+            int(zone_values[1]) if len(zone_values) > 1 else 0,
+        )
+        return cls(
+            id=str(data.get("id") or ""),
+            from_id=str(data.get("from_id") or ""),
+            to_id=str(data.get("to_id") or ""),
+            zone=zone,
+            relationship=str(data.get("relationship") or "zone"),
+            trust=float(data.get("trust", 0.65)),
+            contact_chance=float(data.get("contact_chance", 0.45)),
+            privacy_bias=float(data.get("privacy_bias", 0.0)),
+            created_turn=int(data.get("created_turn") or 0),
+            created_day=int(data.get("created_day") or 0),
+        )
+
+
+@dataclass
 class NPCProfile:
     """Persona and perception data for a talkable NPC, kept separate from Entity
     (which only carries physical/combat state) the same way Curse is kept separate."""
@@ -407,6 +537,7 @@ class NPCProfile:
     # gates which card TEXT is injected, it is never itself spoken.
     lore: dict[str, int] = field(default_factory=dict)
     memory: list[str] = field(default_factory=list)
+    memory_records: list[NPCMemoryRecord] = field(default_factory=list)
     conversation: list[dict[str, str]] = field(default_factory=list)
     wares: dict[str, int] = field(default_factory=dict)
     wanted_item: str | None = None
@@ -443,7 +574,133 @@ class NPCProfile:
             words.append("resents you")
         return words
 
-    def remember(self, text: str, limit: int = 12) -> None:
+    def _next_memory_id(self) -> str:
+        return f"{self.entity_id}:memory:{len(self.memory_records) + 1}"
+
+    @staticmethod
+    def _confidence_label(confidence: float, provenance: str) -> str:
+        if provenance == "overheard":
+            return "hearsay"
+        if provenance == "gossip":
+            return "rumor" if confidence >= 0.35 else "thin rumor"
+        if confidence >= 0.85:
+            return "certain"
+        if confidence >= 0.6:
+            return "credible"
+        if confidence >= 0.35:
+            return "uncertain"
+        return "thin rumor"
+
+    @staticmethod
+    def _render_memory_frame(record: NPCMemoryRecord) -> str:
+        if record.provenance == "implanted":
+            if record.bucket == "conversation":
+                return "This feels like your own past conversation with the player."
+            return "This feels like your own memory, though magic shaped it."
+        if record.provenance == "firsthand":
+            if record.bucket == "conversation":
+                return "This is from your own past conversation with the player."
+            return "You personally witnessed or experienced this."
+        if record.provenance == "overheard":
+            if record.source_name:
+                return f"You overheard {record.source_name} say this."
+            return "You overheard this nearby."
+        if record.provenance == "gossip":
+            if record.source_name:
+                return f"{record.source_name} told you this."
+            return "People are saying this."
+        return "This is a memory note."
+
+    @staticmethod
+    def _legacy_memory_line(record: NPCMemoryRecord) -> str:
+        if record.provenance == "implanted":
+            return record.claim
+        if record.provenance == "firsthand" and record.bucket == "observation":
+            return (
+                f"I saw {record.claim[0].lower() + record.claim[1:]}"
+                if record.claim
+                else ""
+            )
+        if record.provenance == "overheard":
+            source = f" {record.source_name}" if record.source_name else ""
+            return f"I overheard{source}: {record.claim}"
+        if record.provenance == "gossip":
+            source = (
+                f"{record.source_name} says" if record.source_name else "People say"
+            )
+            return f"{source}: {record.claim}"
+        return record.claim
+
+    def add_memory(
+        self,
+        record: NPCMemoryRecord,
+        *,
+        limit: int = 12,
+        mirror_legacy: bool = True,
+    ) -> None:
+        if not record.id:
+            record.id = self._next_memory_id()
+        record.claim = " ".join(record.claim.split())
+        if not record.claim:
+            return
+        self.memory_records.append(record)
+        self.memory_records = self.memory_records[-limit:]
+        if mirror_legacy:
+            legacy = self._legacy_memory_line(record)
+            if legacy:
+                self.memory.append(legacy)
+                self.memory = self.memory[-limit:]
+
+    def remember(
+        self,
+        text: str,
+        limit: int = 12,
+        *,
+        provenance: str = "firsthand",
+        bucket: str = "observation",
+        subtype: str = "",
+        subject: str = "",
+        subject_refs: list[str] | None = None,
+        tags: list[str] | None = None,
+        source_npc_id: str | None = None,
+        source_name: str | None = None,
+        speaker_names: list[str] | None = None,
+        place_key: str = "",
+        turn: int = 0,
+        confidence: float = 1.0,
+        salience: int = 1,
+        privacy: str = "social",
+        shareable: bool = True,
+        spread_weight: float = 1.0,
+        hops: int = 0,
+        source_event_id: str = "",
+    ) -> None:
+        text = " ".join(str(text).split())
+        if not text:
+            return
+        record = NPCMemoryRecord(
+            id=self._next_memory_id(),
+            claim=text,
+            provenance=provenance,
+            bucket=bucket,
+            subtype=subtype,
+            subject=subject,
+            subject_refs=list(subject_refs or []),
+            tags=list(tags or []),
+            source_npc_id=source_npc_id,
+            source_name=source_name,
+            speaker_names=list(speaker_names or []),
+            place_key=place_key,
+            turn=turn,
+            confidence=confidence,
+            salience=salience,
+            privacy=privacy,
+            shareable=shareable,
+            spread_weight=spread_weight,
+            hops=hops,
+            source_event_id=source_event_id,
+        )
+        self.add_memory(record, limit=limit, mirror_legacy=False)
         self.memory.append(text)
         self.memory = self.memory[-limit:]
 
@@ -452,14 +709,48 @@ class NPCProfile:
         self.conversation = self.conversation[-limit:]
 
     def to_dialogue_context(self) -> dict[str, Any]:
+        observations: list[dict[str, Any]] = []
+        overheard: list[dict[str, Any]] = []
+        gossip: list[dict[str, Any]] = []
+        conversation_summaries: list[dict[str, Any]] = []
+        for record in sorted(
+            self.memory_records, key=lambda rec: (rec.salience, rec.turn), reverse=True
+        ):
+            rendered = {
+                "claim": record.claim,
+                "frame": self._render_memory_frame(record),
+                "confidence": self._confidence_label(
+                    record.confidence, record.provenance
+                ),
+            }
+            if record.source_name:
+                rendered["source"] = record.source_name
+            if record.subject:
+                rendered["subject"] = record.subject
+            if record.tags:
+                rendered["tags"] = list(record.tags[:4])
+            if record.bucket == "conversation":
+                conversation_summaries.append(rendered)
+            elif record.provenance == "overheard" or record.bucket == "overheard":
+                overheard.append(rendered)
+            elif record.provenance == "gossip" or record.bucket == "gossip":
+                gossip.append(rendered)
+            elif record.bucket == "observation":
+                observations.append(rendered)
+
         context: dict[str, Any] = {
             "name": self.name,
             "role": self.role,
             "backstory": self.backstory,
             "appearance": self.appearance,
             "traits": list(self.traits),
-            "things_i_have_noticed": list(self.memory),
-            "recent_conversation": list(self.conversation),
+            "things_i_personally_witnessed": observations[:4],
+            "things_i_overheard": overheard[:3],
+            "gossip_i_have_heard": gossip[:3],
+            "conversation_memory": {
+                "recent_exchanges": list(self.conversation),
+                "older_summaries": conversation_summaries[:4],
+            },
         }
         # How I feel about you (Phase F) — so dialogue sounds like someone who admires,
         # fears, or resents you, not a blank slate. Surfaced as words, never numbers.
@@ -483,6 +774,24 @@ class NPCProfile:
                 "I have already received my requested item and rewarded the player."
             )
         return context
+
+    def player_memory_multiplier(self, player_soul_id: str) -> float:
+        """How strongly reputation should land based on what this NPC knows of the player."""
+        best = 1.0
+        for record in self.memory_records:
+            if player_soul_id not in record.subject_refs:
+                continue
+            if record.provenance in {"firsthand", "implanted"}:
+                best = max(best, 1.5)
+            elif record.provenance == "overheard":
+                best = max(best, 1.0 + 0.25 * max(0.0, min(record.confidence, 1.0)))
+            elif record.provenance == "gossip":
+                best = max(best, 1.0 + 0.1 * max(0.0, min(record.confidence, 1.0)))
+        # Legacy saves/tests may have only plain strings. Preserve the old behavior until
+        # all memory writers use structured records.
+        if best == 1.0 and not self.memory_records and self.memory:
+            return 1.5
+        return best
 
 
 @dataclass
