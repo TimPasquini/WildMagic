@@ -298,6 +298,13 @@ class Entity:
             "hands": None,
         }
     )
+    # Equipment slot keys this creature has marked as their spell focus -- the implement(s)
+    # the wild-magic resolver should weigh heavily when flavoring a cast. A spell focus is a
+    # *mark on an already-equipped item*, not a separate slot, so a focus grants exactly its
+    # own slot's stats and needs no special equip path. A list (not a single value) so the
+    # design scales to multiple simultaneous foci; current play marks at most one. Per-entity,
+    # so it follows body-swap with the rest of the loadout. See resolve_foci / focus_prompt_block.
+    focus_slots: list[str] = field(default_factory=list)
     description: str | None = None
     details: dict[str, Any] = field(default_factory=dict)
     # Per-entity state. Once global on GameState (player-only); now carried by the
@@ -349,6 +356,7 @@ class Entity:
                     "attack": self.attack,
                     "defense": self.defense,
                     "equipment": self.equipment,
+                    "focus_slots": list(self.focus_slots),
                 }
             )
         else:

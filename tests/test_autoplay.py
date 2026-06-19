@@ -7,11 +7,12 @@ from wildmagic.autoplay import (
     AgentObservation,
     CampaignConfig,
     CampaignRunner,
+    AUTOPLAY_RUN_THEMES,
     Finding,
     InvariantChecker,
     OllamaAgent,
-    SPELL_FOCI,
     adjacent_options,
+    autoplay_run_theme_for_seed,
     avoid_commands_from_history,
     cluster_notes,
     compact_messages,
@@ -23,7 +24,6 @@ from wildmagic.autoplay import (
     prior_cast_commands,
     random_seed_base,
     result_summary,
-    spell_focus_for_seed,
     validate_agent_command,
 )
 from wildmagic.models import WALL
@@ -273,7 +273,7 @@ def test_agent_observation_compacts_long_messages_and_exposes_decision_hints() -
         },
         avoid_commands=["move north"],
         expedition_direction="east",
-        spell_focus="terrain or battlefield reshaping",
+        autoplay_run_theme="terrain or battlefield reshaping",
     )
 
     payload = observation.to_prompt_dict()
@@ -293,7 +293,7 @@ def test_agent_observation_compacts_long_messages_and_exposes_decision_hints() -
         for hint in payload["decision_hints"]
     )
     assert any(
-        "Current spell focus: terrain" in hint for hint in payload["decision_hints"]
+        "Current run theme: terrain" in hint for hint in payload["decision_hints"]
     )
     assert payload["immediate_context_read_first"]["local_map"] == []
     assert payload["prior_spells_already_cast_do_not_repeat"] == [
@@ -347,16 +347,16 @@ def test_expedition_direction_is_stable_from_seed() -> None:
     assert expedition_direction_for_seed(None, 2) == "south"
 
 
-def test_spell_focus_is_stable_from_seed_and_episode() -> None:
-    assert spell_focus_for_seed(1, 1) == spell_focus_for_seed(1, 1)
-    assert spell_focus_for_seed(1, 1) != spell_focus_for_seed(1, 2)
+def test_autoplay_run_theme_is_stable_from_seed_and_episode() -> None:
+    assert autoplay_run_theme_for_seed(1, 1) == autoplay_run_theme_for_seed(1, 1)
+    assert autoplay_run_theme_for_seed(1, 1) != autoplay_run_theme_for_seed(1, 2)
 
 
-def test_spell_focus_palette_is_large_and_not_copyable_commands() -> None:
-    assert len(SPELL_FOCI) >= 30
-    assert len(set(SPELL_FOCI)) == len(SPELL_FOCI)
-    assert all(not focus.lower().startswith("cast ") for focus in SPELL_FOCI)
-    assert all("<" not in focus and ">" not in focus for focus in SPELL_FOCI)
+def test_autoplay_run_theme_palette_is_large_and_not_copyable_commands() -> None:
+    assert len(AUTOPLAY_RUN_THEMES) >= 30
+    assert len(set(AUTOPLAY_RUN_THEMES)) == len(AUTOPLAY_RUN_THEMES)
+    assert all(not theme.lower().startswith("cast ") for theme in AUTOPLAY_RUN_THEMES)
+    assert all("<" not in theme and ">" not in theme for theme in AUTOPLAY_RUN_THEMES)
 
 
 def test_autoplay_default_seed_base_is_randomized_and_overridable() -> None:

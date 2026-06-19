@@ -369,6 +369,14 @@ class GameState:
     room_profiles: dict[str, RoomProfile] = field(default_factory=dict)
     tile_rooms: dict[str, str] = field(default_factory=dict)
     canon_records: dict[str, CanonRecord] = field(default_factory=dict)
+    # Per-item-type flavor that must outlive the Entity it was discovered on. The
+    # inventory is fungible-by-name (item key -> count, no per-instance storage), so an
+    # item's Entity.description and any Investigate-authored description are lost the moment
+    # it is picked up. This store keeps that flavor keyed by the normalized inventory key
+    # (item_type or name), so it survives pickup and rides into the resolver when the item is
+    # marked as a spell focus. Deterministic: rebuilt by the same pickup/investigate commands
+    # on replay (investigate writes flow through canon side effects). See set_item_lore.
+    item_lore: dict[str, dict[str, Any]] = field(default_factory=dict)
     _player_taking_damage: bool = False
     # Stable empty stashes returned by the inventory/curses properties when no body
     # is controlled yet (mid-generation). Never the real store once a body exists.
@@ -1688,6 +1696,41 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         )
         self.state.canon_records[record.id] = record
         return record
+
+    # Source precedence for item flavor: a discovered Investigate description is richer and
+    # more authoritative than the plain Entity.description copied at pickup, so it must never
+    # be downgraded. Equal-tier writes keep the longer text. This keeps the merge
+    # order-independent (Investigate always wins regardless of pickup order), so replay is
+    # deterministic. See GameState.item_lore.
+    _ITEM_LORE_SOURCE_RANK = {"description": 1, "generated": 1, "investigated": 2}
+
+    def set_item_lore(
+        self,
+        item_key: str,
+        display_name: str,
+        description: str,
+        *,
+        source: str = "description",
+    ) -> None:
+        key = normalize_id(str(item_key or ""))
+        text = " ".join(str(description or "").split())
+        if not key or not text:
+            return
+        rank = self._ITEM_LORE_SOURCE_RANK.get(source, 1)
+        existing = self.state.item_lore.get(key)
+        if existing is not None:
+            existing_rank = self._ITEM_LORE_SOURCE_RANK.get(existing.get("source"), 1)
+            if rank < existing_rank:
+                return
+            if rank == existing_rank and len(text) <= len(
+                str(existing.get("description") or "")
+            ):
+                return
+        self.state.item_lore[key] = {
+            "display_name": str(display_name or item_key),
+            "description": text,
+            "source": source,
+        }
 
     @property
     def region(self) -> Region:
