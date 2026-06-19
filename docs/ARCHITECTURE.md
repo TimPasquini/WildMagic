@@ -115,7 +115,8 @@ anything. It holds one builder per public-dict shape — `entity_card`, `item_ca
 and composes them into the two top-level views: `spell_context_view` (the resolver packet
 returned by `engine.context_for_llm`) and `state_summary` (exposed as `replay_summary_view`
 for `actions.summarize_state`/replay records and `inspection_view` for CLI/GUI inspection).
-Everything here is pure reads; `tile_counts` lives here too. See
+`resolve_foci` turns the caster's marked focus slots into the resolver's `spell_foci` flavor
+list. Everything here is pure reads; `tile_counts` lives here too. See
 `docs/WILD_MAGIC_STATE_SURFACE_PLAN.md` (Stage 2). Imports only leaf modules
 (`models`, `capabilities`, `spell_contract`, `templates`), never `engine`, so it sits below
 the engine in the import order despite reading from it at call time. Active `tile_flows`
@@ -186,7 +187,10 @@ Inventory management and item use:
 `spawn_item`, `use_item`, `drop_item`, `find_inventory_item`, `find_item_in`,
 `consume_inventory_item`, `add_inventory_item`, `_apply_item_use_spec`, `_apply_item_effect`,
 `_roll_item_amount`, `equip_item`, `unequip_item`, `pick_up_items_at_player`.
-Also holds `_EQUIPMENT_SLOT_ALIASES`.
+`pick_up_items_at_player` preserves a picked-up item's description into `GameState.item_lore`
+(keyed by inventory key) so its flavor survives the Entity's removal. Spell-focus marking lives
+here too: `set_focus`/`clear_focus` mark an already-equipped slot as a spell focus (a mark, not a
+new slot), resolved via `_equipped_slot_by_item`. Also holds `_EQUIPMENT_SLOT_ALIASES`.
 
 ### `wildmagic/ai.py` — `_AIMixin`
 NPC perception and turn execution:
@@ -408,10 +412,13 @@ Run `python -m wildmagic.spell_contract --write-docs` after changing the operati
 catalogue to refresh the generated block in `docs/WILD_MAGIC_SCHEMA.md`.
 
 ### `wildmagic/prompts.py`
-System prompt strings only — `SYSTEM_PROMPT`, `DIALOGUE_SYSTEM_PROMPT`,
-`TRADE_SYSTEM_PROMPT`, `TOWN_SYSTEM_PROMPT`, `LORE_EXTRACTION_SYSTEM_PROMPT`,
-`PROPS_SYSTEM_PROMPT`, `DEED_INTERPRETER_SYSTEM_PROMPT`, `FLESH_SYSTEM_PROMPT`, and
-`CANON_SYSTEM_PROMPT`. No logic; imported by the provider modules.
+System prompt strings — `DIALOGUE_SYSTEM_PROMPT`, `TRADE_SYSTEM_PROMPT`, `TOWN_SYSTEM_PROMPT`,
+`LORE_EXTRACTION_SYSTEM_PROMPT`, `PROPS_SYSTEM_PROMPT`, `DEED_INTERPRETER_SYSTEM_PROMPT`,
+`FLESH_SYSTEM_PROMPT`, and `CANON_SYSTEM_PROMPT` (the monolithic resolver prompt is gone; the
+wild-magic system prompt is assembled in `capabilities.py`). Also holds the small per-cast
+addendum builders spliced into the resolver system prompt — `region_prompt_block`,
+`caster_prompt_block`, and `focus_prompt_block` (the marked spell focus's heavily-weighted
+flavor). Imported by the provider modules.
 
 ### `wildmagic/fallbacks.py`
 Pure-Python regex spell parser used when the LLM is unavailable or returns garbage.
@@ -503,7 +510,9 @@ All shared data types and tile constants. No game logic.
   buckets while keeping the legacy `memory: list[str]` mirror compatible. `GossipEdge`
   stores deterministic NPC-to-NPC social spread links. `RoomProfile` is the deterministic
   semantic seed layer for richer content; `CanonRecord` stores per-run materialized text
-  or descriptions that have become game canon. `Entity.details` stores engine-side
+  or descriptions that have become game canon. `Entity` carries its own per-body loadout —
+  `equipment` (slot -> item) and `focus_slots` (the equipment slots marked as spell foci, a
+  mark on existing gear rather than a new slot). `Entity.details` stores engine-side
   nonmechanical metadata such as a book's procedural shelf card; feature-specific
   context builders decide what, if anything, becomes visible to an LLM.
   `Curse` stores both semantic prompt text and optional engine-owned mechanics; unknown
@@ -516,7 +525,7 @@ All hand-authored game content and tunable constants:
 - Enemy template lists: `WILD_ENEMY_TEMPLATES`, `LEGION_ENEMY_TEMPLATES`
 - Faction hostility table: `FACTION_HOSTILITIES`
 - Item use specs: `ITEM_USE_SPECS`, `DEFAULT_ITEM_USE_SPEC`
-- Equipment specs: `EQUIPMENT_SPECS`
+- Equipment specs: `EQUIPMENT_SPECS`; curated spell-focus flavor: `FOCUS_SPECS`
 - Trap specs: `TRAP_SPECS`, `LOCKED_DOOR_KEYS`
 - Town generation data: `_TOWN_LOCATIONS`, `_TOWN_DEFINING_TRAITS`, `_TOWN_SITUATIONS`,
   `_TOWN_SETTLEMENT_TYPES`, `_TOWN_GEN_TIMEOUT`, `_BUILDING_SIZES`, `_DEFAULT_BUILDING_SIZE`,

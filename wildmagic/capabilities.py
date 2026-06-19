@@ -1451,12 +1451,13 @@ def assemble_resolver_system_prompt(
     *,
     region_block: str = "",
     caster_block: str = "",
+    focus_block: str = "",
     cards: tuple[CapabilityCard, ...] = CAPABILITY_CARDS,
 ) -> str:
     """Build the full resolver system prompt: the always-on core, the capability index (the
     menu of mechanics that *can* be loaded), the mechanics blocks for the cards this spell
-    routes to, then the region/caster addenda (already rendered by the caller). This is the
-    sole resolver-prompt path — see docs/CAPABILITY_ROUTING.md."""
+    routes to, then the region/caster/focus addenda (already rendered by the caller). This is
+    the sole resolver-prompt path — see docs/CAPABILITY_ROUTING.md."""
     selected = select_cards(spell_text, cards=cards)
     parts = [
         CORE_PROMPT.rstrip("\n"),
@@ -1467,4 +1468,4 @@ def assemble_resolver_system_prompt(
     blocks = assemble_card_blocks(selected)
     if blocks:
         parts += ["", "Mechanics loaded for this spell:", blocks]
-    return "\n".join(parts) + "\n" + region_block + caster_block
+    return "\n".join(parts) + "\n" + region_block + caster_block + focus_block

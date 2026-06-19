@@ -11,6 +11,7 @@ from typing import Any
 from .game_data import (
     CLERK_NOTICES,
     EQUIPMENT_SPECS,
+    FOCUS_SPECS,
     LEGION_ENEMY_TEMPLATES,
     LOCKED_DOOR_KEYS,
     TRAP_SPECS,
@@ -572,7 +573,10 @@ class _GenerationMixin:
                 }
                 glyph = slot_glyphs.get(EQUIPMENT_SPECS[gear_name]["slot"], "[")
                 x, y = self._random_open_tile_in_room(room)
-                self.spawn_item(gear_name, glyph, x, y, gear_name)
+                gear = self.spawn_item(gear_name, glyph, x, y, gear_name)
+                focus_spec = FOCUS_SPECS.get(gear_name.strip().lower())
+                if focus_spec and focus_spec.get("description"):
+                    gear.description = focus_spec["description"]
             self._spawn_props_in_room(room, self.state.depth)
 
         # A literal dungeon: the Empire's cells, holding people you can free (content
@@ -650,7 +654,10 @@ class _GenerationMixin:
             glyph = {"weapon": "/", "charm": "*"}.get(
                 EQUIPMENT_SPECS[gear_name]["slot"], "["
             )
-            self.spawn_item(gear_name, glyph, ix, iy, gear_name)
+            cache_gear = self.spawn_item(gear_name, glyph, ix, iy, gear_name)
+            cache_focus_spec = FOCUS_SPECS.get(gear_name.strip().lower())
+            if cache_focus_spec and cache_focus_spec.get("description"):
+                cache_gear.description = cache_focus_spec["description"]
             knower = self.rng.choice(knowers)
             self.state.npc_profiles[knower.id].lead = {
                 "item": gear_name,

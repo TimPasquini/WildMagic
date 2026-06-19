@@ -23,10 +23,10 @@ from .autoplay import (
     adjacent_options,
     avoid_commands_from_history,
     compact_messages,
+    autoplay_run_theme_for_seed,
     expedition_direction_for_seed,
     local_map_view,
     result_summary,
-    spell_focus_for_seed,
     validate_agent_command,
 )
 from .config import DEFAULT_MODEL, audit_dir, get_config_value, set_config_value
@@ -165,7 +165,7 @@ class VisualAutoplayController:
         self.expedition_direction = expedition_direction_for_seed(
             None, int(time.time())
         )
-        self.spell_focus = spell_focus_for_seed(None, int(time.time()))
+        self.autoplay_run_theme = autoplay_run_theme_for_seed(None, int(time.time()))
         self.death_restart_at: float | None = None
         if enabled:
             self.start()
@@ -216,7 +216,9 @@ class VisualAutoplayController:
         self.expedition_direction = expedition_direction_for_seed(
             self.ui.session.seed, int(time.time())
         )
-        self.spell_focus = spell_focus_for_seed(self.ui.session.seed, int(time.time()))
+        self.autoplay_run_theme = autoplay_run_theme_for_seed(
+            self.ui.session.seed, int(time.time())
+        )
         self.death_restart_at = None
 
     def toggle(self) -> None:
@@ -364,7 +366,7 @@ class VisualAutoplayController:
             last_result=self.last_result,
             avoid_commands=avoid,
             expedition_direction=self.expedition_direction,
-            spell_focus=self.spell_focus,
+            autoplay_run_theme=self.autoplay_run_theme,
             nudge=(
                 "You are being watched in the graphical UI. Do not merely wander. Rotate through visible "
                 "systems: inspect/examine/investigate rooms, read books, talk to NPCs, fight or control "
@@ -390,7 +392,7 @@ class VisualAutoplayController:
         lines = [
             (
                 f"AI Watch: {self.status}   heading {self.expedition_direction}   "
-                f"spell {self.spell_focus}   F8 stop  F9 pause  F10 step",
+                f"theme {self.autoplay_run_theme}   F8 stop  F9 pause  F10 step",
                 ACCENT,
             )
         ]
@@ -1305,6 +1307,18 @@ class GameUI:
                         self.inventory_right_cursor = (
                             self.inventory_right_cursor + 1
                         ) % len(inventory_items)
+                return
+            elif event.key == pygame.K_f:
+                # Toggle the selected equipped slot as the spell focus (left pane only).
+                # Routes through the same focus/unfocus commands the CLI uses.
+                if self.inventory_pane == 0:
+                    slot = slots[self.inventory_left_cursor]
+                    player = self.engine.state.player
+                    if player.equipment.get(slot):
+                        if slot in player.focus_slots:
+                            self.execute_command(f"unfocus {slot}")
+                        else:
+                            self.execute_command(f"focus {slot}")
                 return
             elif event.key in (
                 pygame.K_RETURN,
@@ -2365,7 +2379,8 @@ class GameUI:
 
                 item = player.equipment.get(slot)
                 item_display = f"{item}" if item else "(empty)"
-                display_text = f"{slot:<7} : {item_display}"
+                focus_mark = " *focus*" if slot in player.focus_slots else ""
+                display_text = f"{slot:<7} : {item_display}{focus_mark}"
 
                 if item:
                     color = GOLD if is_selected else TEXT
@@ -2443,7 +2458,7 @@ class GameUI:
                     self.screen.blit(item_surf, (rx, qy))
 
             hint_surf = self.small_font.render(
-                "◄► Switch Pane  •  ▲▼ Select  •  Enter/E Equip  •  Enter/U Unequip  •  Esc Close",
+                "◄► Switch Pane  •  ▲▼ Select  •  Enter/E Equip  •  Enter/U Unequip  •  F Focus  •  Esc Close",
                 True,
                 MUTED,
             )

@@ -602,6 +602,18 @@ class GameSession:
                 success = self.engine.unequip_item(slot_name) if slot_name else False
                 if not slot_name:
                     explicit_messages = ["Unequip what? Specify a slot or item name."]
+            elif verb in {"focus", "attune"}:
+                action = "focus"
+                item_name = command_argument(original_command, tokens)
+                success = self.engine.set_focus(item_name) if item_name else False
+                if not item_name:
+                    explicit_messages = [
+                        "Focus through what? Name an equipped item or slot."
+                    ]
+            elif verb in {"unfocus", "unattune"}:
+                action = "unfocus"
+                slot_name = command_argument(original_command, tokens)
+                success = self.engine.clear_focus(slot_name)
             elif verb in {"possess", "swap", "inhabit"}:
                 action = "possess"
                 before_id = self.engine.state.player_id
@@ -1591,6 +1603,9 @@ class GameSession:
                 [f"You can make nothing more of it. ({resolution.error})"],
             )
         applied = engine.add_canon_record(resolution.record)
+        # Mirror the replay path (apply_recorded_canon) so live investigate writes item_lore
+        # through the same helper rather than a separate code path.
+        self._apply_canon_record_side_effects(applied)
         self._canon_apply_buffer.append(applied.to_dict())
         if secret_here:
             slot["status"] = "clued"
@@ -1636,6 +1651,12 @@ class GameSession:
             "turn_cost": 1,
             "distance_band": band,
         }
+        if entity.kind == "item":
+            # Carry the inventory key (item_type or name) so the canon side-effect can
+            # store the materialized description in item_lore under the same key the
+            # inventory/equipment use — even at replay time when the source entity is gone.
+            engine_choices["item_inventory_key"] = entity.item_type or entity.name
+            engine_choices["item_display_name"] = entity.name
         claim_quota = 0
         if entity.kind == "npc":
             profile = state.npc_profiles.get(entity.id)
@@ -2693,6 +2714,17 @@ class GameSession:
         return applied
 
     def _apply_canon_record_side_effects(self, record: CanonRecord) -> None:
+        # Item-detail records carry the inventory key in engine_choices; persist their
+        # materialized description into item_lore so it survives pickup. Runs from both the
+        # live investigate path and replay's apply_recorded_canon, so the two stay in sync.
+        item_key = str((record.engine_choices or {}).get("item_inventory_key") or "")
+        if item_key:
+            self.engine.set_item_lore(
+                item_key,
+                str(record.engine_choices.get("item_display_name") or item_key),
+                record.summary or record.text,
+                source="investigated",
+            )
         attachment = record.attachment if isinstance(record.attachment, dict) else {}
         if attachment.get("kind") != "prop":
             return
@@ -2861,7 +2893,7 @@ def _parse_rest_arg(arg: str) -> tuple[float | None, float | None, str | None]:
 
 def command_help() -> list[str]:
     return [
-        "Commands: move north/south/east/west, open, descend, ascend, wait (recover 1 MP), rest [hours | until <time>] (camp 8h by default), cast <spell>, target <x> <y>, talk <message>, possess [name], examine, read [book], use <item>, equip <item>, unequip <slot>, drop <item>, pickup, inspect (or inventory), curses, journal (or rumors), standing, wares (or browse), quit.",
+        "Commands: move north/south/east/west, open, descend, ascend, wait (recover 1 MP), rest [hours | until <time>] (camp 8h by default), cast <spell>, target <x> <y>, talk <message>, possess [name], examine, read [book], use <item>, equip <item>, unequip <slot>, focus <item> (set spell focus), unfocus, drop <item>, pickup, inspect (or inventory), curses, journal (or rumors), standing, wares (or browse), quit.",
         "Targeting: click a square (or 'target <x> <y>') to mark it - a free action, no turn. Then 'cast fireball at target', 'teleport to target', etc. aim there, and the standard spark/frost spells hit your marked foe. Click it again, 'untarget', or Esc to clear.",
         "Possessing: 'possess' (or 'swap'/'inhabit') leaps your soul into the nearest body - or 'possess <name>' for a specific one. You become that body entirely: its stats, its hit points, its inventory. The body you leave drops as an inert husk. Costs a turn.",
         "Reading: stand on or next to a book and 'read' (or 'read <name>' to pick one). The first reading takes a turn and fixes the book's title and pages forever; rereading is free. What books claim about the world is hearsay - but the world has a way of honoring what gets written down.",
@@ -2874,6 +2906,7 @@ def command_help() -> list[str]:
         "Talking: stand next to an NPC and 'talk <what you want to say>' (or 'speak'/'say') to start a conversation - it costs a turn, just like any other action.",
         "Trading: some NPCs deal in goods and gold - 'wares' (or 'browse') lists what they have for trade, a free look. Haggle naturally through 'talk' - if a real offer comes together, you'll get a confirmation prompt to 'accept' (or 'yes') or 'reject' (or 'no') before anything changes hands.",
         "Equipment: weapons, armor, clothing, and charms go in their own slots and add to your attack/defense while worn. Equip with 'equip <item>' (or 'wear'/'wield'); take gear off with 'unequip <slot_or_item>' (or 'remove <item>').",
+        "Spell focus: mark any one equipped item as your spell focus and the wild-magic resolver weighs it heavily when flavoring your casts. Set it with 'focus <item_or_slot>' (or 'attune'); clear it with 'unfocus'. It stays on your normal gear, so it keeps its usual stats.",
         "Standard spells (deterministic, no wild magic risk): spark, frost, heal, ward, reveal. Type the name directly, e.g. 'frost' -- 'cast frost' instead asks wild magic to improvise one.",
         "Short movement aliases also work: n, s, e, w. Walk into an enemy to attack it.",
     ]
@@ -3125,7 +3158,9 @@ def describe_state(engine: GameEngine) -> list[str]:
         )
     equipment = (
         ", ".join(
-            f"{slot}: {item}" for slot, item in sorted(player.equipment.items()) if item
+            f"{slot}: {item}" + (" [focus]" if slot in player.focus_slots else "")
+            for slot, item in sorted(player.equipment.items())
+            if item
         )
         or "none"
     )

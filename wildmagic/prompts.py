@@ -105,6 +105,36 @@ def caster_prompt_block(caster_profile: dict | None) -> str:
     return "\n".join(lines) + "\n"
 
 
+def focus_prompt_block(foci: list[dict] | None) -> str:
+    """Per-cast addendum: the implement(s) the caster channels through (their spell foci).
+
+    A spell focus is the single strongest flavor lever short of the spell words themselves --
+    it should steer imagery, element, and tone -- but it must not override the spell's stated
+    intent (a fire-orb focus should not turn "heal me" into a burn). Empty list -> no block, so
+    a caster with no focus marked spends no tokens here.
+
+    Power is carried in the focus data but does not yet scale magnitudes; when it should, branch
+    on focus["power"] here exactly as Attunement shifts the bands in caster_prompt_block."""
+    if not foci:
+        return ""
+    lines = [
+        "",
+        "Spell focus (the implement the caster channels through -- weigh it HEAVILY in this",
+        "spell's flavor: let it steer imagery, element, and tone. Shape the flavor when",
+        "compatible; do NOT override the spell's stated intent):",
+    ]
+    for focus in foci:
+        name = str(focus.get("name") or "a focus").strip()
+        lines.append(f"- The caster channels through: {name}.")
+        description = str(focus.get("description") or "").strip()
+        if description:
+            lines.append(f"  What it is: {description}")
+        themes = focus.get("themes")
+        if themes:
+            lines.append(f"  Its themes: {', '.join(str(t) for t in themes)}.")
+    return "\n".join(lines) + "\n"
+
+
 DIALOGUE_SYSTEM_PROMPT = """You are voicing a single non-player character (NPC) in a turn-based tile roguelike.
 You will receive a JSON object describing who you are, what you have personally witnessed
 recently, your conversation so far, and what the player just said to you.

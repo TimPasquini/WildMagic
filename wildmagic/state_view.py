@@ -25,6 +25,8 @@ from typing import TYPE_CHECKING, Any
 
 from .capabilities import select_cards, selected_effect_types
 from .curses import curse_card
+from .game_data import FOCUS_SPECS
+from .normalize import normalize_id
 from .models import (
     CharacterProfile,
     DAMAGE_TYPES,
@@ -64,6 +66,37 @@ def item_card(entity: "Entity", engine: "GameEngine") -> dict[str, Any]:
         "tags": sorted(entity.tags),
         **({"traits": list(entity.traits)} if entity.traits else {}),
     }
+
+
+def resolve_foci(engine: "GameEngine") -> list[dict[str, Any]]:
+    """The spell foci the controlled entity has marked, resolved to resolver-facing flavor.
+
+    A focus is a mark on an already-equipped item (`Entity.focus_slots`): for each marked,
+    occupied slot we read the equipped item, then enrich it with any discovered `item_lore`
+    description and curated `FOCUS_SPECS` metadata (themes/power, plus a description fallback).
+    Returns a list (empty when nothing is marked) so multiple simultaneous foci need no
+    call-site changes. Power is carried but does not yet scale magnitudes."""
+    player = engine.state.player
+    foci: list[dict[str, Any]] = []
+    for slot in player.focus_slots:
+        item = player.equipment.get(slot)
+        if not item:
+            continue
+        lore = engine.state.item_lore.get(normalize_id(item)) or {}
+        spec = FOCUS_SPECS.get(item.strip().lower()) or {}
+        entry: dict[str, Any] = {
+            "name": lore.get("display_name") or item,
+            "slot": slot,
+        }
+        description = lore.get("description") or spec.get("description") or ""
+        if description:
+            entry["description"] = description
+        if spec.get("themes"):
+            entry["themes"] = list(spec["themes"])
+        if spec.get("power") is not None:
+            entry["power"] = int(spec["power"])
+        foci.append(entry)
+    return foci
 
 
 def room_card(
@@ -287,6 +320,11 @@ def spell_context_view(
         # appearance/backstory/signature flavor lenses, so the resolver styles
         # casts for the soul-in-the-body rather than a hardcoded "player".
         "caster_profile": (player.profile or CharacterProfile()).to_public_dict(),
+        # Spell foci the caster has marked (Entity.focus_slots) -- the implement(s) the
+        # resolver should weigh heavily when flavoring this cast. Consumed by the prompt
+        # builder (spliced into the system prompt as focus_block), stripped from the
+        # user-message JSON. See _wild_prompt_messages / focus_prompt_block.
+        "spell_foci": resolve_foci(engine),
         "turn": engine.state.turn,
         "depth": engine.state.depth,
         "max_depth": engine.state.max_depth,
@@ -381,10 +419,17 @@ def state_summary(engine: "GameEngine") -> dict[str, Any]:
             "hp": player.hp,
             "mana": player.mana,
             "statuses": dict(sorted(player.statuses.items())),
+            "equipment": {
+                slot: item for slot, item in sorted(player.equipment.items()) if item
+            },
+            "focus_slots": list(player.focus_slots),
         },
         "visible_count": len(state.visible),
         "explored_count": len(state.explored),
         "inventory": dict(sorted(state.inventory.items())),
+        "item_lore": {
+            key: dict(value) for key, value in sorted(state.item_lore.items())
+        },
         "experience": state.experience,
         "flags": dict(sorted(state.flags.items())),
         "tile_counts": tile_counts(state.tiles),

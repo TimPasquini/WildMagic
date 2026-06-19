@@ -42,6 +42,7 @@ from .llm_resolver import _write_jsonl_audit, should_retry_resolution, retry_con
 from .resolution_parsing import parse_resolution_json, _nearest_enemy_id
 from .prompts import (
     caster_prompt_block,
+    focus_prompt_block,
     region_prompt_block,
 )
 
@@ -55,13 +56,17 @@ def _wild_prompt_messages(spell: str, context: dict[str, Any]) -> list[dict[str,
     this spell routes to (wildmagic/capabilities.py) — hence the explicit spell argument."""
     region_style = context.get("region_style")
     caster_profile = context.get("caster_profile")
+    spell_foci = context.get("spell_foci")
     payload_context = {
-        k: v for k, v in context.items() if k not in {"region_style", "caster_profile"}
+        k: v
+        for k, v in context.items()
+        if k not in {"region_style", "caster_profile", "spell_foci"}
     }
     system_content = assemble_resolver_system_prompt(
         spell,
         region_block=region_prompt_block(region_style),
         caster_block=caster_prompt_block(caster_profile),
+        focus_block=focus_prompt_block(spell_foci),
     )
     return [
         {"role": "system", "content": system_content},

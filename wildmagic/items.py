@@ -462,6 +462,77 @@ class _ItemsMixin:
         self.finish_player_turn()
         return True
 
+    def _equipped_slot_by_item(self, name: str) -> str | None:
+        """Find the equipment slot holding an item matching `name` (exact normalized first,
+        then a substring fall-back), or None. Mirrors how unequip resolves an item to a slot."""
+        player = self.state.player
+        wanted = normalize_id(name)
+        if not wanted:
+            return None
+        for slot, item in player.equipment.items():
+            if item and normalize_id(item) == wanted:
+                return slot
+        for slot, item in player.equipment.items():
+            if item and wanted in normalize_id(item):
+                return slot
+        return None
+
+    def set_focus(self, target: str) -> bool:
+        """Mark an already-equipped item as the spell focus. `target` may name a slot
+        (via the slot aliases) or an equipped item. A focus is a mark on existing gear, so
+        nothing is equipped/unequipped here. v1 carries a single focus, so a new mark replaces
+        the old; `Entity.focus_slots` is a list to leave multi-focus a later policy change."""
+        if self.state.game_over:
+            return False
+        player = self.state.player
+        arg = (target or "").strip()
+        if not arg:
+            self.state.add_message("Focus through what? Name an equipped item or slot.")
+            return False
+        alias = self._EQUIPMENT_SLOT_ALIASES.get(normalize_id(arg))
+        slot = alias if alias is not None else self._equipped_slot_by_item(arg)
+        if slot is None:
+            self.state.add_message(
+                f"You aren't wearing or wielding any '{arg}' to channel through."
+            )
+            return False
+        item = player.equipment.get(slot)
+        if not item:
+            self.state.add_message(
+                f"You have nothing equipped in your {slot} slot to channel through."
+            )
+            return False
+        if player.focus_slots == [slot]:
+            self.state.add_message(f"The {item} is already your spell focus.")
+            return False
+        player.focus_slots = [slot]
+        self.state.add_message(f"You attune to the {item} as your spell focus.")
+        self.finish_player_turn()
+        return True
+
+    def clear_focus(self, target: str | None = None) -> bool:
+        """Release a spell focus. With no target, release whatever is marked; with a target,
+        release only that slot/item if it is currently the focus."""
+        if self.state.game_over:
+            return False
+        player = self.state.player
+        if not player.focus_slots:
+            self.state.add_message("You have no spell focus to release.")
+            return False
+        arg = (target or "").strip()
+        if arg:
+            alias = self._EQUIPMENT_SLOT_ALIASES.get(normalize_id(arg))
+            slot = alias if alias is not None else self._equipped_slot_by_item(arg)
+            if slot is None or slot not in player.focus_slots:
+                self.state.add_message(f"'{arg}' is not your spell focus.")
+                return False
+            player.focus_slots = [s for s in player.focus_slots if s != slot]
+        else:
+            player.focus_slots = []
+        self.state.add_message("You let your spell focus go quiet.")
+        self.finish_player_turn()
+        return True
+
     def pick_up_items_at_player(self) -> None:
         player = self.state.player
         for entity in list(self.entities_at(player.x, player.y)):
@@ -471,6 +542,13 @@ class _ItemsMixin:
             self.state.inventory[item_type] = (
                 self.state.inventory.get(item_type, 0) + entity.quantity
             )
+            # Preserve the item's flavor before the Entity (and its description) is gone, so a
+            # picked-up item can still be a meaningful spell focus. Keyed by the inventory key;
+            # a prior Investigate description outranks this and is kept (see set_item_lore).
+            if entity.description:
+                self.set_item_lore(
+                    item_type, entity.name, entity.description, source="description"
+                )
             self.state.add_message(f"You pick up {entity.name}.")
             self.state.stats.items_collected += 1
             del self.state.entities[entity.id]

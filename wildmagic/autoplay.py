@@ -58,7 +58,9 @@ CARDINAL_DIRECTIONS = {
 }
 EXPEDITION_DIRECTIONS = ("north", "east", "south", "west")
 MAX_RANDOM_SEED_BASE = 2_147_483_647
-SPELL_FOCI = (
+# The per-run spell-casting theme palette: noun-phrase categories fed to the autoplay agent
+# as casting inspiration. Distinct from THEMES/`theme` (full behavioral run directives).
+AUTOPLAY_RUN_THEMES = (
     "enemy control or status effects",
     "terrain or battlefield reshaping",
     "summoning allies or distractions",
@@ -176,7 +178,7 @@ Command meanings:
   consequences, the Empire and resistance react, bonds shift). Rest, then read standing/followers.
 - spark/frost/heal/ward/reveal: deterministic standard spells for combat and survival.
 - Wild magic command: begin with the word cast, then continue with a specific original
-  spell in plain English. Use the current spell_focus as inspiration, but do not reuse
+  spell in plain English. Use the current autoplay_run_theme as inspiration, but do not reuse
   instruction text, fixed examples, or stock phrases; compose fresh wording from visible
   enemies, terrain, objects, NPCs, needs, and risks.
 
@@ -356,7 +358,7 @@ class AgentObservation:
     last_result: dict[str, Any] | None = None
     avoid_commands: list[str] = field(default_factory=list)
     expedition_direction: str | None = None
-    spell_focus: str | None = None
+    autoplay_run_theme: str | None = None
     nudge: str | None = None
 
     def to_prompt_dict(self) -> dict[str, Any]:
@@ -385,7 +387,7 @@ class AgentObservation:
             "local_map": self.local_map,
             "adjacent": self.adjacent,
             "expedition_direction": self.expedition_direction,
-            "spell_focus": self.spell_focus,
+            "autoplay_run_theme": self.autoplay_run_theme,
             "recent_commands_already_done": self.recent_commands,
             "recent_results": self.recent_results,
             "last_result": self.last_result,
@@ -402,7 +404,7 @@ class AgentObservation:
         data["final_action_guidance_read_last"] = [
             "Return exactly one JSON object with one useful command.",
             "Recent commands and prior spells are things you already did, not examples to copy.",
-            "Do not repeat prior spell wording. If casting, invent a new spell relevant to the visible environment, current threat, spell_focus, and MP/HP risk.",
+            "Do not repeat prior spell wording. If casting, invent a new spell relevant to the visible environment, current threat, autoplay_run_theme, and MP/HP risk.",
             "Prefer local progress: fight visible enemies, open/explore rooms, investigate/read/talk/pickup when available, then resume the expedition direction.",
             "If MP is empty or low and no danger is urgent, wait to recover MP instead of casting.",
         ]
@@ -414,9 +416,9 @@ def expedition_direction_for_seed(seed: int | None, episode: int = 0) -> str:
     return EXPEDITION_DIRECTIONS[basis % len(EXPEDITION_DIRECTIONS)]
 
 
-def spell_focus_for_seed(seed: int | None, episode: int = 0) -> str:
+def autoplay_run_theme_for_seed(seed: int | None, episode: int = 0) -> str:
     basis = (seed if seed is not None else episode) + episode
-    return SPELL_FOCI[basis % len(SPELL_FOCI)]
+    return AUTOPLAY_RUN_THEMES[basis % len(AUTOPLAY_RUN_THEMES)]
 
 
 def prior_cast_commands(commands: list[str], limit: int = 8) -> list[str]:
@@ -790,10 +792,10 @@ def decision_hints(prompt_data: dict[str, Any]) -> list[str]:
             hints.append(
                 "Waiting recovers 1 MP; consider waiting before more wild casting if no enemy is urgent."
             )
-    spell_focus = str(prompt_data.get("spell_focus") or "").strip()
-    if spell_focus:
+    autoplay_run_theme = str(prompt_data.get("autoplay_run_theme") or "").strip()
+    if autoplay_run_theme:
         hints.append(
-            f"Current spell focus: {spell_focus}. If casting, invent a fresh situation-specific phrase."
+            f"Current run theme: {autoplay_run_theme}. If casting, invent a fresh situation-specific phrase."
         )
     expedition_direction = (
         str(prompt_data.get("expedition_direction") or "").strip().lower()
@@ -1031,7 +1033,7 @@ class EpisodeRunner:
         self.findings: list[Finding] = []
         self.step_count = 0
         self.expedition_direction = expedition_direction_for_seed(seed, episode_index)
-        self.spell_focus = spell_focus_for_seed(seed, episode_index)
+        self.autoplay_run_theme = autoplay_run_theme_for_seed(seed, episode_index)
         stem = f"episode_{episode_index:03d}"
         self.step_path = run_dir / f"{stem}.jsonl"
         self.replay_path = run_dir / f"{stem}.replay.json"
@@ -1109,7 +1111,7 @@ class EpisodeRunner:
                         repeated_count,
                     ),
                     expedition_direction=effective_expedition,
-                    spell_focus=self.spell_focus,
+                    autoplay_run_theme=self.autoplay_run_theme,
                     nudge=nudge,
                 )
                 nudge = None

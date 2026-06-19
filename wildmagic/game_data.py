@@ -388,6 +388,12 @@ EQUIPMENT_SPECS: dict[str, dict[str, Any]] = {
     "silk robe": {"slot": "chest", "defense": 0},
     "leather boots": {"slot": "feet", "defense": 1},
     "leather gloves": {"slot": "hands", "defense": 0},
+    # Curated spell foci -- ordinary equippable gear that ships with rich focus flavor.
+    # Any found item can be marked as a focus; these just carry hand-authored description,
+    # themes, and power (see FOCUS_SPECS) so there is something evocative to test with.
+    "whispering orb": {"slot": "charm", "defense": 1},
+    "emberglass wand": {"slot": "weapon", "attack": 2},
+    "saint's knucklebone": {"slot": "charm", "attack": 1},
 }
 for _gear_name in EQUIPMENT_SPECS:
     ITEM_USE_SPECS[_gear_name.replace(" ", "_")] = {
@@ -395,6 +401,36 @@ for _gear_name in EQUIPMENT_SPECS:
         "failure": "This isn't something to consume -- try 'equip' or 'wear' instead.",
     }
 del _gear_name
+
+# Focus-specific metadata for the curated foci registered in EQUIPMENT_SPECS above. Keyed by
+# the lowercased item name. `description`/`themes` enrich the resolver's flavor block when the
+# item is marked as a spell focus; `power` is carried for the planned magnitude-scaling step
+# (it does not yet change numbers). Items not listed here can still be foci -- they just rely on
+# any discovered item_lore description and carry no themes/power. See resolve_foci.
+FOCUS_SPECS: dict[str, dict[str, Any]] = {
+    "whispering orb": {
+        "power": 3,
+        "themes": ["voices", "secrets", "the mind"],
+        "description": (
+            "A sphere of cloudy glass that hums with borrowed voices, faintly warm to the touch."
+        ),
+    },
+    "emberglass wand": {
+        "power": 4,
+        "themes": ["fire", "light", "ruin"],
+        "description": (
+            "A slender rod of fire-blackened glass; heat coils lazily in its core, eager to leap free."
+        ),
+    },
+    "saint's knucklebone": {
+        "power": 2,
+        "themes": ["death", "mercy", "old oaths"],
+        "description": (
+            "A finger-bone polished by a thousand prayers and strung on grey cord; "
+            "it feels heavier than it should."
+        ),
+    },
+}
 
 DEFAULT_ITEM_USE_SPEC: dict[str, Any] = {
     "effects": [{"kind": "restore_mana", "amount": 2}],
