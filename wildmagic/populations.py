@@ -164,3 +164,69 @@ def denizen_plan(
 
 def denizen_name(denizen: Denizen, rng: random.Random) -> str:
     return rng.choice(_ROLE_NAMES.get(denizen.role, (denizen.role,)))
+
+
+# --- Concerns (CONTENT_FLESHING_ROADMAP Tier 1B) ----------------------------------------
+# A local's plight, stamped on their NPCProfile.concern at spawn, that becomes a quest when the
+# player engages them. The slice keeps to deed-closable concerns that need no placement: a slay
+# against the occupying garrison (which Tier 1A already populates). Rescue-with-captive-placement
+# rides the promise/realization system in a later pass.
+
+
+@dataclass(frozen=True)
+class ConcernTemplate:
+    roles: frozenset[str]  # denizen roles that can carry it
+    realm_roles: frozenset[
+        str
+    ]  # realm geopolitical roles it fits (conquered/rival/...)
+    kind: str  # rescue | slay | defend | clear
+    subject: str  # the plight, voiced in dialogue
+    victim_faction: str  # for slay/clear: whose member satisfies it
+    reward_gold: int
+
+
+CONCERN_TEMPLATES: tuple[ConcernTemplate, ...] = (
+    ConcernTemplate(
+        roles=frozenset({"townsfolk", "partisan", "priest"}),
+        realm_roles=frozenset({"conquered"}),
+        kind="slay",
+        subject="an imperial officer who torments this place",
+        victim_faction="empire",
+        reward_gold=20,
+    ),
+    ConcernTemplate(
+        roles=frozenset({"merchant", "townsfolk"}),
+        realm_roles=frozenset({"conquered"}),
+        kind="slay",
+        subject="the imperial tax-enforcer bleeding us dry",
+        victim_faction="empire",
+        reward_gold=25,
+    ),
+    ConcernTemplate(
+        roles=frozenset({"partisan", "townsfolk"}),
+        realm_roles=frozenset({"rival"}),
+        kind="slay",
+        subject="imperial scouts probing our border",
+        victim_faction="empire",
+        reward_gold=20,
+    ),
+)
+
+
+def roll_concern(
+    role: str, realm_role: str, rng: random.Random, chance: float = 0.5
+) -> dict[str, object] | None:
+    """Roll a plight for a local of ``role`` in a realm of ``realm_role`` — most carry one, some
+    don't (deterministic given ``rng``). Returns the ``NPCProfile.concern`` dict, or None."""
+    candidates = [
+        t for t in CONCERN_TEMPLATES if role in t.roles and realm_role in t.realm_roles
+    ]
+    if not candidates or rng.random() > chance:
+        return None
+    template = rng.choice(candidates)
+    return {
+        "type": template.kind,
+        "subject": template.subject,
+        "victim_faction": template.victim_faction,
+        "reward_gold": template.reward_gold,
+    }

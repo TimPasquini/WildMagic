@@ -661,6 +661,24 @@ class GameSession:
                     success, technical_failure, dialogue_record = self._talk(
                         message, replay_dialogue
                     )
+            elif verb in {"accept", "decline"}:
+                # Promote a quiet lead into a committed quest, or turn it down (EMERGENT_QUESTS §7).
+                action = verb
+                arg = command_argument(original_command, tokens)
+                if not arg:
+                    explicit_messages = [
+                        f"{verb.capitalize()} which? Use the quest number, e.g. '{verb} 1'."
+                    ]
+                else:
+                    promise = (
+                        self.engine.accept_quest(arg)
+                        if verb == "accept"
+                        else self.engine.decline_quest(arg)
+                    )
+                    if promise is not None:
+                        success = True
+                    else:
+                        explicit_messages = [f"No open lead matches '{arg}'."]
             elif verb == "quest":
                 action = "quest"
                 subverb = tokens[1].lower() if len(tokens) > 1 else ""
@@ -673,9 +691,8 @@ class GameSession:
                     else:
                         explicit_messages.append("Quest Log:")
                         for idx, q in enumerate(quests, 1):
-                            status_label = "[x]" if q.status == "completed" else "[ ]"
                             explicit_messages.append(
-                                f"  {idx}. {status_label} {q.name} - {q.description} (Contact: {q.contact}, Location: {q.location})"
+                                f"  {idx}. [{q.status}] {q.name} - {q.description} (Contact: {q.contact}, Location: {q.location})"
                             )
                 elif subverb == "add":
                     name = tokens[2] if len(tokens) > 2 else "Unknown Quest"

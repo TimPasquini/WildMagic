@@ -344,6 +344,8 @@ _QUEST_LOG_STATUS: dict[str, str] = {
     "changed": "transformed",
     "failed": "failed",
     "cold": "cold",
+    "lead": "lead",
+    "declined": "declined",
 }
 
 
@@ -2885,6 +2887,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         reward: Reward | None = None,
         source: str | None = None,
         tags: list[str] | None = None,
+        status: str = "unverified",
     ) -> WorldPromise:
         promise_id = f"quest_{normalize_id(contact)}_{normalize_id(name)}"
         existing = next(
@@ -2907,7 +2910,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             objective=objective,
             reward=reward,
             giver_npc=contact,
-            status="unverified",
+            status=status,
             location=location,
         )
         self.add_promises([promise])
@@ -2954,7 +2957,45 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             reward=reward,
             source=f"concern:{profile.name}",
             tags=["quest", ctype],
+            # A heard plight is a quiet *lead* (EMERGENT_QUESTS §7), not yet a committed quest —
+            # the player can `accept` it into the active log or `decline` it. Still deed-closable:
+            # solving it without accepting lets the giver react later.
+            status="lead",
         )
+
+    def accept_quest(self, selector: str | int) -> WorldPromise | None:
+        """Promote a quiet lead to a committed, active quest (EMERGENT_QUESTS §7)."""
+        promise = self._find_quest_promise(selector)
+        if promise is not None and promise.status in {"lead", "unverified"}:
+            promise.status = "active"
+            self.state.add_message(f"You take up the task: {promise.subject}.")
+            return promise
+        return None
+
+    def decline_quest(self, selector: str | int) -> WorldPromise | None:
+        """Decline a lead — a real stance, not a delete: it leaves the active log, but the world
+        fact stands and the deed matcher can still notice if you solve it anyway."""
+        promise = self._find_quest_promise(selector)
+        if promise is not None and promise.status in {"lead", "unverified", "active"}:
+            promise.status = "declined"
+            self.state.add_message(f"You turn away from: {promise.subject}.")
+            return promise
+        return None
+
+    def _find_quest_promise(self, selector: str | int) -> WorldPromise | None:
+        """Resolve a quest by 1-based index into the quest log, or by a name fragment."""
+        quests = [p for p in self.state.promises if p.kind == "quest"]
+        if isinstance(selector, int) or (
+            isinstance(selector, str) and selector.strip().isdigit()
+        ):
+            index = int(selector) - 1
+            entries = self.quest_log_entries()
+            if 0 <= index < len(entries):
+                target_id = entries[index].id
+                return next((p for p in quests if p.id == target_id), None)
+            return None
+        needle = str(selector).strip().lower()
+        return next((p for p in quests if needle in p.subject.lower()), None)
 
     def quest_log_entries(self) -> list[QuestLogEntry]:
         entries: list[QuestLogEntry] = []

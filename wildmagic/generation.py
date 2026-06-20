@@ -54,7 +54,7 @@ from .props import (
 )
 from .regions import region_for_zone
 from .worldgen import imperial_density_for_role, realm_card_for_zone
-from .populations import Denizen, denizen_name, denizen_plan
+from .populations import Denizen, denizen_name, denizen_plan, roll_concern
 
 
 @dataclass(frozen=True)
@@ -2642,8 +2642,15 @@ class _GenerationMixin:
             spot = self._random_open_ground_tile(zone_rng, occupied)
             if spot is None:
                 break
-            self._spawn_denizen(zone_rng, denizen, identity, spot)
+            entity = self._spawn_denizen(zone_rng, denizen, identity, spot)
             occupied.add(spot)
+            # Locals carry plights that become quests when engaged (Tier 1B).
+            if not denizen.combatant and "imperial" not in identity:
+                concern = roll_concern(denizen.role, placement.role, zone_rng)
+                if concern is not None:
+                    profile = self.state.npc_profiles.get(entity.id)
+                    if profile is not None:
+                        profile.concern = concern
 
         for _ in range(zone_rng.randint(0, 1)):
             spot = self._random_open_ground_tile(zone_rng, occupied)

@@ -40,10 +40,10 @@ def test_conquered_zone_populates_neutral_occupiers_and_locals() -> None:
 
     engine._populate_realm_denizens(random.Random(7), [], set(), placement)
 
+    # The realm's *people* carry a typed identity (a touch of wild creatures may also spawn,
+    # which are legitimately hostile and identity-less — exclude them).
     people = [
-        e
-        for e in engine.state.entities.values()
-        if e.id != player_id and e.kind in {"npc", "actor"}
+        e for e in engine.state.entities.values() if e.id != player_id and e.identity
     ]
     assert people
     # Every denizen enters as a politically situated person — neutral, not hostile-on-sight.
