@@ -1,276 +1,276 @@
 # Wild Magic
 
-A graphical ASCII roguelike where normal actions are deterministic and wild spells are resolved through a structured local-LLM JSON contract.
+Wild Magic is a graphical ASCII roguelike about unstable, player-authored magic. You
+can cast any spell; wild spells are typed in plain English and resolved through a
+LLM that interprets the spell and returns a structured JSON contract.
 
-## Setup & Run
+The design rule is simple:
 
-### 1. Install Ollama & Pull the Model
-First, install [Ollama](https://ollama.com/) on your machine. Then, pull the recommended default model:
+> The LLM may propose magical consequences, but the engine remains authoritative.
+
+The engine validates every resolution, applies costs transactionally, owns world state,
+and keeps replays deterministic. The model supplies interpretation, prose, and weirdness;
+it does not get to silently mutate the game.
+
+## What You Can Do
+
+- Type almost any spell idea, from "bind the nearest enemy in blue webbing" to "somewhere
+  north, a blade waits with my name on it."
+- Talk to NPCs whose memories, traits, and local knowledge shape their replies.
+- Let rumors and promises become real places, quests, threats, or discoveries in later
+  zones.
+- Build a character from origin, stats, appearance, backstory, and magical signature.
+- Equip gear, mark one equipped item as a spell focus, and let it color future wild magic.
+- Read books, investigate rooms, find secrets, browse wares, possess bodies, found
+  organizations, gain followers, and watch factions react to your deeds.
+- Play through the Pygame UI or the fully scriptable CLI. Both use the same action layer.
+
+## Quick Start
+
+Wild Magic uses Python 3.12+ and [uv](https://github.com/astral-sh/uv). For real
+wild-magic resolution, install [Ollama](https://ollama.com/) and pull the default models:
+
 ```powershell
 ollama pull qwen3.5:9b-q4_K_M
 ollama pull qwen3:1.7b
 ```
 
-### 2. Configure Environment Variables
-Copy the example environment configuration to create a `.env` file:
+Create local configuration:
+
 ```powershell
 cp .env.example .env
 ```
-The `.env` file is the canonical persisted configuration. The in-game configuration menu writes changes back to it, and existing shell environment variables override `.env` values when the process starts.
 
-### 3. Run with uv
-We use [uv](https://github.com/astral-sh/uv) to manage dependencies and virtual environments. Sync dependencies and run the game:
+The project `.env` is the persisted local config file. Shell environment variables still
+win when the process starts, and in-game settings changes write back to `.env`.
+
+Install dependencies and launch the graphical game:
+
 ```powershell
-# Install/sync dependencies
 uv sync
-
-# Run the graphical game
 uv run python main.py
 ```
 
-The default resolver is `ollama`, so the game uses the local LLM path unless you explicitly choose another provider (such as `mock` for testing):
+Start with AI watch mode already enabled:
 
 ```powershell
-$env:WILDMAGIC_PROVIDER='ollama'
-$env:WILDMAGIC_MODEL='qwen3:8b'
-python main.py
+uv run python main.py --autoplay
 ```
 
-Use `WILDMAGIC_PROVIDER=mock` for repeatable debugging without an LLM.
-
-Use `WILDMAGIC_PROVIDER=auto` if you want the old behavior: try Ollama first, then fall back to the deterministic mock resolver.
-
-Wild spell log lines from the mock resolver are marked with `*>` instead of `>` so they are easy to distinguish from LLM-resolved spells.
-
-If Ollama fails or returns invalid JSON, the game can use fallback paths to keep playtests moving: `auto` can fall back to the mock resolver, and invalid JSON can use isolated local fallbacks for a few common spell shapes. Disable those fallback paths for strict LLM-contract testing:
-
-```powershell
-$env:WILDMAGIC_ENABLE_FALLBACKS='0'
-```
-
-## Wild Magic Audit Logs
-
-Every live wild-magic resolver call writes a JSONL audit record to:
-
-```powershell
-logs/wild_magic_audit.jsonl
-```
-
-Each record includes the spell text, provider/model, full prompt messages, game-state context, raw response, parsed resolution, and any validation or technical error.
-
-You can change or disable this with:
-
-```powershell
-$env:WILDMAGIC_AUDIT_DIR='logs'
-$env:WILDMAGIC_AUDIT_LOG='0'
-```
-
-If local model responses time out, increase the Ollama request timeout:
-
-```powershell
-$env:WILDMAGIC_OLLAMA_TIMEOUT='300'
-```
-
-If Ollama returns a 404, check the installed model name:
-
-```powershell
-ollama list
-$env:WILDMAGIC_MODEL='qwen3:8b'
-```
-
-The model name must match an installed Ollama tag, such as `qwen3:8b`, `qwen3.6`, or another local model from your list.
-
-## Ollama Routing
-
-By default, every Ollama-backed system uses the same endpoint: `WILDMAGIC_OLLAMA_HOST`, then `OLLAMA_HOST`, then `http://127.0.0.1:11434`. (Prefer the `127.0.0.1` literal over `localhost` — on Windows `localhost` adds ~2s per request via an IPv6 stall; see [docs/MODEL_CONFIG.md](docs/MODEL_CONFIG.md).)
-
-You can route urgent calls and background calls separately:
-
-```powershell
-$env:WILDMAGIC_URGENT_OLLAMA_HOST='http://127.0.0.1:11434'      # wild magic, dialogue, trade
-$env:WILDMAGIC_BACKGROUND_OLLAMA_HOST='http://127.0.0.1:11435'  # background town generation and lore extraction
-$env:WILDMAGIC_BACKGROUND_OLLAMA_NUM_GPU='0'                    # force CPU for background requests
-```
-
-More specific overrides win when set:
-
-```powershell
-$env:WILDMAGIC_WILD_OLLAMA_HOST='http://127.0.0.1:11434'
-$env:WILDMAGIC_DIALOGUE_OLLAMA_HOST='http://127.0.0.1:11434'
-$env:WILDMAGIC_TRADE_OLLAMA_HOST='http://127.0.0.1:11434'
-$env:WILDMAGIC_TOWN_OLLAMA_HOST='http://127.0.0.1:11435'
-$env:WILDMAGIC_LORE_OLLAMA_HOST='http://127.0.0.1:11435'
-```
-
-The same scope pattern works for request options such as `OLLAMA_NUM_CTX`, `OLLAMA_TIMEOUT`, `OLLAMA_NUM_GPU`, `OLLAMA_THINK`, `OLLAMA_FORMAT`, and `OLLAMA_KEEP_ALIVE`. For example, `WILDMAGIC_TOWN_OLLAMA_NUM_CTX` overrides town generation only, while `WILDMAGIC_BACKGROUND_OLLAMA_NUM_CTX` applies to every background route. Lore extraction also has `WILDMAGIC_LORE_NUM_PREDICT` for its JSON response size.
-
-To run two local servers manually, start them in separate terminals:
-
-```powershell
-# Terminal 1: GPU / urgent server
-$env:OLLAMA_HOST='127.0.0.1:11434'
-$env:OLLAMA_VULKAN='1'
-$env:GGML_VK_VISIBLE_DEVICES='0'
-ollama serve
-
-# Terminal 2: CPU / background server
-$env:OLLAMA_HOST='127.0.0.1:11435'
-ollama serve
-```
-
-Then route the game with the variables above. Use `ollama ps` against each host to check what is loaded:
-
-```powershell
-$env:OLLAMA_HOST='http://127.0.0.1:11434'; ollama ps
-$env:OLLAMA_HOST='http://127.0.0.1:11435'; ollama ps
-```
-
-If you want to manage both servers yourself, set `WILDMAGIC_OLLAMA_AUTOSTART=0` so the game reports a missing endpoint instead of trying to start `ollama serve`.
-
-## NPCs and Dialogue
-
-The game starts in Hollowmere, a small town scenario (`scenario="town"`) with both NPCs and enemies. Stand next to an NPC and use `talk <message>` to start a conversation — it costs a turn, and replies are generated by a local LLM in the same spirit as wild magic: the engine is authoritative (it controls turn consumption, perception, and message formatting), the LLM only supplies the spoken words.
-
-NPCs have a backstory, traits, and a memory of things they've personally seen or heard nearby (`NPC_PERCEPTION_RADIUS` tiles, only while visible to the player) — they'll naturally reference these in conversation, alongside the running back-and-forth of your exchange with them.
-
-By default dialogue uses the same provider family as wild magic, but you can point it at a different model:
-
-```powershell
-$env:WILDMAGIC_DIALOGUE_PROVIDER='ollama'
-$env:WILDMAGIC_DIALOGUE_MODEL='qwen3:8b'
-```
-
-If unset, `WILDMAGIC_DIALOGUE_PROVIDER` falls back to `WILDMAGIC_PROVIDER`, and `WILDMAGIC_DIALOGUE_MODEL` falls back to `WILDMAGIC_MODEL`, so a single `ollama`/`qwen3:8b` setup covers both spell resolution and dialogue. `WILDMAGIC_DIALOGUE_TEMPERATURE` (default `0.7`) and `WILDMAGIC_DIALOGUE_NUM_PREDICT` (default `320`) tune reply style and length.
-
-Every dialogue exchange writes a JSONL audit record to `logs/dialogue_audit.jsonl`, alongside the wild-magic log, controlled by the same `WILDMAGIC_AUDIT_DIR`/`WILDMAGIC_AUDIT_LOG` settings.
-
-## Organic Lore
-
-Dialogue can now leave persistent story promises behind. After an NPC reply is shown, a background lore extractor reads the exchange and may append 0-3 attributed `WorldPromise` entries to the world ledger. These promises are not engine facts by default; they start as `unverified`, `rumored`, `verified`, `contested`, or `false` according to the extractor's judgment, and future systems can later realize or contradict them.
-
-Repeated matching promises merge into the existing entry, raising salience and marking it `corroborated`; the ledger keeps the strongest ~200 entries and evicts old low-salience color first.
-
-Lore extraction is enabled by default and uses its own configurable model:
-
-```powershell
-$env:WILDMAGIC_LORE_ENABLED='1'
-$env:WILDMAGIC_LORE_PROVIDER='ollama'
-$env:WILDMAGIC_LORE_MODEL='qwen3:1.7b'
-```
-
-Lore is routed as a background purpose, and `ollama_num_gpu("lore")` defaults to `0`, so lore extraction is CPU-oriented even if no lore-specific GPU setting is present. `WILDMAGIC_BACKGROUND_OLLAMA_HOST` and `WILDMAGIC_BACKGROUND_OLLAMA_NUM_GPU=0` are the usual way to send it to a separate CPU Ollama server. Use `WILDMAGIC_LORE_OLLAMA_HOST` or `WILDMAGIC_LORE_OLLAMA_NUM_GPU` for lore-only overrides.
-
-Current uses:
-
-- relevant promises are included in later NPC dialogue context
-- buildable high-salience promises bind to deterministic zone reservations
-- reserved promises can realize through generic site archetypes in open zones: `sacred_site`, `inhabited_site`, `hostile_site`, `memorial_site`, `hidden_site`, `creature_site`, and `authority_site`
-- generated towns receive only the `promise_hooks` reserved for their own zone
-- when a generated town consumes a hook, that promise is marked `realized`
-
-The extractor may include `where` and `what` fields for concrete future content, such as "north of town" and "chapel". The engine, not the LLM, decides whether that promise can bind, which zone it reserves, and whether an already-explored target should relocate farther outward.
-
-Lore extraction writes audit records to `logs/lore_audit.jsonl`. You can test extraction offline against saved dialogue evals:
-
-```powershell
-python -m wildmagic.lore_eval --input logs/dialogue_eval/requested_models.json --provider mock --output logs/lore_eval/mock_report.json
-python -m wildmagic.lore_eval --input logs/dialogue_eval/requested_models.json --provider ollama --model qwen3:1.7b
-```
-
-## Intel Arc GPU Notes
-
-On the tested Arc A750 setup, `qwen3.6` loaded as mixed CPU/GPU because it is too large for the available VRAM. `qwen3:8b` fit fully on the GPU and is the recommended default.
-
-To run Ollama on the Arc A750 through Vulkan, start the Ollama server with:
-
-```powershell
-$env:OLLAMA_VULKAN='1'
-$env:GGML_VK_VISIBLE_DEVICES='0'
-$env:WILDMAGIC_MODEL='qwen3:8b'
-ollama serve
-```
-
-If the desktop Ollama app is already running on port `11434`, quit it before starting this server, or run the Vulkan server on another port and point the game at it:
-
-```powershell
-$env:OLLAMA_HOST='http://127.0.0.1:11435'
-```
-
-Use `ollama ps` after a spell cast. The `PROCESSOR` column should show `100% GPU` for `qwen3:8b`.
-
-## Controls
-
-- Type a wild spell in the right panel, then press `Enter`.
-- Press `Tab` to leave the spell input and move around.
-- Move with arrow keys, WASD, or the keypad (keypad corners move diagonally).
-- Press `j` for the journal, `q` for quests, `i` for inventory.
-- Press `x` to investigate the room (costs turns; careful search can turn up clues).
-  When a clue points at something, stand on or beside it and press `x` again to search it.
-- Press `e` to examine the current room, `r` to read a nearby book, and `u` to free an
-  adjacent bound captive.
-- Press `f` for a safe spark bolt.
-- Press `g` to pick up items under your feet.
-- Press `o` to open an adjacent closed door.
-- Press `z` to rest, `b` to browse nearby wares, `p` to possess a nearby body, `l` to
-  inspect, `t` for standing, `n` for followers, and `h` for command help.
-- Press `>` to descend stairs and `<` to ascend stairs.
-- Press `.` to wait.
-- Press `Esc` to clear the spell input or quit.
-- Press `R` to restart after death or victory.
-- The map uses field of view: unseen tiles are hidden, explored tiles outside sight are dimmed.
-- The right panel shows HP/MP bars, active statuses (color-coded), visible enemies (health color changes), floor items, inventory, and curses.
-
-Commands also work in the CLI. Use `cast <spell>` for wild magic when playing headless:
-- `inspect` / `look` / `status` — show full game state
-- `use <item>` — use a consumable from inventory
-- `drop <item>` — drop an item
-- `pickup` / `get` — pick up items at your feet
-- `talk <message>` (or `speak`/`say`) — stand next to an NPC and say something; costs a turn like any other action
-
-## Optional: Character Portraits
-
-Portrait generation is experimental and intentionally isolated from the main game environment because it depends on the heavy `torch`/`diffusers` SDXL stack.
-
-The main game does not require portrait dependencies. To enable portraits, create a separate image-generation environment, set `WILDMAGIC_PORTRAIT_PYTHON` to that environment's Python executable, and set `WILDMAGIC_PORTRAITS_ENABLED=1`.
-
-See `tools/portraits/README.md`.
-
-## Smoke Test
-
-```powershell
-uv run python -m wildmagic.smoke_test
-```
-
-## Headless Play And Replays
-
-Play from the terminal:
+Run without a local LLM by using the deterministic mock provider:
 
 ```powershell
 $env:WILDMAGIC_PROVIDER='mock'
-uv run python -m wildmagic.cli --scenario test_chamber --seed 7
+uv run python main.py
 ```
 
-Run scripted commands and save a replay:
+## Headless Play
+
+The CLI is the same game through a scriptable interface. It is the best way to reproduce
+bugs, run smoke tests, and save replays.
+
+```powershell
+uv run python -m wildmagic.cli --provider mock --scenario test_chamber --seed 7 --quickstart
+```
+
+Script a short run:
+
+```powershell
+uv run python -m wildmagic.cli --provider mock --scenario test_chamber --seed 7 --quickstart --no-render `
+  --command "inspect" `
+  --command "move east" `
+  --command "cast turn the goblin teeth to glass and make them fall out" `
+  --command "cast summon a friendly brass moth that bites enemies" `
+  --command "inspect"
+```
+
+Record and replay:
 
 ```powershell
 uv run python -m wildmagic.cli --provider mock --scenario test_chamber --seed 7 --record runs/test.json --command "move east" --command "cast ignite the goblin"
 uv run python -m wildmagic.replay runs/test.json
 ```
 
-## Project Plan
+## Character Creation
 
-See [docs/EXECUTION_PLAN.md](docs/EXECUTION_PLAN.md) for the staged feature plan, including the headless play harness needed for agent-driven testing.
+New interactive games start with character creation. Pick a ready-made origin, customize
+stats and free-form details, or press Enter for a random wild mage. The current stats are:
 
-See [docs/AGENT_PLAYTESTING.md](docs/AGENT_PLAYTESTING.md) for a practical guide to CLI playtesting, LLM audit logs, replays, and agent reporting.
+- `Vigor`: HP and physical staying power.
+- `Attunement`: mana and the magnitude anchors sent to the resolver.
+- `Composure`: how cleanly or chaotically wild magic tends to answer.
 
-See [docs/WILD_MAGIC_SCHEMA.md](docs/WILD_MAGIC_SCHEMA.md) for the current wild-magic JSON operation surface.
+Name, gender, appearance, backstory, and magical signature are stored on the character.
+The message log stays second-person, while NPCs and future world systems can refer to the
+external identity you chose.
+
+## Controls
+
+- Type a wild spell in the right panel and press `Enter`.
+- Press `Tab` to cycle input modes. Talk mode appears when an NPC is nearby.
+- Move with arrow keys, WASD, or the keypad. Keypad corners move diagonally.
+- Click a map square, or use `target <x> <y>`, to mark an explicit spell target.
+- Press `f` for a safe spark bolt. In the CLI, `spark`, `frost`, `heal`, `ward`, and
+  `reveal` are deterministic standard spells; `cast frost` asks wild magic to improvise.
+- Press `j` for the journal, `q` for quests, `i` for inventory, and `c` for the character
+  sheet.
+- Press `x` to investigate, `e` to examine, `r` to read, `u` to free a captive, `g` to
+  pick up items, and `o` to open a nearby door.
+- Press `z` to rest, `b` to browse nearby wares, `p` to possess a nearby body, `l` to
+  inspect, `t` for standing, `n` for followers, and `h` for command help.
+- Press `>` to descend stairs, `<` to ascend stairs, and `.` to wait.
+- Press `F8` to start or stop AI watch mode, `F9` to pause it, and `F10` to step it once.
+- Press `Esc` to clear input, close screens, clear a target, or quit depending on context.
+
+Inventory supports equipping, unequipping, using, dropping, and marking a focus. In the UI,
+select equipped gear and press `F` to toggle it as your spell focus. In the CLI, use
+`focus <item-or-slot>` and `unfocus`.
+
+## Useful CLI Commands
+
+- `inspect`, `look`, or `status`: show the current state.
+- `cast <spell>`: send a wild spell through the resolver.
+- `target <x> <y>` / `untarget`: mark or clear an explicit spell target.
+- `talk <message>`, `say <message>`, or `speak <message>`: talk to an adjacent NPC.
+- `journal`, `rumors`, or `promises`: review persistent world memory.
+- `standing`, `reputation`, or `factions`: show how powers regard you.
+- `followers`, `retinue`, or `bonds`: show followers and founded organizations.
+- `found <name>`: raise a new organization.
+- `rest`, `rest 4`, or `rest until dawn`: pass time and let daily world simulation run.
+- `examine`, `investigate [target]`, and `read [book]`: materialize room, secret, and book
+  details.
+- `wares`, `browse`, `accept`, and `reject`: trade with nearby merchants.
+- `pickup`, `drop <item>`, `use <item>`, `equip <item>`, `unequip <slot-or-item>`.
+- `focus <item-or-slot>` / `unfocus`: mark or clear an equipped spell focus.
 
 ## Wild Magic Contract
 
-The LLM receives a compact game-state summary and must return one JSON object. Valid spell failures caused by overpowered requests consume a turn. Technical failures, such as invalid JSON, do not.
+The LLM receives compact game context and must return one JSON object. The engine then
+normalizes, validates, and applies it. Technical failures such as invalid JSON do not
+consume a turn. Intentional rejections for invalid or overpowered spells do consume a turn.
 
-The engine currently supports direct and area effects for damage, healing, mana restoration, forced movement, terrain changes, statuses, summoning, template-backed item/creature conjuration, item spawning, inventory changes, transformations, factions, tags, resistances, world flags, delayed events, and messages. It supports costs in mana, health, maximum stats, inventory items, statuses, and permanent curses.
+The current operation surface includes direct and area damage, healing, mana restoration,
+forced movement, terrain changes, statuses, summoning, template-backed item and creature
+creation, inventory changes, transformations, faction changes, tags, resistances, world
+flags, delayed events, flow fields, triggers, persistent effects, promises, possession,
+memory edits, traits, curses, and messages.
 
-Status effects support custom `display_name` and `expiry_text` fields so the LLM can use any flavor name while preserving standardized mechanics. Over 100 flavor alias names (e.g., "petrified" for frozen, "enraged" for berserk) are recognized automatically.
+Status effects support flavor names through `display_name` and `expiry_text`, so
+"petrified", "crystallized", and "time-locked" can all ride the same engine-owned frozen
+mechanic. Environmental interactions include fire and water making mist, water
+extinguishing burning entities, vines snaring entrants, slick ice sliding movement, frost
+freezing water-soaked entities, and fire cauterizing bleeding wounds.
 
-Environmental interactions: fire+water=mist, water extinguishes burning entities, vines snare on entry, slick ice slides movement, frost damage on water entities freezes them, fire damage on bleeding entities cauterizes. Enemies have special on-hit behaviors (spiders web, fungi poison) and slimes split on death. Undead entities have a 30% chance to reform at 1 HP before dying.
+See [docs/WILD_MAGIC_SCHEMA.md](docs/WILD_MAGIC_SCHEMA.md) for the generated operation
+reference.
+
+## NPCs, Promises, And The World
+
+NPC dialogue uses the same discipline as wild magic: the engine controls turn cost,
+visibility, memory, and formatting; the LLM only supplies speech. Dialogue can also leave
+behind `WorldPromise` entries. A promise may remain rumor, bind to a future zone, realize
+as a site or quest objective, or become part of later dialogue context.
+
+The promise ledger is also used by prophecy-style wild magic. A spell can create an
+engine-owned obligation such as "a blade waits north of here"; the engine decides whether
+that is concrete enough to bind, where it can safely appear, what it costs, and how it is
+shown in the journal.
+
+Deeds feed the emergent-world layer: factions track multidimensional standing, NPC bonds
+can drift, daily rest can advance off-screen consequences, and the UI/CLI expose the
+results through standing and followers views.
+
+## Providers And Configuration
+
+Provider choices:
+
+- `ollama`: real local LLM resolution. This is the default.
+- `mock`: deterministic fake provider for tests, replays, and engine work.
+- `auto`: try Ollama first, then use mock fallback when fallbacks are enabled.
+
+Common variables:
+
+```powershell
+$env:WILDMAGIC_PROVIDER='ollama'
+$env:WILDMAGIC_MODEL='qwen3.5:9b-q4_K_M'
+$env:WILDMAGIC_LORE_MODEL='qwen3:1.7b'
+$env:WILDMAGIC_OLLAMA_TIMEOUT='300'
+```
+
+Use `127.0.0.1` rather than `localhost` for Ollama hosts, especially on Windows. The
+default is `http://127.0.0.1:11434`.
+
+Strict LLM-contract testing disables local fallback paths:
+
+```powershell
+$env:WILDMAGIC_ENABLE_FALLBACKS='0'
+```
+
+For multi-model routing, background lore/town/canon work, Intel Arc setup, schema decoding,
+timeouts, and troubleshooting, see [docs/MODEL_CONFIG.md](docs/MODEL_CONFIG.md).
+
+## Audit Logs
+
+Live model calls write JSONL audit records under `logs/`:
+
+- `logs/wild_magic_audit.jsonl`: spell resolution.
+- `logs/dialogue_audit.jsonl`: NPC dialogue.
+- `logs/lore_audit.jsonl`: promise extraction and lore work.
+- `logs/flesh_audit.jsonl`: promise decoration.
+- `logs/canon_audit.jsonl`: examine/read materialization.
+
+Each record includes the prompt/context, provider/model, raw response, normalized result,
+and any error. Control logging with:
+
+```powershell
+$env:WILDMAGIC_AUDIT_DIR='logs'
+$env:WILDMAGIC_AUDIT_LOG='0'
+```
+
+## Optional Character Portraits
+
+Portrait generation is experimental and intentionally isolated from the main game process.
+It uses a separate SDXL environment and worker process so the core game never imports
+`torch`.
+
+To enable it, create the portrait environment, set `WILDMAGIC_PORTRAIT_PYTHON` to that
+environment's Python executable, and set:
+
+```powershell
+$env:WILDMAGIC_PORTRAIT_ENABLED='1'
+```
+
+See [tools/portraits/README.md](tools/portraits/README.md) and the portrait section of
+[docs/MODEL_CONFIG.md](docs/MODEL_CONFIG.md).
+
+## Development Checks
+
+Run the smoke test:
+
+```powershell
+uv run python -m wildmagic.smoke_test
+```
+
+Run the deterministic test suite:
+
+```powershell
+uv run python -m pytest -q
+```
+
+Compile check:
+
+```powershell
+Get-ChildItem wildmagic -Filter *.py | ForEach-Object { python -m py_compile $_.FullName }; python -m py_compile main.py
+```
+
+## Further Reading
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): module map and system boundaries.
+- [docs/AGENT_PLAYTESTING.md](docs/AGENT_PLAYTESTING.md): CLI playtesting, audit logs,
+  replays, and reporting.
+- [docs/MODEL_CONFIG.md](docs/MODEL_CONFIG.md): all provider, model, routing, and hardware
+  configuration.
+- [docs/WILD_MAGIC_SCHEMA.md](docs/WILD_MAGIC_SCHEMA.md): wild-magic operation surface.
+- [docs/EMERGENT_WORLD_STRATEGY.md](docs/EMERGENT_WORLD_STRATEGY.md): player-driven world
+  simulation direction.
+- [docs/AESTHETICS_AND_TONE.md](docs/AESTHETICS_AND_TONE.md): tone and content north star.

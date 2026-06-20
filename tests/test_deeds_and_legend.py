@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from wildmagic.deeds import DEED_RULES, Deed, DeedLedger, interpret_deed_rules
 from wildmagic.engine import GameEngine
+from wildmagic.factions import resolve_faction, seed_phase0_factions
 from wildmagic.legend import LegendLedger
 
 
@@ -107,6 +108,86 @@ def test_killing_civilians_costs_legitimacy_and_brands_a_butcher() -> None:
     assert rebellion.standing_of("gratitude") < 0  # the people disown you
     assert rebellion.standing_of("legitimacy") < 0
     assert "butcher" in engine.legend_words(engine.state.player_soul_id)
+
+
+def test_killing_a_hostile_npc_is_not_a_civilian_murder() -> None:
+    """A foe who was hostile *before* the player struck them is a combatant, not a civilian —
+    even when it is a ``kind == "npc"`` entity (the game supports hostile npc-kind actors via
+    ``living_enemies``). Regression: ``killed_civilians`` keyed only on ``kind == "npc"``, so
+    killing a bandit who attacked you branded you a butcher (and, once quests land, would
+    have wrongly satisfied a civilian-protection objective)."""
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    player = engine.state.player
+    player.attack = 99
+    foe = engine.spawn_npc(
+        "marsh bandit", "n", player.x, player.y + 1, role="bandit", backstory=""
+    )
+    foe.faction = "enemy"  # hostile to the player on its own account, not provoked
+    engine.attack(player, foe)
+    assert not foe.alive
+    types = [d.type for d in engine.state.deed_ledger.deeds]
+    assert "killed_civilians" not in types
+
+
+# --- per-faction kill tally (FACTION_KILL_REPUTATION.md K1/K2) --------------------
+
+
+def test_resolve_faction_maps_victims_to_factions_and_buckets() -> None:
+    ledger = seed_phase0_factions()
+    # A faction id tagged directly wins.
+    assert resolve_faction({"empire"}, "actor", ledger) == "empire"
+    # A tagged *role* resolves to that role's primary faction (resistance -> rebellion).
+    assert resolve_faction({"resistance"}, "actor", ledger) == "rebellion"
+    # An unaligned person falls to the civilian bucket...
+    assert resolve_faction(set(), "npc", ledger) == "civilian"
+    assert resolve_faction({"civilian"}, "actor", ledger) == "civilian"
+    # ...but an unaligned creature is politics-free and stays tally-exempt.
+    assert resolve_faction(set(), "actor", ledger) == ""
+
+
+def test_imperial_kill_stamps_victim_faction_and_tallies() -> None:
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    player = engine.state.player
+    player.attack = 99
+    foe = _spawn_imperial(engine, player.x, player.y + 1)
+    engine.attack(player, foe)
+    kill = next(
+        d for d in engine.state.deed_ledger.deeds if d.type == "killed_imperials"
+    )
+    assert kill.victim_faction == "empire"
+    assert engine.kills_by_faction() == {"empire": 1}
+
+
+def test_tally_counts_civilians_and_excludes_hostiles_and_beasts() -> None:
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    player = engine.state.player
+    player.attack = 99
+    # An innocent townsperson -> civilian bucket.
+    weaver = engine.spawn_npc(
+        "weaver", "n", player.x, player.y + 1, role="weaver", backstory=""
+    )
+    engine.attack(player, weaver)
+    # A foe hostile before being struck -> no kill deed, so never tallied.
+    bandit = engine.spawn_npc(
+        "marsh bandit", "n", player.x, player.y - 1, role="bandit", backstory=""
+    )
+    bandit.faction = "enemy"
+    engine.attack(player, bandit)
+    # One imperial -> empire bucket.
+    foe = _spawn_imperial(engine, player.x + 1, player.y)
+    engine.attack(player, foe)
+
+    assert engine.kills_by_faction() == {"civilian": 1, "empire": 1}
+
+
+def test_kills_by_faction_survives_deed_ledger_round_trip() -> None:
+    engine = GameEngine(seed=7, scenario="test_chamber")
+    player = engine.state.player
+    player.attack = 99
+    foe = _spawn_imperial(engine, player.x, player.y + 1)
+    engine.attack(player, foe)
+    restored = DeedLedger.from_dict(engine.state.deed_ledger.to_dict())
+    assert restored.kills_by_faction() == {"empire": 1}
 
 
 def test_legend_accumulates_over_repeated_deeds() -> None:

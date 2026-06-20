@@ -85,6 +85,28 @@ def faction_anchor(faction_id: str) -> str:
     return f"faction:{faction_id}"
 
 
+def resolve_faction(tags: set[str], kind: str, ledger: "FactionLedger") -> str:
+    """Resolve a victim (by its combat tags and entity kind) to the faction whose member it
+    was, for per-faction kill accounting (`FACTION_KILL_REPUTATION.md` K1). Returns, in order
+    of specificity: the **faction-ledger id** when one is tagged directly (e.g. a Phase-C
+    conquered kingdom's own id); the **primary faction of a tagged role** otherwise (so an
+    ``empire``-tagged soldier resolves to the empire bloc's lead faction); the ``civilian``
+    bucket for an unaligned person; and ``""`` for an unaligned creature — beasts are not
+    politics and stay tally-exempt. Pure: depends only on the tags, kind, and current roster,
+    so it generalizes automatically as the world roll seeds more factions."""
+    for faction_id in ledger.factions:
+        if faction_id in tags:
+            return faction_id
+    for role in ROLE_TO_KINDS:
+        if role in tags:
+            primary = ledger.primary(role)
+            if primary is not None:
+                return primary.id
+    if kind == "npc" or "civilian" in tags:
+        return "civilian"
+    return ""
+
+
 @dataclass
 class Faction:
     id: str

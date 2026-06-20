@@ -6,7 +6,9 @@ heavy `torch` + `diffusers` stack lives in its own venv, and the game shells out
 script rather than importing torch. That keeps the game process light and the GPU work
 out of process.
 
-Status: **test harness** (not yet wired into the creation screen).
+Status: **experimental but wired into character creation**. The game starts a long-lived
+worker when portraits are enabled, sends it the character description, and keeps the
+heavy image stack out of the main process.
 
 ## Setup (one-time)
 
@@ -35,6 +37,18 @@ C:\Games\wm_image_venv\Scripts\python tools\portraits\generate_portrait.py \
 ```
 
 Device selection is automatic: Arc XPU if torch sees it, else CUDA, else CPU (slow).
+
+## Enable in the game
+
+Set the portrait venv Python and enable the feature:
+
+```
+WILDMAGIC_PORTRAIT_PYTHON=C:\Games\wm_image_venv\Scripts\python.exe
+WILDMAGIC_PORTRAIT_ENABLED=1
+```
+
+Output defaults to `tools/portraits/out`; override with `WILDMAGIC_PORTRAIT_DIR`.
+See `docs/MODEL_CONFIG.md` for all portrait knobs.
 
 ## Why not Qwen-Image?
 

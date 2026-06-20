@@ -54,6 +54,11 @@ VISIBILITY: tuple[str, ...] = ("secret", "witnessed", "public", "mythic")
 #: Visibility levels at which a deed is "out in the world" (can spawn rumors/posters).
 PUBLIC_VISIBILITY: frozenset[str] = frozenset({"witnessed", "public", "mythic"})
 
+#: Deed types that record killing a faction's member — the basis of per-faction kill
+#: accounting (`FACTION_KILL_REPUTATION.md` K2). Each carries a ``victim_faction``. New
+#: kill types (e.g. a generic combatant kill, rolled-faction kills) are added here.
+KILL_DEEDS: frozenset[str] = frozenset({"killed_imperials", "killed_civilians"})
+
 
 @dataclass
 class Deed:
@@ -77,6 +82,10 @@ class Deed:
     # dungeon level doesn't blur with one on the surface above it when consequences render.
     place_key: str = ""
     target_tags: list[str] = field(default_factory=list)  # TARGET_TAGS
+    #: For kill deeds (KILL_DEEDS): the faction-ledger id (or the ``civilian`` bucket) whose
+    #: member died, for per-faction kill accounting (`FACTION_KILL_REPUTATION.md` K1). ``""``
+    #: means not a kill, or an unaligned creature (beasts are tally-exempt).
+    victim_faction: str = ""
     # Knowledge model (strategy §5.1):
     visibility: str = "secret"
     witnesses: list[str] = field(default_factory=list)  # entity ids that perceived it
@@ -107,6 +116,7 @@ class Deed:
             "interpretation_source": self.interpretation_source,
             "place_key": self.place_key,
             "target_tags": list(self.target_tags),
+            "victim_faction": self.victim_faction,
             "visibility": self.visibility,
             "witnesses": list(self.witnesses),
             "evidence_tags": list(self.evidence_tags),
@@ -133,6 +143,7 @@ class Deed:
             interpretation_source=str(raw.get("interpretation_source", "rules")),
             place_key=str(raw.get("place_key", "")),
             target_tags=[str(t) for t in raw.get("target_tags", [])],
+            victim_faction=str(raw.get("victim_faction", "")),
             visibility=str(raw.get("visibility", "secret")),
             witnesses=[str(w) for w in raw.get("witnesses", [])],
             evidence_tags=[str(t) for t in raw.get("evidence_tags", [])],
@@ -342,6 +353,18 @@ class DeedLedger:
     def by_visibility(self, *levels: str) -> list[Deed]:
         wanted = set(levels)
         return [deed for deed in self.deeds if deed.visibility in wanted]
+
+    def kills_by_faction(self) -> dict[str, int]:
+        """How many of each faction the player has killed — a pure projection over recorded
+        kill deeds (`FACTION_KILL_REPUTATION.md` K2). Derived, not stored: it can't desync
+        from the deeds, replays for free, and never decays (it is the raw fact; *feelings*
+        about it live in faction standing). Keyed by ``victim_faction`` (a faction id or the
+        ``civilian`` bucket); unaligned creatures carry no faction and are excluded."""
+        counts: dict[str, int] = {}
+        for deed in self.deeds:
+            if deed.type in KILL_DEEDS and deed.victim_faction:
+                counts[deed.victim_faction] = counts.get(deed.victim_faction, 0) + 1
+        return counts
 
     def unapplied(self) -> list[Deed]:
         return [deed for deed in self.deeds if not deed.applied]

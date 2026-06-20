@@ -56,6 +56,7 @@ from .factions import (
     REBELLION_CELLS_START,
     Faction,
     FactionLedger,
+    resolve_faction,
     seed_phase0_factions,
 )
 from .legend import LegendLedger
@@ -966,6 +967,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         at: tuple[int, int] | None = None,
         source: str = "combat",
         target_tags: list[str] | None = None,
+        victim_faction: str = "",
         evidence_tags: list[str] | None = None,
         interpretation_source: str = "rules",
     ) -> Deed | None:
@@ -995,6 +997,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             source=source,
             place_key=state.current_place_key(),
             target_tags=list(target_tags or []),
+            victim_faction=victim_faction,
             visibility="witnessed" if witnesses else "secret",
             witnesses=[w.id for w in witnesses],
             evidence_tags=list(evidence_tags or []),
@@ -1070,6 +1073,12 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         out the consequences); other creatures aren't (yet) deed-worthy."""
         if not self._deed_attributed_to_player(source):
             return
+        # Whose member died — stamped on the kill deed so it feeds the per-faction kill
+        # tally (FACTION_KILL_REPUTATION.md K1/K2). Reactions stay role-based for now; the
+        # tally is pure data capture. "defended_townsfolk" is not a kill, so it carries none.
+        victim_faction = resolve_faction(
+            victim.tags, victim.kind, self.state.faction_ledger
+        )
         if "empire" in victim.tags:
             self.record_deed(
                 "killed_imperials",
@@ -1077,6 +1086,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 summary=f"cut down {victim.name}, one of the Empire's own",
                 at=(victim.x, victim.y),
                 target_tags=["empire"],
+                victim_faction=victim_faction,
                 evidence_tags=["bloodstain"],
             )
             # Cutting down an imperial who stood over the common folk *also* reads as
@@ -1092,15 +1102,36 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                     target_tags=["civilian"],
                     evidence_tags=["survivor_testimony"],
                 )
-        elif victim.kind == "npc" or "civilian" in victim.tags:
+        elif (
+            victim.kind == "npc" or "civilian" in victim.tags
+        ) and not self._was_hostile_to_player(victim):
             self.record_deed(
                 "killed_civilians",
                 magnitude=0.2,
                 summary=f"struck down {victim.name}, who bore no arms",
                 at=(victim.x, victim.y),
                 target_tags=["civilian"],
+                victim_faction=victim_faction,
                 evidence_tags=["bloodstain", "survivor_testimony"],
             )
+
+    def _was_hostile_to_player(self, victim: Entity) -> bool:
+        """Whether `victim` stood against the player by its own disposition — it was already
+        an enemy (or in a declared faction war the player belongs to) *before* the player
+        struck it. Striking a neutral never flips its faction (neutrals flee; they do not
+        turn ``enemy`` — see ``ai._npc_turns``), so the victim's faction at death still
+        reflects its stance before the player's aggression: a townsperson cut down unprovoked
+        is still ``neutral`` and reads as a civilian, while a bandit who came at the player
+        does not. Keeps ``killed_civilians`` from branding the player a butcher for killing
+        someone who attacked them first."""
+        player = self.state.player
+        return player is not None and self.is_hostile_to(victim, player)
+
+    def kills_by_faction(self) -> dict[str, int]:
+        """Per-faction kill tally (`FACTION_KILL_REPUTATION.md` K2) — how many of each faction
+        the player has killed. A pure projection over the deed ledger (never decays; the
+        `civilian` bucket included, unaligned creatures excluded)."""
+        return self.state.deed_ledger.kills_by_faction()
 
     def run_world_tick(self, day: int | None = None) -> bool:
         """The world Simulator's daily beat. Applies every unapplied deed's proposed

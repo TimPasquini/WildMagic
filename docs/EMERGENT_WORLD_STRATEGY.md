@@ -9,6 +9,14 @@ LLM.
 It is a companion to `AESTHETICS_AND_TONE.md` (what the world feels like) and
 `ARCHITECTURE.md` (how the code is shaped). This is the *why* and the *plan*.
 
+> **Build status — updated 2026-06-19.** Much of this plan is now implemented. Phases
+> **0, A, B, D, E, and F are built** — the deterministic spine (deeds, factions, legend) and
+> most of its consumers (bonds/orgs/followers, backlash, the consequence renderer, the daily
+> 05:00 tick, the standing/legend readout) are live. The major remaining phase is **C — the
+> per-run geopolitical world roll.** §3 marks which original gaps are now closed and §8
+> carries per-phase status markers. This document stays the *why*; for live build state and
+> per-phase detail see `EMERGENT_WORLD_IMPLEMENTATION.md` and the session log.
+
 ---
 
 ## 1. The Vision
@@ -99,25 +107,33 @@ We are not starting from zero. The bones of an emergent world are already in the
 - **The clerk** — `CLERK_NOTICES`, a recurring imperial voice (today a static table; to
   become a dynamic named voice that escalates with the imperial-threat axis).
 
-**The honest gaps** (scaffolding or aspiration, not working systems):
+**The gaps this plan set out to fill — and where they stand now** (updated 2026-06-19):
 
-- `Reward.reputation` is **defined but never consumed** — reputation isn't real yet (and
-  when built it should be *multidimensional*, not one scalar; see §5.1).
-- Factions are a **per-entity string** (`player`/`ally`/`enemy`/`neutral`) with tag-based
-  `FACTION_HOSTILITIES`. There are **no standing factions** (Empire, resistance, the
-  player's banner) with reputation, goals, or the ability to act.
-- There is **no deed ledger** — the world reacts to *rumors* (words) but not yet to the
-  player's *actions*.
-- There is **no off-screen world simulation** — zones don't evolve while you're away.
-- There is **no per-run geopolitical roll** — the dominant kingdoms, their rulers, the
-  region map, and where traditions survive are effectively fixed rather than rolled fresh
-  each run, so runs don't yet feel like *new worlds*. (Note: cross-run *persistence* is
-  deliberately **not** a goal — see §5.4; the gap is per-run *variety*, not continuity.)
-- There are **no legibility surfaces** — even if the world reacted, the player couldn't
-  see it.
+- `Reward.reputation` was **defined but never consumed**. ✅ **Closed** — consumed via
+  `engine._grant_reward_reputation`, wiring quest/promise rewards into faction standing
+  (which is multidimensional, per §5.1).
+- Factions were a **per-entity string** (`player`/`ally`/`enemy`/`neutral`) with no standing
+  powers. ✅ **Closed** — `factions.py`/`FactionLedger` makes the Empire, resistance, and
+  player orgs first-class objects with multidimensional standing, keyed by **role** so one
+  rule fits both the current two-pole scaffold and Phase C's rolled roster.
+- There was **no deed ledger**. ✅ **Closed** — `deeds.py`/`DeedLedger` records the player's
+  actions with visibility/witnesses/target tags; `DEED_RULES` interprets them; the daily
+  tick applies them once.
+- There was **no off-screen world simulation**. ◐ **Partly** — the daily 05:00 tick runs
+  backlash, Empire pressure, and bond drift; still thin are zones evolving in your absence
+  and **follower off-screen assignments** (the reeve who collects taxes — a tracked
+  follow-up).
+- There was **no per-run geopolitical roll** — kingdoms, rulers, region map, and surviving
+  traditions are still effectively fixed rather than rolled fresh each run. ◯ **Still open —
+  this is Phase C, the major remaining phase.** (Cross-run *persistence* remains deliberately
+  **not** a goal — see §5.4; the gap is per-run *variety*, not continuity.)
+- There were **no legibility surfaces**. ◐ **Partly** — the consequence renderer (deed
+  props, a wanted poster bearing your legend), a standing/legend readout (`describe_standing`),
+  and daily rumor spread exist; the fuller **named-voices chorus** and zone-entry situation
+  reports are still thin.
 
-The strategy below fills exactly these gaps, reusing the foundation rather than
-duplicating it.
+The plan below describes the full arc; most of the deterministic spine and its consumers are
+now built, reusing the foundation rather than duplicating it.
 
 ---
 
@@ -159,7 +175,7 @@ duplicating it.
 
 The lego studs. Everything else reads and writes here. All serializable, all replay-safe.
 
-- **Deed ledger (NEW).** Append-only, structured log of consequential player actions:
+- **Deed ledger (built — `deeds.py`).** Append-only, structured log of consequential player actions:
   `{turn, zone, type, magnitude, target_tags, source, visibility, witnessed_by,
   evidence_tags, faction_implications}`.
   Examples: `killed_imperials(n=3, witnessed)`, `freed_captive`, `razed_building`,
@@ -174,7 +190,7 @@ The lego studs. Everything else reads and writes here. All serializable, all rep
   claims already track `status` (unverified/rumored/contested/**false**) and `confidence`,
   which is your built-in rumor distortion ("blamed for a thing you didn't do"; "worshipped
   for a deed they misunderstood"). This is the input to all emergence.
-- **Faction ledger (NEW).** Named standing powers as first-class objects:
+- **Faction ledger (built — `factions.py`).** Named standing powers as first-class objects:
   `{id, name, kind (empire|nation|resistance|player|cult|guild), standing, mood,
   resources, goals, home_zones, notes_anchor}`. **Seeded fresh at the start of every
   run** from the run seed (§5.4) — the Empire is a constant, but which rival nation still
@@ -193,7 +209,7 @@ The lego studs. Everything else reads and writes here. All serializable, all rep
   Emergent events mint promises: a resistance cell = a promise that realizes as an
   `inhabited_site` with allied NPCs; a crackdown = imperial reservations; a riot/siege =
   a hostile event reserved in a zone.
-- **Semantic ledger (have) + Legend ledger (NEW).** The player's **legend** has two forms
+- **Semantic ledger (have) + Legend ledger (built — `legend.py`).** The player's **legend** has two forms
   that must not be conflated — and, because the semantic ledger's contract is *"the hard
   engine never reads notes to decide outcomes,"* they live in **two places**:
   (a) **bounded-vocabulary weighted tags** the *simulator and scores* read
@@ -480,7 +496,7 @@ Each phase is independently shippable and leaves the game better. The order is c
 that the **deed → legend → reputation → faction** spine is stable *before* the deep systems
 that consume it are built — which is precisely how we avoid building anything throwaway.
 
-**Phase 0 — The micro-loop (proof of aliveness).** Before any breadth, run *one* deed type
+**Phase 0 — The micro-loop (proof of aliveness).** ✅ **Built.** Before any breadth, run *one* deed type
 end-to-end through the **real abstractions** (not mocks): the player kills imperial
 soldiers in a witnessed fight → the deed ledger records it → the world tick shifts one
 standing axis up and one down → the next zone entry shows one rumor line → one NPC
@@ -489,7 +505,7 @@ smallest complete loop — **act → record → simulate → narrate → show �
 it validates the spine's *shape* before anything is built on top of it. (Doubles as the
 anti-throwaway insurance: the abstractions are exercised for real on day one.)
 
-**Phase A — Deeds & Legend.** Generalize the micro-loop's deed ledger to the obvious acts
+**Phase A — Deeds & Legend.** ✅ **Built.** Generalize the micro-loop's deed ledger to the obvious acts
 (kills by faction, structures destroyed, NPCs saved/killed, catastrophic spells), with
 **visibility/witnesses/evidence** on every deed. Distill the legend in both forms —
 **bounded weighted tags** (for scores) and prose (for prompts) — procedural-first, LLM
@@ -497,30 +513,31 @@ classification only for ambiguous deeds. Add **causal compression** once deed vo
 grows. *Payoff:* dialogue and rumors already read the semantic ledger, so the world starts
 referencing your deeds with little new Narrator work.
 
-**Phase B — Multidimensional factions & reputation.** Promote factions to first-class
+**Phase B — Multidimensional factions & reputation.** ✅ **Built.** Promote factions to first-class
 ledger objects (seeded fresh per run, never persisted); make `standing` the **open
 multidimensional set** of §5.1 (wiring up `Reward.reputation`); give factions **spendable
 resources** (mapping onto `PromiseReservation.capacity_cost`); add a faction/standing
 screen (legibility). Empire pressure scales with the *imperial-threat* axis specifically,
 not a blob.
 
-**Phase C — Fresh geopolitics at run start.** Roll the per-run world from the seed — which
+**Phase C — Fresh geopolitics at run start.** ◯ **Next — not yet built (the major remaining phase).** Roll the per-run world from the seed — which
 kingdoms dominate/defy, who rules them, the region map, where traditions survive — each
 rolled feature carrying a **tactical affordance** (§5.4); the Narrator names and flavors
 it. Seeds Phase B's faction ledger and delivers the "every run is a new world" promise.
 (Deterministic from seed; replay-safe.)
 
-**Phase D — Backlash events.** The Simulator **spends faction resources** into promise-
+**Phase D — Backlash events.** ✅ **Built.** The Simulator **spends faction resources** into promise-
 ledger events (resistance cells, riots, crackdowns) from standing/mood. Narrator announces
 them on zone entry.
 
-**Phase E — Consequence renderer.** Re-aim prop/detail generation at the deed ledger
+**Phase E — Consequence renderer.** ✅ **Built.** Re-aim prop/detail generation at the deed ledger
 (memorials, wanted posters bearing your legend, graffiti, damage); demote pure-flavor prop
 gen. Deliberately **ahead of Phase F**: it is cheap and produces a large *perceived* jump
 in "the world remembers me" while the spine the deep social system needs finishes settling.
 
 **Phase F — Bonds, organizations & followers (full ambition, built last on purpose).**
-The deep social system of §5.3, kept at full scope — *not* de-scoped. It is sequenced last
+✅ **Built** (core; per-NPC bond drift, player orgs, follower postures). The deep social
+system of §5.3, kept at full scope — *not* de-scoped. It is sequenced last
 because it *consumes* the legend, multidimensional standing, and factions; building it on a
 still-shifting spine is exactly what would force a later rewrite. Build the general
 primitives — per-NPC bond model (a few scalars), the affiliation graph (found multiple
@@ -531,8 +548,8 @@ collects taxes, a librarian surfaces knowledge). Devotion, drift, departure, and
 to color all future behavior, the math kept invisible (§5.3). Build the primitives that
 generate the stories, never bespoke event systems.
 
-The **run-end chronicle** (a Narrator capstone, no carry-forward) can ship alongside any
-phase once deeds exist.
+The **run-end chronicle** (a Narrator capstone, no carry-forward) ◯ **not yet built** — can
+ship alongside any phase now that deeds exist.
 
 Phase 0 then A/B are the highest leverage: once deeds and multidimensional reputation exist
 and are legible, the world is already visibly responsive. Phase C is the highest-*delight*
