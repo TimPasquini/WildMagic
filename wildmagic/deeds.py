@@ -33,6 +33,7 @@ DEED_TYPES: tuple[str, ...] = (
     "spared_enemy",
     "freed_captive",
     "defended_townsfolk",
+    "witnessed_forbidden_magic",
     "razed_building",
     "cast_atrocity",
     "raised_dead",
@@ -239,6 +240,13 @@ DEED_RULES: dict[str, DeedRule] = {
         },
         legend={"liberator": 1.0},
     ),
+    # Seen working forbidden wild magic: the Empire opens your file and marks you a threat —
+    # the exposure model (CONTENT_FLESHING_ROADMAP). Being *seen* is the crime, not the result,
+    # so this carries no legend of its own (what you DO with the magic earns the legend).
+    "witnessed_forbidden_magic": DeedRule(
+        standing={"empire": {"imperial_threat": 0.4, "fear": 0.2}},
+        legend={},
+    ),
     # Defending townsfolk: gratitude and a protector's name.
     "defended_townsfolk": DeedRule(
         standing={
@@ -347,6 +355,7 @@ _BEAT_SUMMARIES: dict[str, str] = {
     "spared_enemy": "a pattern of mercy to the beaten",
     "freed_captive": "a run of jailbreaks and freed captives",
     "defended_townsfolk": "a record of standing for the common folk",
+    "witnessed_forbidden_magic": "a habit of working magic in plain sight",
     "razed_building": "a swath of razed and ruined places",
     "cast_atrocity": "a series of catastrophic conjurings",
     "raised_dead": "repeated raisings of the dead",

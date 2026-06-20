@@ -163,6 +163,11 @@ class _EffectsMixin:
             self.finish_player_turn()
             return WildMagicOutcome(True, False, [curse_error])
 
+        # The Empire learns what you are the moment its people see you raise wild magic (the
+        # exposure model). Fired as the spell is cast — being *seen casting* is the trigger,
+        # whatever the spell then does.
+        self._expose_wild_magic_to_witnesses()
+
         snapshot = copy.deepcopy(self.state)
         # Capture operation deltas while the spell's effects + costs apply (Stage 6). Turned
         # off before finish_player_turn so the turn's environment/AI ticks aren't counted.

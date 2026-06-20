@@ -570,7 +570,8 @@ class GameUI:
         self.input_active = True
         self.input_mode = "spell"
         self.mode_label_rects: list[tuple[pygame.Rect, str]] = []
-        self._last_talk_target_id: int | None = None
+        self._last_auto_talk_target_id: str | None = None
+        self._auto_talk_mode = False
         self._last_trade_active: bool = False
         self.provider_label = self.session.provider_label
         self.log_line_rects: list[tuple[pygame.Rect, str]] = []
@@ -853,6 +854,7 @@ class GameUI:
             order.append("talk")
         current = self.input_mode if self.input_mode in order else "spell"
         self.input_mode = order[(order.index(current) + 1) % len(order)]
+        self._auto_talk_mode = False
         # Controls mode frees the letter keys for hotkeys; the others take typed text.
         self.input_active = self.input_mode != "control"
 
@@ -1212,6 +1214,7 @@ class GameUI:
             for rect, mode in self.mode_label_rects:
                 if rect.collidepoint(event.pos):
                     self.input_mode = mode
+                    self._auto_talk_mode = False
                     self.input_active = True
                     self.dragging_log_selection = False
                     self.log_selection_anchor = None
@@ -1605,7 +1608,8 @@ class GameUI:
         self.input_active = True
         self.input_mode = "spell"
         self.mode_label_rects = []
-        self._last_talk_target_id = None
+        self._last_auto_talk_target_id = None
+        self._auto_talk_mode = False
         self._last_trade_active = False
         self.provider_label = self.session.provider_label
         self.llm_debug_entries = []
@@ -3429,6 +3433,36 @@ class GameUI:
         self.screen.blit(surface, (x + pad_x, y + pad_y))
         return rect
 
+    def _visible_hostiles_to_player(self) -> list[Entity]:
+        engine = self.engine
+        player = engine.state.player
+        return [
+            entity
+            for entity in engine.state.entities.values()
+            if entity.id != player.id
+            and entity.kind in {"actor", "npc"}
+            and entity.hp > 0
+            and engine.is_visible(entity.x, entity.y)
+            and engine.is_hostile_to(entity, player)
+        ]
+
+    def _auto_talk_target(self) -> Entity | None:
+        """The conservative UI default: talk only when the scene is calm."""
+        engine = self.engine
+        player = engine.state.player
+        if self._visible_hostiles_to_player():
+            return None
+        adjacent = [
+            entity
+            for entity in engine.state.entities.values()
+            if entity.kind == "npc"
+            and entity.faction == "neutral"
+            and engine.can_converse_with(entity)
+            and not engine.is_hostile_to(entity, player)
+            and max(abs(entity.x - player.x), abs(entity.y - player.y)) <= 1
+        ]
+        return min(adjacent, key=lambda entity: entity.id) if adjacent else None
+
     def draw_spell_box(self, x: int, y: int, height: int) -> None:
         width = PANEL_WIDTH - 40
         pygame.draw.line(
@@ -3437,20 +3471,24 @@ class GameUI:
         box_y = y - 34
 
         talk_target = self.engine.find_talk_target()
-        talk_target_id = talk_target.id if talk_target is not None else None
-        if talk_target_id != self._last_talk_target_id:
-            if talk_target_id is not None:
-                # Just became adjacent to someone talkable - default to Talk mode,
-                # but only on this transition, so a deliberate click away from Talk
-                # sticks for as long as the player stays next to the same NPC.
+        auto_talk_target = self._auto_talk_target()
+        auto_talk_target_id = (
+            auto_talk_target.id if auto_talk_target is not None else None
+        )
+        if auto_talk_target_id != self._last_auto_talk_target_id:
+            if auto_talk_target_id is not None:
+                # In a calm scene, becoming adjacent to a neutral NPC defaults to Talk.
+                # Broader talk-to-anyone stays manual so Wild Spell remains the combat
+                # default around enemies or ranged conversations.
                 self.input_mode = "talk"
                 self.input_active = True
-            elif self.input_mode == "talk":
-                # Walked out of talking range while in Talk mode - nothing legal to
-                # talk to anymore, so fall back to casting.
+                self._auto_talk_mode = True
+            elif self.input_mode == "talk" and self._auto_talk_mode:
+                # The calm auto-talk case ended, so return to the normal default.
                 self.input_mode = "spell"
                 self.input_active = True
-            self._last_talk_target_id = talk_target_id
+                self._auto_talk_mode = False
+            self._last_auto_talk_target_id = auto_talk_target_id
 
         # Same transition-based pattern as talk-target switching above: force the
         # mode the *moment* a trade appears or resolves, not every frame - so a
@@ -3470,8 +3508,9 @@ class GameUI:
                 # sees the proposal. Flush it so only fresh input reaches the modal.
                 pygame.event.clear((pygame.KEYDOWN, pygame.KEYUP))
             elif self.input_mode == "confirm_trade":
-                self.input_mode = "talk" if talk_target is not None else "spell"
+                self.input_mode = "talk" if auto_talk_target is not None else "spell"
                 self.input_active = True
+                self._auto_talk_mode = auto_talk_target is not None
             self._last_trade_active = trade_active
 
         specs = [("spell", "Wild Spell", MODE_PURPLE)]

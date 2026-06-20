@@ -228,6 +228,10 @@ class _CombatMixin:
                 )
             if actual > 0:
                 self._fire_damage_triggers(entity, source, actual, damage_type)
+            # Provocation: a neutral combatant the player strikes turns hostile and fights
+            # back (the exposure model's provocation path). No-op once they're down.
+            if entity.hp > 0:
+                self._provoke(entity, source)
             if entity.hp <= 0:
                 # Undead entities have a 30% chance to reform at 1 HP rather than dying.
                 if (

@@ -2516,6 +2516,20 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         # 1. A role-typed non-combatant does not initiate combat, whatever their allegiance.
         if (actor.role or "").lower() in NONCOMBATANT_ROLES:
             return False
+        # 1b. Derived hostility toward the *player* (the exposure model,
+        # CONTENT_FLESHING_ROADMAP) — politically situated people spawn neutral and turn on the
+        # player only through what they witness or what you've done, never a spawn flag.
+        if other.id == self.state.player_id:
+            # Once the Empire has seen you work wild magic, its soldiers hunt you on sight
+            # (its clerks, non-combatants, were already excluded above — they fear and report).
+            if (
+                self.state.flags.get("wild_magic_exposed")
+                and self._faction_of(actor) == "empire"
+            ):
+                return True
+            # A faction you've slaughtered enough of swears a blood feud and comes for you (K5).
+            if self._faction_of(actor) in self.feuding_factions():
+                return True
         # 2. Player-relative tactical baseline.
         if actor.faction == "enemy" and other.faction in {"player", "ally"}:
             return True
@@ -2541,6 +2555,58 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         if not actor_faction or not other_faction or actor_faction == other_faction:
             return False
         return ledger.are_hostile(actor_faction, other_faction)
+
+    def _faction_of(self, entity: Entity) -> str:
+        """The faction id this character belongs to (typed identity first, then tags/kind)."""
+        return resolve_faction(
+            entity.tags,
+            entity.kind,
+            self.state.faction_ledger,
+            identity=entity.identity,
+        )
+
+    def _provoke(self, entity: Entity, source: Entity | None) -> None:
+        """A neutral **combatant** struck by the player (or their agents) turns hostile and
+        fights back — the exposure model's provocation path. Non-combatants are left to flee
+        (they never draw), and anyone already aligned is unchanged."""
+        if entity.faction != "neutral" or entity.id == self.state.player_id:
+            return
+        if not self._deed_attributed_to_player(source):
+            return
+        if character_is_noncombatant(entity):
+            return
+        entity.faction = "enemy"
+
+    def _expose_wild_magic_to_witnesses(self) -> None:
+        """Working wild magic in view of imperials reveals you as an unlicensed sorcerer — the
+        exposure model (CONTENT_FLESHING_ROADMAP). Being *seen casting* is the trigger: the
+        Empire opens your file (a one-time ``witnessed_forbidden_magic`` deed → imperial_threat)
+        and, via the ``wild_magic_exposed`` flag, its soldiers thereafter hunt you on sight
+        (``is_hostile_to``). Imperial **non-combatants** (clerks) only fear and carry word — they
+        never draw. Non-imperial witnesses don't care that you cast (the asymmetry §decided)."""
+        player = self.state.player
+        witnesses = self._deed_witnesses(
+            player.x, player.y, exclude={self.state.player_id}
+        )
+        imperial = [w for w in witnesses if self._faction_of(w) == "empire"]
+        if not imperial:
+            return
+        first_time = not self.state.flags.get("wild_magic_exposed")
+        self.state.flags["wild_magic_exposed"] = True
+        for witness in imperial:
+            if character_is_noncombatant(witness) and "afraid" not in witness.traits:
+                witness.traits.append("afraid")  # they recoil and report, not fight
+        if first_time:
+            self.record_deed(
+                "witnessed_forbidden_magic",
+                magnitude=0.3,
+                summary="was seen working forbidden wild magic",
+                target_tags=["empire"],
+                evidence_tags=["witness_report"],
+            )
+            self.state.add_message(
+                "Imperial eyes are on you — they have seen what you are."
+            )
 
     def _declared_conflict(self, actor: Entity, other: Entity) -> bool:
         """Whether `actor` and `other` are bound by a standing FACTION_HOSTILITIES

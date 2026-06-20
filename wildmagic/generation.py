@@ -54,6 +54,7 @@ from .props import (
 )
 from .regions import region_for_zone
 from .worldgen import imperial_density_for_role, realm_card_for_zone
+from .populations import Denizen, denizen_name, denizen_plan
 
 
 @dataclass(frozen=True)
@@ -2538,6 +2539,45 @@ class _GenerationMixin:
             else set()
         )
 
+        # When the run has a rolled political map and this zone belongs to a realm, populate it
+        # with that realm's *people* — politically situated, neutral by default, hostility
+        # derived (CONTENT_FLESHING_ROADMAP Tier 1A). Unowned wilds / non-world scenarios keep
+        # the legacy hostile-on-sight inhabitants.
+        placement = (
+            state.world_map.placement_at(state.zone_x, state.zone_y)
+            if getattr(state, "world_map", None) is not None
+            else None
+        )
+        if placement is not None:
+            self._populate_realm_denizens(zone_rng, buildings, occupied, placement)
+        else:
+            self._populate_wild_inhabitants(
+                zone_rng, buildings, occupied, imperial_density
+            )
+
+        for _ in range(zone_rng.randint(0, 2)):
+            spot = self._random_open_ground_tile(zone_rng, occupied)
+            if spot is None:
+                break
+            name, char, item_type = zone_rng.choice(
+                [
+                    ("mana crystal", "!", "mana crystal"),
+                    ("blood moss", ",", "blood moss"),
+                    ("bone charm", "?", "bone charm"),
+                ]
+            )
+            self.spawn_item(name, char, spot[0], spot[1], item_type)
+            occupied.add(spot)
+
+    def _populate_wild_inhabitants(
+        self,
+        zone_rng: random.Random,
+        buildings: list[dict[str, Any]],
+        occupied: set[tuple[int, int]],
+        imperial_density: float,
+    ) -> None:
+        """The legacy inhabitant pass for unowned wilds and non-world scenarios: hostile legion
+        + region creatures spawned enemy-on-sight."""
         for building in buildings:
             room: Room = building["room"]
             if building["kind"] == "imperial":
@@ -2573,19 +2613,86 @@ class _GenerationMixin:
             self._spawn_from_template(zone_rng.choice(roster), spot[0], spot[1])
             occupied.add(spot)
 
-        for _ in range(zone_rng.randint(0, 2)):
+    def _populate_realm_denizens(
+        self,
+        zone_rng: random.Random,
+        buildings: list[dict[str, Any]],
+        occupied: set[tuple[int, int]],
+        placement: Any,
+    ) -> None:
+        """Populate a realm-owned zone with its people (Tier 1A): a light wild presence from
+        non-imperial structures, then the realm's denizens (neutral, identity-typed), then a
+        touch of wild pressure. Settled country is calmer than the open wilds."""
+        for building in buildings:
+            if building["kind"] in {"imperial", "promise"}:
+                continue
+            if zone_rng.random() < 0.35:
+                spot = self._random_open_tile_in_room(building["room"])
+                if spot not in occupied:
+                    self._spawn_from_template(
+                        zone_rng.choice(list(self.region.enemy_templates)),
+                        spot[0],
+                        spot[1],
+                    )
+                    occupied.add(spot)
+
+        for denizen, identity in denizen_plan(
+            placement.role, placement.realm_id, zone_rng
+        ):
             spot = self._random_open_ground_tile(zone_rng, occupied)
             if spot is None:
                 break
-            name, char, item_type = zone_rng.choice(
-                [
-                    ("mana crystal", "!", "mana crystal"),
-                    ("blood moss", ",", "blood moss"),
-                    ("bone charm", "?", "bone charm"),
-                ]
-            )
-            self.spawn_item(name, char, spot[0], spot[1], item_type)
+            self._spawn_denizen(zone_rng, denizen, identity, spot)
             occupied.add(spot)
+
+        for _ in range(zone_rng.randint(0, 1)):
+            spot = self._random_open_ground_tile(zone_rng, occupied)
+            if spot is None:
+                break
+            self._spawn_from_template(
+                zone_rng.choice(list(self.region.enemy_templates)), spot[0], spot[1]
+            )
+            occupied.add(spot)
+
+    def _spawn_denizen(
+        self,
+        zone_rng: random.Random,
+        denizen: Denizen,
+        identity: list[str],
+        spot: tuple[int, int],
+    ) -> Entity:
+        """Spawn one realm denizen, **neutral** with a typed ``identity``/``role`` — combatants
+        through ``spawn_actor`` (combat AI, talkable lazily), non-combatants through ``spawn_npc``
+        (a persona that flees). Hostility toward the player is derived later, never set here."""
+        name = denizen_name(denizen, zone_rng)
+        x, y = spot
+        home = "the Empire" if "imperial" in identity else "these realms"
+        if denizen.combatant:
+            return self.spawn_actor(
+                name,
+                denizen.char,
+                x,
+                y,
+                denizen.hp,
+                denizen.attack,
+                denizen.defense,
+                "neutral",
+                denizen.ai,
+                tags=set(denizen.tags),
+                role=denizen.role,
+                identity=list(identity),
+            )
+        return self.spawn_npc(
+            name,
+            denizen.char,
+            x,
+            y,
+            role=denizen.role,
+            backstory=f"a {denizen.role} of {home}",
+            tags=set(denizen.tags),
+            faction="neutral",
+            identity=list(identity),
+        )
 
     def _spawn_from_template(
         self,
