@@ -299,6 +299,38 @@ MAX_PENDING_BACKLASH = 4  # the world can only have so much in motion at once
 # resources hunting you. The civilian bucket is exempt (it is not a faction that can swear one).
 BLOOD_FEUD_KILLS = 5
 
+# Talk-to-anyone (EMERGENT_QUESTS §13): which creatures can hold a conversation. Default is
+# "anyone with a persona, any npc, and any actor that isn't plainly mindless." A creature that
+# is a beast/slime/swarm cannot parley unless it also reads as a person (humanoid/spirit/…).
+_NONVERBAL_TAGS: frozenset[str] = frozenset(
+    {
+        "beast",
+        "vermin",
+        "slime",
+        "ooze",
+        "swarm",
+        "plant",
+        "construct",
+        "mindless",
+        "fungus",
+    }
+)
+_VERBAL_TAGS: frozenset[str] = frozenset(
+    {
+        "humanoid",
+        "human",
+        "spirit",
+        "fiend",
+        "undead",
+        "goblin",
+        "demon",
+        "fae",
+        "empire",
+    }
+)
+# How far the player can call out to someone they can see (EMERGENT_QUESTS §13 ranged talk).
+TALK_RANGE = 8
+
 
 @dataclass
 class GameState:
@@ -638,6 +670,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             list(identity) if identity is not None else identity_from_tags(actor_tags)
         )
         entity.affiliations = list(affiliations or [])
+        entity.soul_id = f"soul:{entity.id}"
         self.state.entities[entity.id] = entity
         if self._delta_capture:
             self.record_delta(
@@ -725,6 +758,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             list(identity) if identity is not None else identity_from_tags(npc_tags)
         )
         entity.affiliations = list(affiliations or [])
+        entity.soul_id = f"soul:{entity.id}"
         self.state.entities[entity.id] = entity
         npc_wares = dict(wares or {})
         if reward_gold > 0:
@@ -747,6 +781,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             role=role,
             backstory=backstory,
             appearance=appearance,
+            soul_id=entity.soul_id,
             traits=profile_traits,
             lore=seed_npc_lore(
                 role,
@@ -1016,6 +1051,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         source: str = "combat",
         target_tags: list[str] | None = None,
         victim_faction: str = "",
+        subject_refs: list[str] | None = None,
         evidence_tags: list[str] | None = None,
         interpretation_source: str = "rules",
     ) -> Deed | None:
@@ -1046,6 +1082,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             place_key=state.current_place_key(),
             target_tags=list(target_tags or []),
             victim_faction=victim_faction,
+            subject_refs=list(subject_refs or []),
             visibility="witnessed" if witnesses else "secret",
             witnesses=[w.id for w in witnesses],
             evidence_tags=list(evidence_tags or []),
@@ -1140,6 +1177,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             self.state.faction_ledger,
             identity=victim.identity,
         )
+        victim_souls = [victim.soul_id] if victim.soul_id else None
         # Butchering someone who bore no arms and never came at you — the qualitatively
         # different (butcher) reaction, whatever their nation. The faction still rides along.
         if character_is_noncombatant(victim) and not self._was_hostile_to_player(
@@ -1152,6 +1190,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 at=(victim.x, victim.y),
                 target_tags=["civilian"],
                 victim_faction=victim_faction,
+                subject_refs=victim_souls,
                 evidence_tags=["bloodstain", "survivor_testimony"],
             )
             return
@@ -1165,6 +1204,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 at=(victim.x, victim.y),
                 target_tags=["empire"],
                 victim_faction=victim_faction or "empire",
+                subject_refs=victim_souls,
                 evidence_tags=["bloodstain"],
             )
             bystander = self._endangered_civilian_near(victim.x, victim.y)
@@ -1175,6 +1215,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                     summary=f"stood between the Empire and {bystander.name}",
                     at=(victim.x, victim.y),
                     target_tags=["civilian"],
+                    subject_refs=[bystander.soul_id] if bystander.soul_id else None,
                     evidence_tags=["survivor_testimony"],
                 )
             return
@@ -1190,6 +1231,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 at=(victim.x, victim.y),
                 target_tags=[victim_faction],
                 victim_faction=victim_faction,
+                subject_refs=victim_souls,
                 evidence_tags=["bloodstain"],
             )
 
@@ -1414,6 +1456,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             summary=f"struck the chains from {captive.name}",
             at=(captive.x, captive.y),
             target_tags=["civilian", "captive"],
+            subject_refs=[captive.soul_id] if captive.soul_id else None,
             evidence_tags=["survivor_testimony"],
         )
         self.state.add_message(
@@ -2512,21 +2555,99 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         self.finish_player_turn()
         return True
 
-    def find_talk_target(self) -> Entity | None:
-        """The NPC the player is positioned to talk to: any talkable NPC in an
-        adjacent (8-directional) tile, picked deterministically if more than one."""
+    def can_converse_with(self, entity: Entity) -> bool:
+        """Whether the player could hold a conversation with this character — *anyone* with a
+        persona, any NPC, and any actor that isn't plainly mindless (EMERGENT_QUESTS §13: NPCs
+        and enemies are one talkable kind). Props, items, and beasts can't parley unless they
+        also read as a person."""
+        if entity.id == self.state.player_id or not entity.alive:
+            return False
+        if self.state.npc_profiles.get(entity.id) is not None:
+            return True
+        if entity.kind == "npc":
+            return True
+        if entity.kind != "actor":
+            return False
+        if _VERBAL_TAGS & entity.tags:
+            return True
+        return not (_NONVERBAL_TAGS & entity.tags)
+
+    def find_talk_target(
+        self, selector: str | None = None, max_range: int = TALK_RANGE
+    ) -> Entity | None:
+        """The character the player is addressing (EMERGENT_QUESTS §13 — talk to anyone, incl.
+        enemies, at a distance). With a ``selector`` (a name fragment), the nearest visible
+        match within range wins. Otherwise an adjacent talkable comes first (the old behaviour,
+        now including an adjacent enemy), then the nearest *visible* talkable within ``max_range``
+        — so you can call out across a courtyard. Deterministic ties by distance then id."""
         player = self.state.player
-        candidates = []
-        for dx in (-1, 0, 1):
-            for dy in (-1, 0, 1):
-                if dx == 0 and dy == 0:
-                    continue
-                entity = self.blocking_entity_at(player.x + dx, player.y + dy)
-                if entity is not None and entity.kind == "npc" and entity.alive:
-                    candidates.append(entity)
-        if not candidates:
-            return None
-        return min(candidates, key=lambda entity: entity.id)
+        talkable = [
+            entity
+            for entity in self.state.entities.values()
+            if self.can_converse_with(entity)
+        ]
+        if selector:
+            needle = selector.strip().lower()
+            matches = [
+                entity
+                for entity in talkable
+                if needle in entity.name.lower()
+                and self._within_talk_reach(entity, max_range)
+            ]
+            return (
+                min(matches, key=lambda e: (self.distance(player, e), e.id))
+                if matches
+                else None
+            )
+        adjacent = [
+            entity
+            for entity in talkable
+            if max(abs(entity.x - player.x), abs(entity.y - player.y)) <= 1
+        ]
+        if adjacent:
+            return min(adjacent, key=lambda entity: entity.id)
+        ranged = [
+            entity for entity in talkable if self._within_talk_reach(entity, max_range)
+        ]
+        return (
+            min(ranged, key=lambda e: (self.distance(player, e), e.id))
+            if ranged
+            else None
+        )
+
+    def _within_talk_reach(self, entity: Entity, max_range: int) -> bool:
+        """Whether a character is close enough and visible to be called out to."""
+        if self.distance(self.state.player, entity) > max_range:
+            return False
+        return self.tile_key(entity.x, entity.y) in self.state.visible
+
+    def ensure_persona(self, entity: Entity) -> NPCProfile:
+        """Return this character's dialogue persona, creating one **lazily** if they have none
+        (EMERGENT_QUESTS §13 blocker #1 — enemies have no NPCProfile). The procedural persona is
+        seeded from what the body already carries (name, role, allegiance, description), so any
+        actor can be talked to with zero model calls; the LLM only enriches the reply."""
+        profile = self.state.npc_profiles.get(entity.id)
+        if profile is not None:
+            return profile
+        if not entity.soul_id:
+            entity.soul_id = f"soul:{entity.id}"
+        role = (
+            entity.role
+            or role_from_tags(entity.tags)
+            or ("soldier" if entity.faction == "enemy" else "stranger")
+        )
+        backstory = entity.description or f"a {role} the player has crossed paths with"
+        profile = NPCProfile(
+            entity_id=entity.id,
+            name=entity.name,
+            role=role,
+            backstory=backstory,
+            appearance=entity.description or "",
+            soul_id=entity.soul_id,
+            traits=list(entity.traits),
+        )
+        self.state.npc_profiles[entity.id] = profile
+        return profile
 
     def add_promises(self, promises: list[WorldPromise]) -> list[WorldPromise]:
         added: list[WorldPromise] = []
@@ -2956,8 +3077,40 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
             return "you have struck down those we count as enemies"
         return ""
 
+    def _dialogue_situation(self, npc: Entity) -> dict[str, Any]:
+        """The situational frame for a conversation (EMERGENT_QUESTS §13 blocker #4): how far the
+        player is, whether the speaker would fight them, and who else is in earshot — so the LLM
+        can have a frightened clerk parley, a zealot spit defiance mid-fight, or someone across a
+        courtyard answer warily, instead of every line sounding like a calm face-to-face chat."""
+        player = self.state.player
+        distance = self.distance(player, npc)
+        adjacent = max(abs(npc.x - player.x), abs(npc.y - player.y)) <= 1
+        others: list[dict[str, str]] = []
+        for entity in self.state.entities.values():
+            if (
+                entity.id in {npc.id, player.id}
+                or entity.kind not in {"npc", "actor"}
+                or not entity.alive
+                or self.distance(npc, entity) > NPC_PERCEPTION_RADIUS
+            ):
+                continue
+            others.append(
+                {
+                    "name": entity.name,
+                    "toward_me": "hostile"
+                    if self.is_hostile_to(entity, npc)
+                    else "not hostile",
+                }
+            )
+        return {
+            "distance_to_player": round(distance, 1),
+            "player_is_adjacent": adjacent,
+            "i_am_hostile_to_the_player": self.is_hostile_to(npc, player),
+            "others_nearby": others[:5],
+        }
+
     def dialogue_context_for_llm(self, npc: Entity, message: str) -> dict[str, Any]:
-        profile = self.state.npc_profiles[npc.id]
+        profile = self.ensure_persona(npc)
         player = self.state.player
         # How the NPC refers to the player: their chosen name if they gave one,
         # otherwise the body they're in (its name, or "a wandering stranger" for the
@@ -3004,6 +3157,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 "region": self.region.name,
                 "current_realm": state_view.current_realm_card(self),
             },
+            "situation": self._dialogue_situation(npc),
             "nearby_objects": self._npc_nearby_objects(npc),
             "relevant_lore": self.promises_for_context(
                 subject=npc.name, tags=npc.tags, limit=5, text_limit=160

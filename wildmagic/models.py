@@ -283,6 +283,10 @@ class Entity:
     identity: list[str] = field(default_factory=list)
     role: str = ""
     affiliations: list[str] = field(default_factory=list)
+    # A stable handle for this character's *soul* (EMERGENT_QUESTS Q0), distinct from the
+    # body's entity id so it can survive disguise/polymorph/resurrection. Assigned once at
+    # spawn; deeds and specific-person quest objectives bind to it. "" until assigned.
+    soul_id: str = ""
     resistances: dict[str, int] = field(default_factory=dict)
     weaknesses: dict[str, int] = field(default_factory=dict)
     # Standing emanations this entity radiates each turn -- a hound whose shadow
@@ -635,6 +639,9 @@ class NPCProfile:
     role: str
     backstory: str
     appearance: str = ""
+    # The persona's stable soul ref (EMERGENT_QUESTS Q0), mirroring Entity.soul_id — the handle
+    # specific-person quests bind to so they survive a body change. "" for legacy/unseeded NPCs.
+    soul_id: str = ""
     traits: list[str] = field(default_factory=list)
     # Tiered world-knowledge per lore tag (region/tradition) — the access gate for lore
     # cards (docs/LORE_CARDS.md). Absent tag => level 0. Seeded deterministically at
