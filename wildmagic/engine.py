@@ -35,6 +35,7 @@ from .models import (
     RoomProfile,
     TILE_NAMES,
     TILE_TAGS,
+    NONCOMBATANT_ROLES,
     role_from_tags,
 )
 from .semantics import (
@@ -2258,23 +2259,52 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         ]
 
     def is_hostile_to(self, actor: Entity, other: Entity) -> bool:
-        """Whether `actor` is willing to fight `other` -- the general notion of
-        "who's at war with whom," not just "everything hates the player."
+        """Whether `actor` is willing to fight `other` -- a *derived*, relational stance
+        (FACTION_KILL_REPUTATION.md §0), not a stored ally/enemy/neutral flag.
 
-        Baseline: enemies oppose the player and its allies, and vice versa --
-        exactly what every fight in the game already assumed. On top of that,
-        FACTION_HOSTILITIES declares standing conflicts between tagged groups
-        (e.g. {"empire"} vs {"hollowmere_townsfolk"}), so e.g. an Imperial
-        soldier and a Hollowmere local are hostile to each other without either
-        of them needing to be the player or an ally.
+        It is read from three things, in order:
+
+        1. **Role.** A typed non-combatant (a clerk, a child, a bound captive) never takes up
+           arms -- not even for a faction at open war. This is the "a member of a hostile
+           faction who won't fight because they're just a clerk" case.
+        2. **The player-relative tactical baseline** (the stored ``faction`` string -- interim
+           scaffolding until every actor is fully relationship-driven): enemies oppose the
+           player and its allies, and vice versa, exactly as every fight already assumed.
+        3. **The inter-faction relationship graph.** Members of two factions at open war are
+           hostile *even when both are neutral to the player* -- two NPCs of warring realms
+           fight each other in front of you. ``FACTION_HOSTILITIES`` remains a static fallback
+           for tag-pair conflicts not (yet) modeled as factions.
         """
         if actor.id == other.id or other.hp <= 0:
             return False
+        # 1. A role-typed non-combatant does not initiate combat, whatever their allegiance.
+        if (actor.role or "").lower() in NONCOMBATANT_ROLES:
+            return False
+        # 2. Player-relative tactical baseline.
         if actor.faction == "enemy" and other.faction in {"player", "ally"}:
             return True
         if actor.faction in {"player", "ally"} and other.faction == "enemy":
             return True
+        # 3. Derived from the political graph, then the static tag-pair fallback.
+        if self._factions_at_war(actor, other):
+            return True
         return self._declared_conflict(actor, other)
+
+    def _factions_at_war(self, actor: Entity, other: Entity) -> bool:
+        """Whether ``actor`` and ``other`` belong to two distinct factions the ledger holds at
+        open war (derived combat stance §0). Resolves each to a faction by its typed identity
+        (falling back to tags/kind), so it generalizes across the rolled roster. Unaligned
+        creatures and same-faction members are never at war by this path."""
+        ledger = self.state.faction_ledger
+        actor_faction = resolve_faction(
+            actor.tags, actor.kind, ledger, identity=actor.identity
+        )
+        other_faction = resolve_faction(
+            other.tags, other.kind, ledger, identity=other.identity
+        )
+        if not actor_faction or not other_faction or actor_faction == other_faction:
+            return False
+        return ledger.are_hostile(actor_faction, other_faction)
 
     def _declared_conflict(self, actor: Entity, other: Entity) -> bool:
         """Whether `actor` and `other` are bound by a standing FACTION_HOSTILITIES
