@@ -53,6 +53,7 @@ from .props import (
     get_prop_template,
 )
 from .regions import region_for_zone
+from .worldgen import imperial_density_for_role, realm_card_for_zone
 
 
 @dataclass(frozen=True)
@@ -1160,6 +1161,7 @@ class _GenerationMixin:
             occupied.add(spot)
 
         self._place_books_in_labeled_rooms()
+        self._ensure_overworld_edge_access()
         state.add_message(
             "Hollowmere clings to the lip of the old dungeon stair, half town and half watchtower."
         )
@@ -1280,6 +1282,71 @@ class _GenerationMixin:
         sx, sy = stair_room.center
         state.tiles[sy][sx] = STAIRS_DOWN
         return player.x, player.y
+
+    def _reachable_overworld_edges(self) -> set[str]:
+        state = self.state
+        if state.player_id not in state.entities:
+            return set()
+        player = state.player
+        start = (player.x, player.y)
+        if not self.in_bounds(*start):
+            return set()
+        queue: deque[tuple[int, int]] = deque([start])
+        seen = {start}
+        edges: set[str] = set()
+        while queue:
+            x, y = queue.popleft()
+            if x == 0:
+                edges.add("west")
+            if x == state.width - 1:
+                edges.add("east")
+            if y == 0:
+                edges.add("north")
+            if y == state.height - 1:
+                edges.add("south")
+            for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                nx, ny = x + dx, y + dy
+                if (nx, ny) in seen or not self.in_bounds(nx, ny):
+                    continue
+                if state.tiles[ny][nx] in BLOCKING_TILES:
+                    continue
+                seen.add((nx, ny))
+                queue.append((nx, ny))
+        return edges
+
+    def _ensure_overworld_edge_access(self) -> None:
+        """Surface world starts must be enterable/exitable by foot on every side."""
+        state = self.state
+        if state.world_map is None or state.player_id not in state.entities:
+            return
+        missing = {"west", "east", "north", "south"} - self._reachable_overworld_edges()
+        if not missing:
+            return
+        player = state.player
+
+        def open_tile(x: int, y: int) -> None:
+            if not self.in_bounds(x, y):
+                return
+            if state.tiles[y][x] not in {STAIRS_DOWN, STAIRS_UP}:
+                state.tiles[y][x] = FLOOR
+            state.tile_tags.pop((x, y), None)
+            state.tile_durations.pop((x, y), None)
+            state.tile_flows.pop((x, y), None)
+
+        targets = {
+            "west": (0, player.y),
+            "east": (state.width - 1, player.y),
+            "north": (player.x, 0),
+            "south": (player.x, state.height - 1),
+        }
+        for edge in sorted(missing):
+            tx, ty = targets[edge]
+            if edge in {"west", "east"}:
+                for x in range(min(player.x, tx), max(player.x, tx) + 1):
+                    open_tile(x, player.y)
+            else:
+                for y in range(min(player.y, ty), max(player.y, ty) + 1):
+                    open_tile(player.x, y)
 
     def _generate_bazaar_start(self) -> None:
         """The Saltmarket: a jewel-toned bazaar that runs on barter. Stalls crowd an
@@ -1417,6 +1484,7 @@ class _GenerationMixin:
         self._populate_hub_vendors(zone_rng, stalls[len(named) :], occupied)
         self._place_books_in_labeled_rooms()
         self._place_saltmarket_props(zone_rng, stalls, occupied)
+        self._ensure_overworld_edge_access()
         state.add_message(
             "The Saltmarket opens around you -- a riot of awnings, spice-smoke, and "
             "haggling that never quite stops."
@@ -1677,6 +1745,7 @@ class _GenerationMixin:
                 occupied.add(spot)
 
         self._place_books_in_labeled_rooms()
+        self._ensure_overworld_edge_access()
         state.add_message(
             "You come to in a cramped pocket of the Warren -- close walls, old dust, "
             "and rooms crowding away in every direction."
@@ -1838,6 +1907,7 @@ class _GenerationMixin:
                 occupied.add(notice_spot)
 
         self._place_books_in_labeled_rooms()
+        self._ensure_overworld_edge_access()
         state.add_message(
             "The Foxed Stacks rise around you -- ladders, lamplight, and more hoarded "
             "books than anyone has ever finished counting."
@@ -1855,8 +1925,6 @@ class _GenerationMixin:
 
     def _generate_frontier_start(self) -> None:
         state = self.state
-        state.zone_x = 0
-        state.zone_y = 0
         state.zones = {}
         state.depth = 1
         state.max_depth = 1
@@ -1868,7 +1936,8 @@ class _GenerationMixin:
         state.tile_rooms = {}
         state.explored = set()
 
-        state.zone_type = self._generate_open_zone(0, 0)
+        state.region_id = region_for_zone(state.zone_x, state.zone_y, state.world_map)
+        state.zone_type = self._generate_open_zone(state.zone_x, state.zone_y)
 
         px, py = state.width // 2, state.height // 2
         player = self._make_player(px, py)
@@ -1876,6 +1945,7 @@ class _GenerationMixin:
         if not self.can_occupy(px, py):
             player.x, player.y = self._find_entry_tile(px, py)
 
+        self._ensure_overworld_edge_access()
         state.add_message(
             "Open country stretches in every direction beneath a wide sky."
         )
@@ -1886,6 +1956,8 @@ class _GenerationMixin:
 
     def _imperial_density(self, zx: int, zy: int) -> float:
         """How strongly the Grand Empire holds a zone — higher to the northeast, lower to the southwest."""
+        if self.state.world_map is not None:
+            return imperial_density_for_role(self.state.world_map.role_at(zx, zy))
         gradient = (zx + zy) / 8.0
         return max(0.05, min(0.95, 0.5 + gradient))
 
@@ -2787,11 +2859,14 @@ class _GenerationMixin:
             return False
         entry_x = max(0, min(width - 1, entry_x))
         entry_y = max(0, min(height - 1, entry_y))
+        if state.world_map is not None and not state.world_map.contains(new_zx, new_zy):
+            state.add_message("Beyond this edge, the known world simply ends.")
+            return False
 
         self._save_current_zone()
         self.clear_target()
         state.zone_x, state.zone_y = new_zx, new_zy
-        new_region_id = region_for_zone(new_zx, new_zy)
+        new_region_id = region_for_zone(new_zx, new_zy, state.world_map)
         region_changed = new_region_id != state.region_id
         state.region_id = new_region_id
         self._load_or_generate_zone(new_zx, new_zy, entry_x, entry_y)
@@ -2898,6 +2973,8 @@ class _GenerationMixin:
             "current_situation": current_situation,
             "settlement_type": stype,
         }
+        if self.state.world_map is not None:
+            context["current_realm"] = realm_card_for_zone(self.state.world_map, zx, zy)
         promise_hooks = self.promise_hooks_for_zone((zx, zy), limit=3)
         if promise_hooks:
             context["promise_hooks"] = promise_hooks

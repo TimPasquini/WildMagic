@@ -862,8 +862,13 @@ def get_region(region_id: str | None) -> Region:
     return REGIONS.get(region_id or "", REGIONS[DEFAULT_REGION_ID])
 
 
-def region_for_zone(zx: int, zy: int) -> str:
+def region_for_zone(zx: int, zy: int, world_map: Any | None = None) -> str:
     """Geography: the frontier holds wherever the imperial road network reaches;
     the deep wild begins past it. Crude ring for now — a real region map can
     replace this without touching callers."""
+    if world_map is not None:
+        role = world_map.role_at(zx, zy) if world_map.contains(zx, zy) else None
+        if role == "rival" or role is None:
+            return _GLASSWILD.id
+        return _FRONTIER.id
     return _GLASSWILD.id if abs(zx) + abs(zy) >= 3 else _FRONTIER.id

@@ -38,6 +38,7 @@ from .models import (
 )
 from .spell_contract import SUPPORTED_COSTS
 from .templates import creature_template_ids, item_template_ids
+from .worldgen import realm_card_for_zone
 
 if TYPE_CHECKING:
     from .capabilities import CapabilityCard
@@ -365,6 +366,7 @@ def spell_context_view(
         # user-message JSON. See _wild_prompt_messages / focus_prompt_block.
         "spell_foci": resolve_foci(engine),
         "turn": engine.state.turn,
+        "current_realm": current_realm_card(engine),
         "depth": engine.state.depth,
         "max_depth": engine.state.max_depth,
         "player": player.to_public_dict(),
@@ -434,6 +436,14 @@ def tile_counts(tiles: list[list[str]]) -> dict[str, int]:
     return dict(sorted(counts.items()))
 
 
+def current_realm_card(engine: "GameEngine") -> dict[str, Any] | None:
+    state = engine.state
+    world = state.world_map
+    if world is None:
+        return None
+    return realm_card_for_zone(world, state.zone_x, state.zone_y)
+
+
 def state_summary(engine: "GameEngine") -> dict[str, Any]:
     """Structured snapshot of the whole run: player, world ledgers, enemies, items, and
     emergent-world state. Drives the deterministic replay round-trip and CLI/GUI inspection.
@@ -448,6 +458,12 @@ def state_summary(engine: "GameEngine") -> dict[str, Any]:
     )
     return {
         "turn": state.turn,
+        "scenario": state.scenario,
+        "zone": [state.zone_x, state.zone_y],
+        "zone_type": state.zone_type,
+        "region": state.region_id,
+        "current_realm": current_realm_card(engine),
+        "world_map": state.world_map.to_dict() if state.world_map is not None else None,
         "depth": state.depth,
         "max_depth": state.max_depth,
         "game_over": state.game_over,

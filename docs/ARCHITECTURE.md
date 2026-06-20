@@ -81,7 +81,9 @@ split into mixins, leaving engine.py with the infrastructure that everything els
   `descend_stairs`, `ascend_stairs`, `teleport_entity`, `_move_to_nearest_open_tile`. The
   `seal_stairs` world flag blocks stair travel while set.
 - Standard spells (deterministic, no LLM): `cast_standard_bolt`, `cast_standard_frost`, `cast_standard_heal`, `cast_standard_ward`, `cast_standard_reveal`
-- NPC dialogue/trade/promises: `find_talk_target`, `dialogue_context_for_llm`, `lore_extraction_context`, `promises_for_context`, `promise_hooks_for_zone`, `add_promises`, `apply_dialogue_exchange`, `resolve_pending_trade`, `should_consider_trade`, `trade_context_for_llm`
+- NPC dialogue/trade/promises: `find_talk_target`, `dialogue_context_for_llm`, `lore_extraction_context`, `promises_for_context`, `promise_hooks_for_zone`, `add_promises`, `apply_dialogue_exchange`, `resolve_pending_trade`, `should_consider_trade`, `trade_context_for_llm`.
+  Dialogue, trade, and lore packets include the shared current-realm card when the scenario
+  has a world map.
 - LLM context building: `context_for_llm` (delegates to `state_view.spell_context_view`),
   `nearby_spell_anchors`, `nearby_map_strings`.
   Context includes semantic room labels (`current_room`, `nearby_rooms`) and retrieved
@@ -121,7 +123,9 @@ top-level views: `spell_context_view` (the resolver packet returned by
 `engine.context_for_llm`) and `state_summary` (exposed as `replay_summary_view` for
 `actions.summarize_state`/replay records and `inspection_view` for CLI/GUI inspection).
 `resolve_foci` turns the caster's marked focus slots into the resolver's `spell_foci` flavor
-list. Everything here is pure reads; `tile_counts` lives here too. See
+list. `current_realm_card` exposes the zone's owning realm, role, tradition, and ruler from
+the world map for resolver, replay, dialogue, and inspection consumers. Everything here is
+pure reads; `tile_counts` lives here too. See
 `docs/WILD_MAGIC_STATE_SURFACE_PLAN.md` (Stage 2). Imports only leaf modules
 (`models`, `capabilities`, `equipment`, `spell_contract`, `templates`), never `engine`, so it sits below
 the engine in the import order despite reading from it at call time. Active `tile_flows`
@@ -220,7 +224,10 @@ All map and world generation (41 methods):
   `_carve_corridor_mirrored`, `_place_doors`, `_place_doors_mirrored`, `_floor_reachable`,
   `_place_locked_door`, `_random_open_tile_in_room`
 - **Scenarios** — `_generate_new_run`, `_generate_test_chamber`, `_generate_empire_compound`,
-  `_generate_town_start`, `_generate_frontier_start`
+  `_generate_town_start`, `_generate_frontier_start`, and the alternate surface starts
+  `_generate_bazaar_start`, `_generate_warren_start`, `_generate_archive_start`.
+  World-bearing surface starts ensure walkable local exits to all four zone edges so
+  overworld travel works from authored hubs.
 - **Frontier/open zones** — `_generate_open_zone`, `_scatter_terrain_features`,
   `_place_zone_buildings`, `_build_common_structure`, `_build_imperial_structure`,
   `_wall_room_perimeter`, `_realize_zone_promises`, `_build_promise_structure`,
@@ -230,9 +237,9 @@ All map and world generation (41 methods):
   `memorial_site`, `hidden_site`, `creature_site`, and `authority_site`. Each archetype
   defines structure style, footprint, props, optional NPC role, and optional hostile count.
 - **LLM towns** — `_generate_llm_town`, `_draw_road_through_zone`, `_build_town_context`,
-  `_get_town_spec`, `_maybe_pregenerate_adjacent_towns`. Town context includes
-  `promise_hooks` reserved for that specific zone; generated towns can fold one into
-  description/NPC/building content and mark it `realized`.
+  `_get_town_spec`, `_maybe_pregenerate_adjacent_towns`. Town context includes the current
+  realm card plus `promise_hooks` reserved for that specific zone; generated towns can fold
+  one into description/NPC/building content and mark it `realized`.
 - **Zone navigation** — `_cross_zone_edge`, `_save_current_zone`, `_load_or_generate_zone`
 - **Road network** — `_road_anchor`, `_zone_is_road`, `_road_edges`, `_zone_should_be_town`
 
@@ -469,6 +476,15 @@ affiliations) and `FactionLedger` with **stable role queries** (`by_kind`/`ids_b
 resistance / player_org) and generalize to Phase C's full roster. `seed_phase0_factions`
 is the two-pole scaffold (kept minimal); never carried between runs.
 
+### `wildmagic/worldgen.py`
+Per-run geopolitical world roll. Holds the fixed core realm roster, rolls which old kingdom
+is the rival, applies a seeded rotation/reflection to the fixed political relationship graph,
+places Vigovia, Threen, and the four old kingdoms on the bounded overworld map, seeds a
+world-bearing faction ledger, assigns current start scenarios to distinct map locations, and
+renders the shared political atlas used by CLI/GUI. It fixes realm ownership up front while
+leaving zone interiors lazy. `realm_card_for_zone` is the shared realm-context packet used by
+state views and generation prompts.
+
 ### `wildmagic/legend.py`
 `LegendLedger` — bounded-vocab (`LEGEND_VOCAB`) weighted legend tags per actor soul, the
 **mechanical** truth the simulator/dialogue/scores read; a prose mirror is written to the
@@ -567,8 +583,10 @@ Regions as first-class data (see `EXECUTION_PLAN.md` Phase 13). Frozen dataclass
 bundling everything about "where you are": LLM voice spec + example outcome lines,
 enemy template pool, `imperial_presence`, floor theme weights, ambient message tables,
 wildness-banded wonder lines, and `wildness_base` (effective wildness = base + depth).
-`REGIONS` registry, `get_region`, and `region_for_zone(zx, zy)` mapping overworld zones to
-regions. Consumed by `engine.region` (a property over `state.region_id`), generation,
+`REGIONS` registry, `get_region`, and `region_for_zone(zx, zy, world_map=None)` mapping
+overworld zones to regions; when a rolled world map is present, realm role drives the
+lookup, with the old radius ring kept as a fallback for synthetic scenarios. Consumed by
+`engine.region` (a property over `state.region_id`), generation,
 ambience, and the wild-magic prompt builder (`region_style` in the LLM context, spliced
 into the system prompt by `_wild_prompt_messages` in `wild_magic.py`).
 

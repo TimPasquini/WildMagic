@@ -140,6 +140,7 @@ def test_flesh_decorates_realization_and_replays_identically(tmp_path: Path) -> 
         lore_provider=lore_provider,
     )
     try:
+        start_zone = (session.engine.state.zone_x, session.engine.state.zone_y)
         session._enqueue_lore_extraction(
             {
                 "npc": "Drover",
@@ -147,7 +148,7 @@ def test_flesh_decorates_realization_and_replays_identically(tmp_path: Path) -> 
                 "location": "frontier",
                 "message": "Any rumors?",
                 "reply": "There is a chapel north of here.",
-                "zone": {"x": 0, "y": 0},
+                "zone": {"x": start_zone[0], "y": start_zone[1]},
             },
             {},
         )
@@ -169,8 +170,8 @@ def test_flesh_decorates_realization_and_replays_identically(tmp_path: Path) -> 
             or session.records[-1]["flesh"]["after"]
         )
 
-        assert _walk_north_until_zone(session, -1)
-        # The chapel bound to the first unexplored northern zone: (0, -1).
+        assert _walk_north_until_zone(session, start_zone[1] - 1)
+        # The chapel bound to the first unexplored northern zone from the start.
         assert chapel.status == "realized"
         messages = session.engine.state.messages
         assert any("The story was true after all" in message for message in messages)

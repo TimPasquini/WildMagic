@@ -194,6 +194,8 @@ def test_sacred_site_promise_realizes_in_open_zone(
     session = GameSession(seed=19, scenario="frontier", provider_name="mock")
     engine = session.engine
     monkeypatch.setattr(engine, "_zone_should_be_town", lambda zx, zy: False)
+    start_zone = (engine.state.zone_x, engine.state.zone_y)
+    target_zone = (start_zone[0], start_zone[1] - 1)
     promise = WorldPromise(
         id="promise_chapel_north",
         kind="rumor",
@@ -202,21 +204,24 @@ def test_sacred_site_promise_realizes_in_open_zone(
         tags=["chapel"],
         source="dialogue:Old Maren",
         source_turn=1,
-        origin_zone=(0, 0),
+        origin_zone=start_zone,
         salience=5,
         confidence=0.8,
         what="chapel",
     )
 
     engine.add_promises([promise])
-    assert engine.state.promise_reservations[(0, -1)][0].promise_id == promise.id
+    assert engine.state.promise_reservations[target_zone][0].promise_id == promise.id
 
     player = engine.state.player
-    engine._load_or_generate_zone(0, -1, player.x, 1)
+    engine._load_or_generate_zone(target_zone[0], target_zone[1], player.x, 1)
 
     assert promise.status == "realized"
-    assert promise.realized_in == "sacred_site at zone (0,-1)"
-    assert (0, -1) not in engine.state.promise_reservations
+    assert (
+        promise.realized_in
+        == f"sacred_site at zone ({target_zone[0]},{target_zone[1]})"
+    )
+    assert target_zone not in engine.state.promise_reservations
     site_props = {
         entity.name
         for entity in engine.state.entities.values()
@@ -297,6 +302,8 @@ def test_site_archetypes_realize_without_bespoke_handlers(
     session = GameSession(seed=31, scenario="frontier", provider_name="mock")
     engine = session.engine
     monkeypatch.setattr(engine, "_zone_should_be_town", lambda zx, zy: False)
+    start_zone = (engine.state.zone_x, engine.state.zone_y)
+    east_zone = (start_zone[0] + 1, start_zone[1])
     promise = WorldPromise(
         id=f"promise_{blueprint}",
         kind="rumor",
@@ -305,7 +312,7 @@ def test_site_archetypes_realize_without_bespoke_handlers(
         tags=tags,
         source="dialogue:test",
         source_turn=1,
-        origin_zone=(0, 0),
+        origin_zone=start_zone,
         salience=5,
         confidence=0.8,
         what=what,
@@ -317,10 +324,10 @@ def test_site_archetypes_realize_without_bespoke_handlers(
     assert blueprint in SITE_BLUEPRINTS
 
     player = engine.state.player
-    engine._load_or_generate_zone(1, 0, 1, player.y)
+    engine._load_or_generate_zone(east_zone[0], east_zone[1], 1, player.y)
 
     assert promise.status == "realized"
-    assert promise.realized_in == f"{blueprint} at zone (1,0)"
+    assert promise.realized_in == f"{blueprint} at zone ({east_zone[0]},{east_zone[1]})"
     prop_names = {
         entity.name
         for entity in engine.state.entities.values()

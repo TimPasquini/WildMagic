@@ -411,7 +411,8 @@ Phase D:
   survives respawn, zone reload, disguise, polymorph, possession, resurrection, and magical
   body regeneration; add the soul-based **`subject_refs`** carry to `Deed`. Nothing
   player-facing changes, but every later step depends on it. *Payoff: specific-person quests
-  can exist at all.*
+  can exist at all.* **Q0 is bigger than soul identity — it is the full actor/persona
+  unification (talk to anyone, incl. enemies). See §13.**
 - **Q1 — objectives become live (vertical slice).** Generalize `Objective` + explicit match
   spec; build the deed → objective matcher as a pure function. Wire only the two objective
   types whose deeds already exist — **`rescue`** (`freed_captive`) and **`defend`**
@@ -486,3 +487,53 @@ authored by the world.
 | `wildmagic/prompts.py` | Loosen lore prompt to extract plights; add hook-extraction shape. |
 | `wildmagic/lore.py` | Hook-extraction pass / claim shape carrying an objective. |
 | `tests/` | `test_quest_promises.py` extended; new matcher + mutation tests. |
+
+---
+
+## 13. Q0 expanded — the actor/persona unification (talk to anyone)
+
+*(From the 2026-06-19 design conversation. Q0 is bigger than "soul identity": it is the merge
+of "NPC" and "enemy" into one **character** the player can converse with. The
+faction/identity half of this lives in `FACTION_KILL_REPUTATION.md` §0; this is the
+dialogue/actor half. Both are the same unification.)*
+
+**Goal:** the player can talk to *anyone* — including enemies, and **at a distance** — and the
+LLM reads the situation (distance, hostility, surroundings) to respond in character: a
+frightened clerk parleys, a zealot spits defiance mid-fight, someone across a courtyard
+answers warily.
+
+**The dialogue engine is already general.** Persona + memory + bond + legend + lore cards +
+scene notes + LLM resolution, fed by a plain context dict (`engine.dialogue_context_for_llm`);
+it doesn't care who speaks. Four concrete blockers:
+
+1. **Enemies have no `NPCProfile`.** Only `spawn_npc` creates the dialogue persona;
+   `spawn_actor` (enemies) doesn't, and dialogue hard-requires `npc_profiles[id]`. *Fix:* every
+   conversational actor carries a persona (procedural, LLM-optional; can be created lazily on
+   first talk). *[medium]*
+2. **`kind == "npc"` is load-bearing in ~12–15 sites** and conflates *has-a-persona* /
+   *won't-fight* / *is-innocent* (grep `kind == "npc"`: dialogue gating, flee AI
+   `ai._npc_turns`, civilian-kill detection `_record_kill_deed`, talk targeting
+   `find_talk_target`, the `resolve_faction` civilian heuristic, …). *Fix:* gate conversation
+   on *having a persona*, fight/flee on *faction + role* (FACTION_KILL §0), neither on `kind`.
+   *[medium–large cleanup]*
+3. **Talk targeting is adjacent-only + `kind=="npc"`-only** (`find_talk_target`, an 8-neighbour
+   scan). *Fix:* a targeted `talk <who>` with a range / line-of-sight check that accepts any
+   persona-bearing actor. *[small–medium]*
+4. **Dialogue context has no situational awareness.** It carries persona, player block, legend,
+   nearby *objects*, scene notes — but no **distance, hostility/combat state, or nearby
+   actors/threats**. *Fix:* add those fields to `dialogue_context_for_llm` so the model can
+   modulate tone. *[small]*
+
+**Recommended sequence (delivers the feature before the full refactor):**
+
+1. **Situational context (#4)** — cheapest; improves existing NPC dialogue immediately.
+2. **Personas on all actors + ranged/targeted talk (#1, #3)** — *playable milestone:* talk to
+   enemies at a distance.
+3. **The `kind` unification + soul identity (#2 + original Q0)** — one coherent refactor:
+   conversation gated by persona, combat by faction+role, identity by soul; nothing
+   special-cases "npc" vs "actor" again.
+
+**Why it's one job with the faction work:** #2's fix and `FACTION_KILL_REPUTATION.md` §0 are the
+*same change* — typing `identity`/`role` and deriving combat stance. Doing the actor
+unification once serves quests (soul-bound objectives), dialogue (talk to anyone), and faction
+attribution.

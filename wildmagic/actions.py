@@ -73,6 +73,7 @@ from .wild_magic import (
     make_provider,
     resolve_spell,
 )
+from .worldgen import REALM_TEMPLATES, world_map_strings
 
 
 DIRECTIONS = {
@@ -397,6 +398,10 @@ class GameSession:
                 action = "journal"
                 success = True
                 explicit_messages = describe_journal(self.engine)
+            elif verb in {"world", "atlas", "survey"}:
+                action = "world"
+                success = True
+                explicit_messages = describe_world(self.engine)
             elif verb in {"curses", "hexes"}:
                 action = "curses"
                 success = True
@@ -2898,12 +2903,13 @@ def _parse_rest_arg(arg: str) -> tuple[float | None, float | None, str | None]:
 
 def command_help() -> list[str]:
     return [
-        "Commands: move north/south/east/west, open, descend, ascend, wait (recover 1 MP), rest [hours | until <time>] (camp 8h by default), cast <spell>, target <x> <y>, talk <message>, possess [name], examine, read [book], use <item>, equip <item>, unequip <slot>, focus <item> (set spell focus), unfocus, drop <item>, pickup, inspect (or inventory), curses, journal (or rumors), standing, wares (or browse), quit.",
+        "Commands: move north/south/east/west, open, descend, ascend, wait (recover 1 MP), rest [hours | until <time>] (camp 8h by default), cast <spell>, target <x> <y>, talk <message>, possess [name], examine, read [book], use <item>, equip <item>, unequip <slot>, focus <item> (set spell focus), unfocus, drop <item>, pickup, inspect (or inventory), curses, journal (or rumors), world (or atlas), standing, wares (or browse), quit.",
         "Targeting: click a square (or 'target <x> <y>') to mark it - a free action, no turn. Then 'cast fireball at target', 'teleport to target', etc. aim there, and the standard spark/frost spells hit your marked foe. Click it again, 'untarget', or Esc to clear.",
         "Possessing: 'possess' (or 'swap'/'inhabit') leaps your soul into the nearest body - or 'possess <name>' for a specific one. You become that body entirely: its stats, its hit points, its inventory. The body you leave drops as an inert husk. Costs a turn.",
         "Reading: stand on or next to a book and 'read' (or 'read <name>' to pick one). The first reading takes a turn and fixes the book's title and pages forever; rereading is free. What books claim about the world is hearsay - but the world has a way of honoring what gets written down.",
         "Investigating: 'investigate' (or 'search') studies the room - it costs 1-3 turns while the world keeps moving, and what you learn is permanent. If something here is hidden, careful search turns up a clue; investigate the thing the clue points at ('investigate <name>') to see what it was protecting.",
         "Journal: 'journal' lists everything the world has told you - rumors heard, claims corroborated, places found true - with a rough direction when one was given. Free, costs no turn.",
+        "World map: 'world' (or 'atlas') shows the political survey map - realms, the imperial capital, the rival, and where you stand. Free, costs no turn.",
         "Curses: 'curses' lists active curse names, descriptions, and mechanical limits. Curses lift on their own as you gain experience - each breaks once you've earned enough XP while carrying it. Nothing to spend.",
         "Standing: 'standing' (or 'reputation'/'factions') shows how the world's powers regard you - the mark your deeds have left on the Empire and those who oppose it. Free, costs no turn.",
         "Followers: 'followers' (or 'retinue') lists those who have come to follow you and the organizations you've founded; 'found <name>' raises a banner of your own. Free, costs no turn.",
@@ -2981,6 +2987,27 @@ def describe_journal(engine: GameEngine) -> list[str]:
         lines.append(line)
         if entry["hint"]:
             lines.append(f"       ~ {entry['hint']}")
+    return lines
+
+
+def describe_world(engine: GameEngine) -> list[str]:
+    state = engine.state
+    world = state.world_map
+    if world is None:
+        return ["No world atlas is available in this scenario."]
+    visited = set(state.zones)
+    visited.add((state.zone_x, state.zone_y))
+    lines = world_map_strings(world, (state.zone_x, state.zone_y), visited)
+    placement = world.placement_at(state.zone_x, state.zone_y)
+    if placement is None:
+        lines.append("")
+        lines.append("You are in uncharted wilds within the edge of the known world.")
+    else:
+        template = REALM_TEMPLATES[placement.realm_id]
+        lines.append("")
+        lines.append(
+            f"Current realm: {template.name} ({placement.role}; {template.tradition})."
+        )
     return lines
 
 

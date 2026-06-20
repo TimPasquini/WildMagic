@@ -89,6 +89,8 @@ def test_room_profiles_survive_dungeon_floor_snapshots() -> None:
 def test_realized_promise_flesh_writes_canon_records(monkeypatch) -> None:
     engine = GameEngine(seed=19, scenario="frontier", provider_name="mock")
     monkeypatch.setattr(engine, "_zone_should_be_town", lambda zx, zy: False)
+    start_zone = (engine.state.zone_x, engine.state.zone_y)
+    target_zone = (start_zone[0], start_zone[1] - 1)
     promise = WorldPromise(
         id="promise_quiet_chapel",
         kind="rumor",
@@ -97,7 +99,7 @@ def test_realized_promise_flesh_writes_canon_records(monkeypatch) -> None:
         tags=["chapel", "saint"],
         source="dialogue:Old Maren",
         source_turn=1,
-        origin_zone=(0, 0),
+        origin_zone=start_zone,
         salience=5,
         confidence=0.8,
         what="chapel",
@@ -113,7 +115,7 @@ def test_realized_promise_flesh_writes_canon_records(monkeypatch) -> None:
 
     engine.add_promises([promise])
     player = engine.state.player
-    engine._load_or_generate_zone(0, -1, player.x, 1)
+    engine._load_or_generate_zone(target_zone[0], target_zone[1], player.x, 1)
 
     canon = engine.state.canon_records
     site = canon["canon_promise_quiet_chapel_site"]

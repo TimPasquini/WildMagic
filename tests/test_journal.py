@@ -126,13 +126,17 @@ def test_prophecy_spell_binds_incurs_debt_and_realizes(tmp_path: Path) -> None:
         )
 
         state = session.engine.state
+        start_zone = (state.zone_x, state.zone_y)
+        north_zone = (start_zone[0], start_zone[1] - 1)
         prophecy = next(p for p in state.promises if p.kind == "prophecy")
         assert (
             prophecy.binding is not None and prophecy.binding.blueprint == "hidden_site"
         )
-        assert prophecy.bound_space is not None and prophecy.bound_space.zone == (0, -1)
+        assert (
+            prophecy.bound_space is not None and prophecy.bound_space.zone == north_zone
+        )
         # Engine cost floor: 3 + salience 4 + 5 for the item = 12 mana.
-        assert state.player.mana == mana_before - 12
+        assert state.player.mana == max(0, mana_before - 12)
         # Prophesied treasure is borrowed: Wild Debt curse, collector timer, ledger entry.
         assert "wild_debt" in state.curses
         assert any(
@@ -145,7 +149,7 @@ def test_prophecy_spell_binds_incurs_debt_and_realizes(tmp_path: Path) -> None:
         assert "somewhere north of where you heard it" in journal
         assert "wild debt" in journal
 
-        assert _walk_north_until_zone(session, -1)
+        assert _walk_north_until_zone(session, north_zone[1])
         assert prophecy.status == "realized"
         blades = [
             e

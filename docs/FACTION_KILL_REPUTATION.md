@@ -4,7 +4,9 @@ Design for tracking, as first-class state, **how many of each faction the player
 killed**, and making factions react by *who* the player has been killing — not one flat
 "kills" number. A companion to `EMERGENT_WORLD_STRATEGY.md` (§5.1 multidimensional
 standing) and `EMERGENT_WORLD_IMPLEMENTATION.md` (Phase B factions); it generalizes the
-deed→standing path already in the repo.
+deed→standing path already in the repo. It also carries the **character-unification
+philosophy** (§0) — NPCs and enemies are one kind of thing — because robust faction
+attribution depends on it.
 
 Status: **K1–K2 implemented** (2026-06-19). The relational layers (**K3–K5**) are
 **deferred** until the nations worldbuilding lands — the inter-faction relationship system
@@ -12,6 +14,69 @@ arrives with it — so the data is captured now and the differentiated *reaction
 top later. The civilian/hostile prerequisite also shipped: `killed_civilians` no longer fires
 when the victim was hostile to the player before being struck
 (`engine._was_hostile_to_player`; see §2).
+
+---
+
+## 0. Unification philosophy: one kind of character
+
+*(Settled 2026-06-19. The north star the actor model builds toward — staged, not all at
+once. Robust faction attribution depends on it, which is why it leads this doc.)*
+
+**NPCs and enemies are not different kinds of thing.** They are all *characters*:
+soul-bearing actors with an identity, a role, and a place in the world. "Enemy," "ally," and
+"townsperson" are not *types* — they are situational, mostly **derived** stances. The habit
+of using `kind == "npc"` to mean "neutral non-combatant townsperson" is the conflation we are
+unwinding: it bundles three independent facts — *has a persona* (talkable), *won't fight*
+(flees), *is innocent* (a non-combatant) — into one flag. (Same unification as
+`EMERGENT_QUESTS.md` Q0, seen from the faction side.)
+
+**A character stores three identity dimensions — hybrid: typed where it's load-bearing, flat
+tags for the rest.**
+
+- **`identity`** — faction allegiance, a typed list: `["hollowmere"]`, `["imperial"]`, or
+  `["hollowmere", "merchant_guild"]` when one belongs to several. The **source of truth** for
+  `resolve_faction` and all reputation; maps to faction-ledger factions.
+- **`role`** — function, a single value: `townsfolk`, `soldier`, `clerk`, `merchant`,
+  `priest`. Decides combat *capability/willingness* (a clerk won't fight) and the
+  *non-combatant* read for kills. (`NPCProfile.role` already exists — this promotes it to
+  load-bearing.)
+- **`affiliations`** — organizations, a typed list: `["merchant_guild"]`. Org membership,
+  distinct from allegiance. (`Bond.affiliations` already exists.)
+- plus the existing flat **`tags`** (`set[str]`) for everything loose — `flammable`,
+  `undead`, lore hooks, prop matching, `FACTION_HOSTILITIES`. Identity no longer *lives* in
+  `tags`; we stop guessing allegiance from them.
+
+Worked examples: a Hollowmere weaver `identity:["hollowmere"], role:"townsfolk"`; a garrison
+soldier `identity:["imperial"], role:"soldier"`; a records-keeper `identity:["imperial"],
+role:"clerk"`; a guild trader `identity:["hollowmere","merchant_guild"], role:"merchant"`.
+
+**Combat stance is derived and relational, not stored.** We stop tagging people
+`ally/enemy/neutral` as a fixed property. Who fights whom is **computed** from (a) the two
+characters' identities and how their factions regard each other, (b) role — a clerk or a
+child won't draw a blade even for a faction at war, (c) situation/provocation. This unlocks
+the cases a flat field can't express: **two characters both neutral to the player fighting
+each other** because their factions are at war; **a member of a hostile faction who won't
+fight because they're just a clerk**; an ambusher peaceable until provoked. *Staging: the
+stored `Entity.faction` stance string stays as an interim crutch until the inter-faction
+relationship model lands with the nations worldbuilding (§7 K3–K5). The philosophy is the
+target; today's string is scaffolding to be replaced by a derivation.*
+
+**Kill semantics fall out of identity × role.** A kill records two orthogonal facts: *whose
+member died* (**identity** → the faction's grudge, always) and *were they a non-combatant*
+(**role** → the butchery/legitimacy hit). Killing an unarmed imperial clerk is therefore
+**both** "you struck the Empire" *and* "you butchered a non-combatant" — not one or the
+other. This supersedes today's `killed_imperials`-vs-`killed_civilians` split, which wrongly
+treats "imperial" and "non-combatant" as mutually exclusive. Target shape: one kill deed
+carrying `(victim_faction, non_combatant, was_hostile)`, consequences derived from the three.
+(The shipped `_was_hostile_to_player` guard is an interim proxy — "hostile ⇒ combatant"; the
+real axis is the victim's combat role.)
+
+**What this means for the build.** `victim_faction` (K1, built) is the *identity* half and
+already correct. The *non-combatant* axis and *derived hostility* ride with the broader actor
+unification (Q0) and the inter-faction relationship system (nations worldbuilding) — north
+star, not this sprint. The near-term, relationship-free structural step is **typing the
+`identity` / `role` / `affiliation` dimensions** and migrating spawners/generation to set
+them, so `resolve_faction` reads `identity` instead of inferring from `kind`/`tags`.
 
 ---
 
@@ -67,6 +132,11 @@ from its `tags`/`faction` (e.g. `{"empire"}` → the empire bloc; a Phase-C enti
 a rolled faction id → that faction). Civilians with no faction tag map to a **`civilian`
 bucket**; unaligned beasts/monsters map to **none** (not deed-worthy — consistent with
 today). Used by both deed emission and the tally so they can never disagree.
+
+*Unified-model target (§0):* this resolves against the typed **`identity`** axis, and
+"non-combatant" becomes a **`role`**-derived status — not the current `kind == "npc"`
+heuristic. The shipped helper reads `tags` + `kind` as the interim source until
+`identity`/`role` are typed; migrating it is the first relationship-free step of §0.
 
 ### 3.2 Faction-aware kill deed
 
@@ -191,13 +261,20 @@ K5 turns it into consequences.
 
 ## 8. Open decisions
 
+- **Identity / role / affiliation structure** — *settled (§0):* **hybrid** — typed
+  `identity`/`role`/`affiliations` as the source of truth, flat `tags` retained for loose
+  matching.
+- **Combat stance** — *settled (§0):* **derived and relational**, not a stored
+  `ally/enemy/neutral` field (lands with the relationship model; interim crutch until then).
 - **Tally granularity.** Per-faction id (recommended, with a per-role rollup) vs. per-role
   only vs. per-tag. Per-id is most precise and rolls up cleanly.
 - **Relational model timing.** Role-stance matrix now, full inter-faction stances at Phase C
   (recommended) — vs. waiting for Phase C to do relational reactions at all (leaves rivals/
   cults flat until then).
-- **Civilian sub-buckets.** One `civilian` bucket vs. splitting by town/region (so "you
-  butchered *our* village" is local). Start single, add region tags if dialogue needs it.
+- **Civilian sub-buckets.** With "non-combatant" now a **`role`** axis (§0), the `civilian`
+  *tally* bucket is still keyed by `identity`; the question is only display granularity — one
+  bucket vs. splitting by town/region (so "you butchered *our* village" is local). Start
+  single, add region tags if dialogue needs it.
 - **Influence curve.** Diminishing-returns (log-ish) vs. flat-with-hard-cap for volume
   scaling — a tuning call for the simulator.
 
@@ -213,3 +290,44 @@ K5 turns it into consequences.
 | `wildmagic/actions.py` | `describe_standing` tally lines (K4). |
 | `wildmagic/dialogue.py` / prompts | Surface kill tally + victim factions to dialogue/rumor/named-voice context (K4). |
 | `tests/` | Resolver, tally-from-deeds, relational-reaction, and civilian/beast-exemption tests. |
+
+---
+
+## 10. Contract — what the nations worldbuilding must provide
+
+*(The bridge to the next task. When you build world generation, these are the hooks the
+already-built and planned systems expect. Satisfy them and quests, faction-kill reputation,
+derived combat stance, and Phase C all light up; skip one and that system stays dark. The
+roll itself is specced in `EMERGENT_WORLD_STRATEGY.md` §5.4 and `EMERGENT_WORLD_IMPLEMENTATION.md`
+Phase C — this is the downstream-requirements view.)*
+
+**For faction attribution & reputation (this doc):**
+
+- **A faction-ledger entry per nation/power** — a `Faction(id, name, kind, …)` for each rolled
+  kingdom/bloc/cult/guild, replacing the Phase-0 two-pole scaffold (`seed_phase0_factions`).
+  `kind` from `FACTION_KINDS`; roles via `ROLE_TO_KINDS`.
+- **An `identity` tag on every character that maps to a faction id** — so `resolve_faction`
+  attributes kills. A Marsh Kingdom soldier carries `identity:["marsh_kingdom"]` *and* the
+  ledger has a `marsh_kingdom` faction.
+- **Inter-faction relationships** — who is allied / at war / wary with whom. This single thing
+  unblocks both **K3–K5** (relational reactions) *and* **derived combat stance** (§0). Shape
+  TBD, but minimally a per-pair stance the simulator and AI can read.
+
+**For the character model (§0 / EMERGENT_QUESTS Q0):**
+
+- **Typed `role` on generated characters** — `townsfolk`/`soldier`/`clerk`/`merchant`/… —
+  driving non-combatant kill semantics, fight-or-flee, and dialogue tone.
+- **Stable soul ids on NPCs** (EMERGENT_QUESTS Q0) so specific-person quests/relationships
+  survive transformation.
+- **`affiliations`** where relevant (guild/cult membership, distinct from nation).
+
+**For quests (EMERGENT_QUESTS):**
+
+- **Promise-bound, faction-aware sites & people** — a rolled nation's grievance is a natural
+  concern source; its captives/oppressors are `rescue`/`slay` subjects.
+- **A tactical affordance per rolled feature** (strategy §5.4): every world-feature implies a
+  move the player can act on — a recruitable tradition, a faction conflict to exploit, a thin
+  patrol to slip past.
+
+**Determinism:** the roll is seeded and replay-safe; the LLM only *names and flavors* what the
+procedural roll has already decided (strategy §5.4). Nothing here carries between runs.

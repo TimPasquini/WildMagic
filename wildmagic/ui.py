@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore", message=r"pkg_resources is deprecated as an AP
 
 import pygame
 
-from .actions import ActionResult, GameSession, describe_state
+from .actions import ActionResult, GameSession, describe_state, describe_world
 from .autoplay import (
     AgentObservation,
     OllamaAgent,
@@ -118,7 +118,7 @@ def _auto_ui_scale() -> int:
 CONTROLS_HINT = (
     "Keyboard controls active - arrows/WASD/keypad move, > descend, < ascend, o open, "
     "g pick up, f cast spark, x investigate, e examine, r read, u free, z rest, "
-    "b wares, p possess, l inspect, t standing, n followers, h help, c character, "
+    "b wares, p possess, l inspect, m atlas, t standing, n followers, h help, c character, "
     "j journal, q quests, i inventory, period or keypad-5 to wait, F7 generation queue, "
     "F8 watch AI, F9 pause AI, F10 step AI, Esc back to Wild Spell. "
     "Tab switches Wild Spell / Controls / Talk; hold Ctrl for a quick control key (Ctrl+c = character)."
@@ -622,7 +622,7 @@ class GameUI:
 
         # Menu state
         self.menu_active = False
-        self.menu_page: str = "main"  # "main" | "config" | "model"
+        self.menu_page: str = "main"  # "main" | "config" | "model" | "world"
         self.menu_cursor: int = 0
         self.menu_prev_page: str = "main"  # for back navigation
 
@@ -904,6 +904,10 @@ class GameUI:
             self.execute_command("possess")
         elif key == pygame.K_l:
             self.execute_command("inspect")
+        elif key == pygame.K_m:
+            self.menu_active = True
+            self.menu_page = "world"
+            self.menu_cursor = 0
         elif key == pygame.K_t:
             self.execute_command("standing")
         elif key == pygame.K_n:
@@ -1326,6 +1330,11 @@ class GameUI:
         return []
 
     def _handle_menu_key(self, event: pygame.event.Event) -> None:
+        if self.menu_page == "world":
+            if event.key in (pygame.K_ESCAPE, pygame.K_m):
+                self._close_menu()
+            return
+
         if self.menu_page == "inventory":
             equipment_view = self.session.equipment_inventory_view()
             inventory_items = [item["name"] for item in equipment_view["items"]]
@@ -2360,6 +2369,52 @@ class GameUI:
         overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 170))
         self.screen.blit(overlay, (0, 0))
+
+        if self.menu_page == "world":
+            box_w = 720
+            box_h = 500
+            bx = (WINDOW_WIDTH - box_w) // 2
+            by = (WINDOW_HEIGHT - box_h) // 2
+            padding = 24
+
+            pygame.draw.rect(
+                self.screen, (28, 30, 38), (bx, by, box_w, box_h), border_radius=6
+            )
+            pygame.draw.rect(
+                self.screen, PANEL_EDGE, (bx, by, box_w, box_h), 1, border_radius=6
+            )
+
+            title_surf = self.ui_font.render("WORLD ATLAS", True, ACCENT)
+            self.screen.blit(title_surf, (bx + padding, by + padding))
+            pygame.draw.line(
+                self.screen,
+                PANEL_EDGE,
+                (bx + padding, by + padding + 22),
+                (bx + box_w - padding, by + padding + 22),
+                1,
+            )
+
+            y = by + padding + 38
+            bottom = by + box_h - padding - 18
+            for line in describe_world(self.engine):
+                if y >= bottom:
+                    break
+                wrapped = (
+                    [line]
+                    if not line or (line.startswith("  ") and len(line) <= 34)
+                    else wrap_text(line, 78)
+                )
+                for segment in wrapped:
+                    if y >= bottom:
+                        break
+                    color = GOLD if segment == "The Known World" else TEXT
+                    surf = self.small_font.render(segment, True, color)
+                    self.screen.blit(surf, (bx + padding, y))
+                    y += 16
+
+            hint_surf = self.small_font.render("M/Esc Close", True, MUTED)
+            self.screen.blit(hint_surf, (bx + padding, by + box_h - 22))
+            return
 
         if self.menu_page == "inventory":
             equipment_view = self.session.equipment_inventory_view()

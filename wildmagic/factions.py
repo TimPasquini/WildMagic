@@ -187,10 +187,16 @@ class FactionLedger:
         return [f.id for f in self.by_kind(*ROLE_TO_KINDS.get(role, ()))]
 
     def primary(self, role: str) -> Faction | None:
-        """The lead faction for a role — e.g. the empire core, or the main resistance. The
-        first by id, deterministically; None if the role is unfilled."""
-        members = self.by_kind(*ROLE_TO_KINDS.get(role, ()))
-        return members[0] if members else None
+        """The lead faction for a role — e.g. the empire core, or the main resistance.
+        Prefers the most-canonical kind for the role (the first kind in ``ROLE_TO_KINDS``,
+        so ``empire`` resolves to the ``empire_core`` heartland, not an alphabetically-earlier
+        conquered realm), then by id. Deterministic; None if the role is unfilled."""
+        kinds = ROLE_TO_KINDS.get(role, ())
+        members = self.by_kind(*kinds)
+        if not members:
+            return None
+        kind_rank = {kind: index for index, kind in enumerate(kinds)}
+        return min(members, key=lambda f: (kind_rank.get(f.kind, len(kinds)), f.id))
 
     def adjust_standing(self, faction_id: str, axis: str, delta: float) -> float:
         """Accumulate ``delta`` on a faction's standing axis. Axes are open scales in

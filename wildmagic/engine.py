@@ -60,6 +60,13 @@ from .factions import (
     seed_phase0_factions,
 )
 from .legend import LegendLedger
+from .worldgen import (
+    WorldMap,
+    roll_world,
+    scenario_uses_world_map,
+    seed_factions_from_world,
+    start_zone_for_scenario,
+)
 from .combat import _CombatMixin
 from .ai import _AIMixin
 from .generation import _GenerationMixin
@@ -321,6 +328,7 @@ class GameState:
     # (summarize_state + deterministic replay) but never carried between runs.
     deed_ledger: DeedLedger = field(default_factory=DeedLedger)
     faction_ledger: FactionLedger = field(default_factory=seed_phase0_factions)
+    world_map: WorldMap | None = None
     # The mechanical legend: bounded-vocab weighted tags per actor soul, distilled from
     # deeds and read by the simulator/dialogue/scores (legend.py). The prose mirror lives
     # in the semantic ledger (§1.3).
@@ -526,6 +534,13 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
 
         self.town_provider = make_town_provider(provider_name)
         self._setup_prop_generation(provider_name, prop_provider)
+        if scenario_uses_world_map(scenario):
+            world = roll_world(seed)
+            self.state.world_map = world
+            self.state.faction_ledger = seed_factions_from_world(world)
+            self.state.zone_x, self.state.zone_y = start_zone_for_scenario(
+                world, scenario
+            )
         if scenario == "test_chamber":
             self._generate_test_chamber()
         elif scenario == "empire_compound":
@@ -2266,11 +2281,11 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
         target_x = player.x + dx
         target_y = player.y + dy
         if not self.in_bounds(target_x, target_y):
-            if self.state.scenario in {"frontier", "town"} and self._cross_zone_edge(
-                target_x, target_y
-            ):
-                self.finish_player_turn()
-                return True
+            if scenario_uses_world_map(self.state.scenario):
+                if self._cross_zone_edge(target_x, target_y):
+                    self.finish_player_turn()
+                    return True
+                return False
             self.state.add_message("The dungeon refuses that edge.")
             return False
         target = self.blocking_entity_at(target_x, target_y)
@@ -2745,6 +2760,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 "y": self.state.zone_y,
                 "type": self.state.zone_type,
             },
+            "current_realm": state_view.current_realm_card(self),
             "message": message,
             "reply": reply,
             "npc_profile": self.state.npc_profiles[npc.id].to_dialogue_context(),
@@ -2794,6 +2810,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 "depth": self.state.depth,
                 "scenario": self.state.scenario,
                 "region": self.region.name,
+                "current_realm": state_view.current_realm_card(self),
             },
             "nearby_objects": self._npc_nearby_objects(npc),
             "relevant_lore": self.promises_for_context(
@@ -2865,6 +2882,7 @@ class GameEngine(_CombatMixin, _ItemsMixin, _AIMixin, _GenerationMixin, _Effects
                 "turn": self.state.turn,
                 "depth": self.state.depth,
                 "scenario": self.state.scenario,
+                "current_realm": state_view.current_realm_card(self),
             },
             "exchange": {"player_said": message, "npc_replied": reply},
         }

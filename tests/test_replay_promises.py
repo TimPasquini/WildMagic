@@ -79,6 +79,9 @@ def test_replay_reproduces_late_lore_drain_across_zone_generation(
         lore_provider=lore_provider,
     )
     try:
+        start_zone = (session.engine.state.zone_x, session.engine.state.zone_y)
+        first_north = (start_zone[0], start_zone[1] - 1)
+        second_north = (start_zone[0], start_zone[1] - 2)
         # A dialogue just happened; its extraction is still running on the CPU model.
         session._enqueue_lore_extraction(
             {
@@ -87,14 +90,14 @@ def test_replay_reproduces_late_lore_drain_across_zone_generation(
                 "location": "frontier",
                 "message": "Any rumors?",
                 "reply": "There is a chapel north of here.",
-                "zone": {"x": 0, "y": 0},
+                "zone": {"x": start_zone[0], "y": start_zone[1]},
             },
             {},
         )
 
-        # Cross into zone (0, -1) while the extraction is still pending: this zone must
-        # generate without the chapel, live and on replay alike.
-        assert _walk_north_until_zone(session, -1)
+        # Cross into the first northern zone while extraction is still pending: this zone
+        # must generate without the chapel, live and on replay alike.
+        assert _walk_north_until_zone(session, first_north[1])
         assert not any(
             promise.kind == "rumor" for promise in session.engine.state.promises
         )
@@ -114,14 +117,16 @@ def test_replay_reproduces_late_lore_drain_across_zone_generation(
         ]
         assert len(chapels) == 1
         chapel = chapels[0]
-        # (0, -1) was explored before the drain, so the claim relocates further north.
-        assert chapel.bound_space is not None and chapel.bound_space.zone == (0, -2)
+        # The first northern zone was explored before the drain, so the claim relocates.
+        assert (
+            chapel.bound_space is not None and chapel.bound_space.zone == second_north
+        )
         assert session.records[-1]["promises"]["before"], (
             "drain must be recorded at its apply point"
         )
 
         # Crossing into the bound zone realizes the promised site.
-        assert _walk_north_until_zone(session, -2)
+        assert _walk_north_until_zone(session, second_north[1])
         assert chapel.status == "realized"
 
         replay_path = tmp_path / "late_drain.json"
