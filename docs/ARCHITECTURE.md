@@ -17,7 +17,7 @@ GUI entry point. Launches `wildmagic.ui.run_game()` and accepts `--autoplay` to 
 graphical UI with AI watch mode already enabled.
 
 ### `wildmagic/ui.py`
-Pygame front-end. Owns the game loop, renders the tile map and side panels, handles keyboard
+Pygame front-end. Owns the game loop, hosts renderers, handles keyboard
 input, and routes commands to `GameSession`. Also shows the LLM thinking panel, the model
 selector overlay, and a visual AI watch controller that lets the autoplay command chooser
 drive the same command path while the renderer stays responsive. Equipment and inventory
@@ -31,7 +31,9 @@ Pygame rendering support modules shared by UI components. `layout.py` owns the b
 panel, and window dimensions, chooses the default integer UI scale from the desktop size,
 and converts mouse input from scaled physical window coordinates back into logical UI
 coordinates. `map_view.py` renders the explored dungeon tiles, visible/revealed entities,
-map glyph placement, and target reticle.
+map glyph placement, and target reticle. `hud_panel.py` renders the right-side HUD,
+including bars, statuses, visible enemies, floor items, inventory, curses, standing,
+message log, and spell/input box.
 
 ### `wildmagic/scenes/`
 Self-contained Pygame full-screen scenes driven by `GameUI`: character creation,
