@@ -54,6 +54,7 @@ from .rendering.layout import (
     logical_mouse_pos,
     toggled_ui_scale,
 )
+from .rendering.map_view import draw_map
 from .scenes.character_creation_scene import CharacterCreationScene
 from .scenes.character_view_scene import CharacterViewScene
 from .scenes.standing_scene import StandingScene
@@ -78,22 +79,8 @@ from .ui_theme import (
 )
 from .llm_client import fetch_ollama_models
 from .models import (
-    DOOR,
-    FIRE,
-    FLOOR,
-    ICE_WALL,
-    MIST,
-    OPEN_DOOR,
-    POISON_CLOUD,
-    RUBBLE,
-    SLICK_ICE,
-    STAIRS_DOWN,
-    STAIRS_UP,
     TILE_NAMES,
     TILE_TAGS,
-    VINES,
-    WALL,
-    WATER,
     Entity,
 )
 
@@ -491,31 +478,6 @@ _CONFIG_SPEC: list[dict] = [
         "default": "180",
     },
 ]
-
-TILE_COLORS = {
-    FLOOR: (77, 80, 88),
-    WALL: (123, 127, 140),
-    DOOR: (176, 122, 74),
-    OPEN_DOOR: (154, 126, 91),
-    STAIRS_DOWN: (214, 190, 112),
-    STAIRS_UP: (214, 190, 112),
-    WATER: (70, 145, 195),
-    FIRE: (232, 96, 70),
-    SLICK_ICE: (156, 210, 224),
-    ICE_WALL: (151, 220, 232),
-    POISON_CLOUD: (144, 196, 84),
-    VINES: (83, 170, 108),
-    RUBBLE: (138, 120, 102),
-    MIST: (170, 178, 185),
-}
-
-ENTITY_COLORS = {
-    "player": (246, 240, 200),
-    "enemy": (232, 115, 100),
-    "ally": (120, 202, 174),
-    "neutral": (190, 190, 190),
-    "item": (230, 190, 92),
-}
 
 
 class GameUI:
@@ -2955,82 +2917,7 @@ class GameUI:
         self.screen.blit(hint_surf, (bx + padding, by + box_h - 20))
 
     def draw_map(self) -> None:
-        state = self.engine.state
-        for y, row in enumerate(state.tiles):
-            for x, tile in enumerate(row):
-                if not self.engine.is_explored(x, y):
-                    continue
-                color = TILE_COLORS.get(tile, TILE_COLORS[FLOOR])
-                if not self.engine.is_visible(x, y):
-                    color = dim_color(color)
-                self.draw_glyph(tile, x, y, color)
-        for entity in sorted(
-            state.entities.values(), key=lambda item: item.kind == "player"
-        ):
-            if not entity.alive and entity.kind == "item":
-                continue
-            revealed = "revealed" in entity.statuses
-            visible = self.engine.is_visible(entity.x, entity.y)
-            if entity.id != state.player_id and not visible and not revealed:
-                continue
-            color = self.entity_color(entity)
-            if revealed and not visible:
-                color = dim_color(color)
-            self.draw_glyph(entity.char, entity.x, entity.y, color)
-        self.draw_target_reticle()
-
-    def draw_target_reticle(self) -> None:
-        """A bright corner-bracket reticle on the explicitly marked spell target."""
-        state = self.engine.state
-        if state.target_x is None or state.target_y is None:
-            return
-        tx, ty = state.target_x, state.target_y
-        px = MAP_OFFSET_X + tx * TILE_SIZE
-        py = ty * TILE_SIZE
-        color = (255, 120, 90)
-        seg = max(4, TILE_SIZE // 3)
-        rect = pygame.Rect(px + 1, py + 1, TILE_SIZE - 2, TILE_SIZE - 2)
-        # Four L-shaped corner brackets (a clean reticle, never hides the glyph beneath).
-        corners = (
-            (rect.left, rect.top, 1, 1),
-            (rect.right, rect.top, -1, 1),
-            (rect.left, rect.bottom, 1, -1),
-            (rect.right, rect.bottom, -1, -1),
-        )
-        for cx, cy, sx, sy in corners:
-            pygame.draw.line(self.screen, color, (cx, cy), (cx + sx * seg, cy), 2)
-            pygame.draw.line(self.screen, color, (cx, cy), (cx, cy + sy * seg), 2)
-
-    def draw_glyph(
-        self, glyph: str, x: int, y: int, color: tuple[int, int, int]
-    ) -> None:
-        surface = self.tile_font.render(glyph, True, color)
-        rect = surface.get_rect(
-            center=(
-                MAP_OFFSET_X + x * TILE_SIZE + TILE_SIZE // 2,
-                y * TILE_SIZE + TILE_SIZE // 2,
-            )
-        )
-        self.screen.blit(surface, rect)
-
-    def entity_color(self, entity: Entity) -> tuple[int, int, int]:
-        if entity.kind == "item":
-            return ENTITY_COLORS["item"]
-        base = ENTITY_COLORS.get(entity.faction, ENTITY_COLORS["neutral"])
-        if not entity.alive:
-            return base
-        s = entity.statuses
-        if "burning" in s:
-            return blend_color(base, (232, 96, 70), 0.55)
-        if "frozen" in s:
-            return blend_color(base, (156, 210, 224), 0.55)
-        if "poisoned" in s:
-            return blend_color(base, (130, 200, 80), 0.55)
-        if "bleeding" in s:
-            return blend_color(base, (200, 60, 60), 0.4)
-        if "invisible" in s:
-            return blend_color(base, BACKGROUND, 0.65)
-        return base
+        draw_map(self.screen, self.tile_font, self.engine)
 
     def draw_panel(self) -> None:
         x = MAP_OFFSET_X + MAP_PIXEL_WIDTH
@@ -4112,10 +3999,6 @@ class GameUI:
         surface = font.render(text, True, color)
         self.screen.blit(surface, (x, y))
         return y + surface.get_height() + 2
-
-
-def dim_color(color: tuple[int, int, int]) -> tuple[int, int, int]:
-    return (max(20, color[0] // 3), max(20, color[1] // 3), max(24, color[2] // 3))
 
 
 def is_player_damage_message(message: str) -> bool:
