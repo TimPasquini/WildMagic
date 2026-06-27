@@ -47,6 +47,7 @@ from .rendering.window import GameWindow
 from .rendering import hud_panel
 from .rendering.hud_panel import is_player_damage_message
 from .rendering.map_view import draw_map
+from .rendering.overlays import draw_autoplay_overlay, draw_resolving_indicator
 from .scenes.character_creation_scene import CharacterCreationScene
 from .scenes.character_view_scene import CharacterViewScene
 from .scenes.menu_scene import MenuScene
@@ -376,12 +377,9 @@ class VisualAutoplayController:
 class GameUI:
     def __init__(self, autoplay: bool = False) -> None:
         self.window = GameWindow.create("Wild Magic")
-        # No key auto-repeat: this is a turn-based game, so one physical key press must
-        # equal exactly one step. pygame's repeat (formerly set_repeat(350, 35)) synthesized
-        # extra KEYDOWNs once a key was held past the 350ms delay — and phantom repeats for
-        # keys whose KEYUP was buffered behind a slow (generation) frame — which double-stepped
-        # the player on a single intended move. set_repeat() with no args disables it.
-        pygame.key.set_repeat()
+        # GameWindow disables pygame key auto-repeat: this is a turn-based game, so one
+        # physical key press must equal exactly one step. pygame repeat previously caused
+        # double-steps when KEYUP was buffered behind a slow generation frame.
         self.ui_scale = self.window.ui_scale
         self.display = self.window.display
         self.screen = self.window.screen
@@ -1470,49 +1468,12 @@ class GameUI:
     def draw_resolving_indicator(self) -> None:
         """A small banner over the map while an urgent command resolves, so the player
         knows the wild magic is listening (and that new actions are being ignored)."""
-        label = self._command_label or "the wild magic"
-        if len(label) > 48:
-            label = label[:45] + "..."
-        text = f"Resolving: {label}"
-        surface = self.small_font.render(text, True, TEXT)
-        pad = 10
-        width = surface.get_width() + pad * 2
-        height = surface.get_height() + pad * 2
-        x = MAP_OFFSET_X + (MAP_PIXEL_WIDTH - width) // 2
-        y = 14
-        box = pygame.Surface((width, height), pygame.SRCALPHA)
-        box.fill((20, 22, 28, 235))
-        self.screen.blit(box, (x, y))
-        pygame.draw.rect(
-            self.screen, ACCENT, (x, y, width, height), width=1, border_radius=6
-        )
-        self.screen.blit(surface, (x + pad, y + pad))
+        draw_resolving_indicator(self.screen, self.small_font, self._command_label)
 
     def draw_autoplay_overlay(self) -> None:
-        lines = self.autoplay.overlay_lines()
-        if not lines:
-            return
-        wrapped: list[tuple[str, tuple[int, int, int]]] = []
-        for text, color in lines:
-            for line in wrap_text(text, 62):
-                wrapped.append((line, color))
-        line_height = self.small_font.get_linesize() + 2
-        width = MAP_PIXEL_WIDTH - 24
-        height = 16 + len(wrapped) * line_height
-        x = MAP_OFFSET_X + 12
-        y = MAP_PIXEL_HEIGHT + 10
-        if y + height > WINDOW_HEIGHT - 10:
-            y = WINDOW_HEIGHT - height - 10
-        overlay = pygame.Surface((width, height), pygame.SRCALPHA)
-        overlay.fill((17, 19, 24, 222))
-        self.screen.blit(overlay, (x, y))
-        pygame.draw.rect(
-            self.screen, PANEL_EDGE, (x, y, width, height), width=1, border_radius=6
+        draw_autoplay_overlay(
+            self.screen, self.small_font, self.autoplay.overlay_lines()
         )
-        cursor_y = y + 8
-        for text, color in wrapped:
-            self.draw_text(text, x + 10, cursor_y, self.small_font, color)
-            cursor_y += line_height
 
     def draw_inspect_tooltip(self) -> None:
         tx, ty = self.inspect_tile  # type: ignore[misc]

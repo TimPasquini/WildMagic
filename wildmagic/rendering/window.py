@@ -27,6 +27,7 @@ class GameWindow:
         cls, caption: str, layout: WindowLayout = DEFAULT_WINDOW_LAYOUT
     ) -> "GameWindow":
         pygame.init()
+        pygame.key.set_repeat()
         pygame.display.set_caption(caption)
         ui_scale = auto_ui_scale(layout)
         display = pygame.display.set_mode(layout.scaled_size(ui_scale))

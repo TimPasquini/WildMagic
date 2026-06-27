@@ -29,6 +29,9 @@ def test_game_window_create_sets_caption_and_scaled_display(monkeypatch) -> None
     calls: dict[str, object] = {}
 
     monkeypatch.setattr(pygame, "init", lambda: calls.setdefault("init", True))
+    monkeypatch.setattr(
+        pygame.key, "set_repeat", lambda: calls.setdefault("repeat", True)
+    )
     monkeypatch.setattr(pygame.display, "get_desktop_sizes", lambda: [(240, 240)])
     monkeypatch.setattr(
         pygame.display,
@@ -46,6 +49,7 @@ def test_game_window_create_sets_caption_and_scaled_display(monkeypatch) -> None
     window = GameWindow.create("Wild Magic", layout)
 
     assert calls["init"] is True
+    assert calls["repeat"] is True
     assert calls["caption"] == "Wild Magic"
     assert calls["display_size"] == (200, 100)
     assert window.ui_scale == 2
