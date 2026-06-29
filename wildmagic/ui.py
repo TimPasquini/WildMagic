@@ -31,6 +31,7 @@ from .autoplay import (
 from .game_data import _TOWN_GEN_TIMEOUT
 from .normalize import normalize_id
 from .rendering import llm_panel
+from .rendering import book_popup as book_popup_view
 from .portraits import PortraitClient
 from .rendering.fonts import GameFonts
 from .rendering.frame import draw_game_frame
@@ -49,6 +50,7 @@ from .rendering import hud_panel
 from .rendering.hud_panel import is_player_damage_message
 from .rendering.map_view import draw_map
 from .rendering.overlays import draw_autoplay_overlay, draw_resolving_indicator
+from .rendering.queue_debug import draw_queue_debug
 from .rendering.text import draw_text
 from .scenes.character_creation_scene import CharacterCreationScene
 from .scenes.character_view_scene import CharacterViewScene
@@ -1663,259 +1665,14 @@ class GameUI:
     def draw_book_popup(self) -> None:
         """A parchment page for reading books, modal over everything else.
         Long texts paginate; arrows/space/clicks turn pages."""
-        assert self.book_popup is not None
-        title = str(self.book_popup["title"])
-        author = str(self.book_popup["author"])
-        text = str(self.book_popup["text"])
-
-        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
-        overlay.fill((10, 8, 4, 180))
-        self.screen.blit(overlay, (0, 0))
-
-        parchment = (233, 222, 196)
-        parchment_edge = (140, 112, 72)
-        ink = (58, 44, 30)
-        faded_ink = (120, 100, 72)
-
-        box_w = 600
-        box_h = min(640, WINDOW_HEIGHT - 60)
-        pad = 36
-        wrap_width = 58
-        bx = (WINDOW_WIDTH - box_w) // 2
-        by = (WINDOW_HEIGHT - box_h) // 2
-        title_h = self.book_title_font.get_linesize()
-        body_h = self.book_font.get_linesize()
-        small_h = self.book_small_font.get_linesize()
-
-        # Body lines with paragraph spacing preserved as blank lines.
-        body_lines: list[str] = []
-        for paragraph in text.split("\n"):
-            paragraph = paragraph.strip()
-            if not paragraph:
-                if body_lines and body_lines[-1] != "":
-                    body_lines.append("")
-                continue
-            body_lines.extend(wrap_text(paragraph, wrap_width))
-            body_lines.append("")
-        while body_lines and body_lines[-1] == "":
-            body_lines.pop()
-
-        title_lines = wrap_text(title, 42)
-        header_h = title_h * len(title_lines) + (small_h + 6 if author else 0) + 18
-        footer_h = small_h + 18
-        first_capacity = max(4, (box_h - pad * 2 - header_h - footer_h) // body_h)
-        rest_capacity = max(4, (box_h - pad * 2 - footer_h) // body_h)
-
-        pages: list[list[str]] = []
-        remaining = list(body_lines)
-        capacity = first_capacity
-        while True:
-            page_lines = remaining[:capacity]
-            pages.append(page_lines)
-            remaining = remaining[capacity:]
-            while remaining and remaining[0] == "":
-                remaining = remaining[1:]
-            if not remaining:
-                break
-            capacity = rest_capacity
-        self.book_popup["page_count"] = len(pages)
-        page = max(0, min(int(self.book_popup.get("page", 0)), len(pages) - 1))
-        self.book_popup["page"] = page
-
-        pygame.draw.rect(
-            self.screen, parchment, (bx, by, box_w, box_h), border_radius=4
-        )
-        pygame.draw.rect(
-            self.screen, parchment_edge, (bx, by, box_w, box_h), 2, border_radius=4
-        )
-        pygame.draw.rect(
-            self.screen,
-            parchment_edge,
-            (bx + 6, by + 6, box_w - 12, box_h - 12),
-            1,
-            border_radius=3,
-        )
-
-        cy = by + pad
-        if page == 0:
-            for line in title_lines:
-                surf = self.book_title_font.render(line, True, ink)
-                self.screen.blit(surf, (bx + (box_w - surf.get_width()) // 2, cy))
-                cy += title_h
-            if author:
-                surf = self.book_small_font.render(f"— {author}", True, faded_ink)
-                self.screen.blit(surf, (bx + (box_w - surf.get_width()) // 2, cy + 2))
-                cy += small_h + 6
-            cy += 8
-            pygame.draw.line(
-                self.screen,
-                parchment_edge,
-                (bx + box_w // 2 - 60, cy),
-                (bx + box_w // 2 + 60, cy),
-                1,
-            )
-            cy += 10
-
-        for line in pages[page]:
-            if line:
-                surf = self.book_font.render(line, True, ink)
-                self.screen.blit(surf, (bx + pad, cy))
-            cy += body_h
-
-        if len(pages) > 1:
-            marker = self.book_small_font.render(
-                f"— {page + 1} of {len(pages)} —", True, faded_ink
-            )
-            self.screen.blit(
-                marker,
-                (
-                    bx + (box_w - marker.get_width()) // 2,
-                    by + box_h - pad // 2 - small_h - 14,
-                ),
-            )
-        last_page = page + 1 >= len(pages)
-        hint_text = (
-            "Esc closes · click or arrows turn the page"
-            if not last_page
-            else "Esc or click to close the book"
-        )
-        hint = self.book_small_font.render(hint_text, True, faded_ink)
-        self.screen.blit(
-            hint,
-            (bx + (box_w - hint.get_width()) // 2, by + box_h - pad // 2 - small_h + 2),
-        )
-
-    _QUEUE_STATUS_STYLE = {
-        "done": ("done", MODE_GREEN),
-        "running": ("generating", GOLD),
-        "queued": ("queued", ACCENT),
-        "pending": ("waiting", MUTED),
-        "far": ("(too far)", (110, 110, 120)),
-    }
+        book_popup_view.draw_book_popup(self)
 
     def draw_queue_debug(self) -> None:
         """F7 overlay: the background generation (canon prewarm) queue. Shows what the
         single worker is doing now and queued next, then the whole zone's books with
         their title/pages state in proximity order. Rebuilt live each frame, so it
         updates as the queue drains; the book list scrolls."""
-        snap = self.session.canon_queue_snapshot()
-
-        overlay = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
-        overlay.fill((0, 0, 0, 180))
-        self.screen.blit(overlay, (0, 0))
-
-        box_w = 780
-        box_h = min(700, WINDOW_HEIGHT - 60)
-        bx = (WINDOW_WIDTH - box_w) // 2
-        by = (WINDOW_HEIGHT - box_h) // 2
-        pad = 22
-        row_h = self.small_font.get_linesize()
-        pygame.draw.rect(self.screen, PANEL, (bx, by, box_w, box_h), border_radius=6)
-        pygame.draw.rect(
-            self.screen, PANEL_EDGE, (bx, by, box_w, box_h), 1, border_radius=6
-        )
-
-        cx = bx + pad
-        cy = by + pad
-
-        def emit(text: str, color, font=None) -> None:
-            nonlocal cy
-            surf = (font or self.small_font).render(text, True, color)
-            self.screen.blit(surf, (cx, cy))
-            cy += (font or self.small_font).get_linesize()
-
-        emit("Generation Queue", GOLD, self.ui_font)
-        cy += 2
-        emit("F7 or Esc to close · arrows / PgUp / PgDn / wheel to scroll", MUTED)
-        cy += 6
-
-        flags = (
-            f"titles {'on' if snap['titles_enabled'] else 'off'}   "
-            f"saturation {'on' if snap['saturation_enabled'] else 'off'}   "
-            f"depth {snap['limit']}"
-        )
-        emit(flags, TEXT)
-        emit(
-            f"in flight: {snap['pending_canon']} canon · "
-            f"{snap['pending_lore']} lore · {snap['pending_flesh']} flesh",
-            MUTED,
-        )
-        cy += 8
-
-        emit("Worker — now & next", ACCENT)
-        if snap["now_next"]:
-            for job in snap["now_next"]:
-                label_text, color = self._QUEUE_STATUS_STYLE.get(
-                    job["status"], (job["status"], TEXT)
-                )
-                kind = {"book_title": "title", "book": "pages"}.get(
-                    job["kind"], job["kind"]
-                )
-                name = job["label"]
-                if len(name) > 48:
-                    name = name[:45] + "..."
-                emit(f"  [{label_text}] {kind}: {name}", color)
-        else:
-            emit("  idle — nothing queued", MUTED)
-        cy += 8
-
-        emit(f"Books in zone ({len(snap['books'])}) — nearest first", ACCENT)
-        cy += 2
-
-        # Columns for the scrollable book table.
-        col_dist = cx + 4
-        col_name = col_dist + 56
-        col_title = bx + box_w - 260
-        col_pages = bx + box_w - 130
-        header_y = cy
-        for label, x in (
-            ("dist", col_dist),
-            ("book", col_name),
-            ("title", col_title),
-            ("pages", col_pages),
-        ):
-            self.screen.blit(self.small_font.render(label, True, MUTED), (x, header_y))
-        cy += row_h + 2
-
-        books = snap["books"]
-        list_bottom = by + box_h - pad - row_h
-        capacity = max(1, (list_bottom - cy) // row_h)
-        self._queue_debug_max_scroll = max(0, len(books) - capacity)
-        self.queue_debug_scroll = max(
-            0, min(self.queue_debug_scroll, self._queue_debug_max_scroll)
-        )
-        start = self.queue_debug_scroll
-        visible = books[start : start + capacity]
-
-        name_chars = max(8, (col_title - col_name) // 8 - 1)
-        for book in visible:
-            self.screen.blit(
-                self.small_font.render(f"d{book['distance']}", True, MUTED),
-                (col_dist, cy),
-            )
-            name = book["name"]
-            if len(name) > name_chars:
-                name = name[: name_chars - 1] + "…"
-            self.screen.blit(self.small_font.render(name, True, TEXT), (col_name, cy))
-            for key, x in (("title", col_title), ("pages", col_pages)):
-                label_text, color = self._QUEUE_STATUS_STYLE.get(
-                    book[key], (book[key], TEXT)
-                )
-                self.screen.blit(
-                    self.small_font.render(label_text, True, color), (x, cy)
-                )
-            cy += row_h
-
-        if self._queue_debug_max_scroll > 0:
-            shown_end = start + len(visible)
-            footer = (
-                f"showing {start + 1}–{shown_end} of {len(books)}  "
-                f"({'more below' if shown_end < len(books) else 'end'})"
-            )
-            self.screen.blit(
-                self.small_font.render(footer, True, MUTED),
-                (cx, by + box_h - pad - row_h + 4),
-            )
+        draw_queue_debug(self)
 
     def draw_menu(self) -> None:
         self.menu_scene.draw()

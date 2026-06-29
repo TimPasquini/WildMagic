@@ -42,7 +42,10 @@ init/quit lifecycle.
 rendering helpers. `overlays.py` renders small map-area overlays such as the resolving
 banner and AI watch status panel. `frame.py` composes the normal in-game render pass and
 delegates full-screen scene drawing before the game frame is drawn. `text.py` contains
-small reusable text rendering helpers used through the host wrapper.
+small reusable text rendering helpers used through the host wrapper. `book_popup.py`
+renders the modal parchment reader and keeps its pagination state synchronized.
+`queue_debug.py` renders the F7 background-generation queue overlay and synchronizes its
+scroll bounds.
 
 ### `wildmagic/scenes/`
 Self-contained Pygame full-screen scenes driven by `GameUI`: character creation,
