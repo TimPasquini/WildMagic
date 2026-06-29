@@ -11,6 +11,7 @@ from wildmagic.config import audit_dir
 from wildmagic.game_data import _TOWN_GEN_TIMEOUT
 from wildmagic.normalize import normalize_id
 from wildmagic.rendering.layout import LLM_PANEL_WIDTH, WINDOW_HEIGHT
+from wildmagic.rendering.primitives import draw_vertical_scrollbar
 from wildmagic.rendering.theme import (
     ACCENT,
     DANGER,
@@ -182,19 +183,19 @@ def draw_scrollbar(
     total_lines: int,
     visible_lines: int,
 ) -> None:
-    track = pygame.Rect(x, y, width, height)
-    pygame.draw.rect(host.screen, (20, 22, 27), track, border_radius=4)
-    if total_lines <= visible_lines or host._llm_max_scroll <= 0:
-        host.llm_scrollbar_track_rect = None
-        host.llm_scrollbar_thumb_rect = None
-        return
-    thumb_height = max(28, int(height * (visible_lines / total_lines)))
-    usable = max(1, height - thumb_height)
-    thumb_y = y + int(usable * (host.llm_scroll_offset / host._llm_max_scroll))
-    thumb = pygame.Rect(x, thumb_y, width, thumb_height)
-    thumb_color = ACCENT if host.llm_dragging_scrollbar else PANEL_EDGE
-    pygame.draw.rect(host.screen, thumb_color, thumb, border_radius=4)
-    host.llm_scrollbar_track_rect = track
+    track, thumb = draw_vertical_scrollbar(
+        host.screen,
+        x,
+        y,
+        width,
+        height,
+        total_items=total_lines,
+        visible_items=visible_lines,
+        offset=host.llm_scroll_offset,
+        max_offset=host._llm_max_scroll,
+        dragging=host.llm_dragging_scrollbar,
+    )
+    host.llm_scrollbar_track_rect = track if thumb is not None else None
     host.llm_scrollbar_thumb_rect = thumb
 
 

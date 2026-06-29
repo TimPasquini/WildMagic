@@ -30,38 +30,18 @@ from .autoplay import (
 )
 from .game_data import _TOWN_GEN_TIMEOUT
 from .normalize import normalize_id
-from .rendering import llm_panel
-from .rendering import book_popup as book_popup_view
 from .portraits import PortraitClient
-from .rendering.fonts import GameFonts
-from .rendering.frame import draw_game_frame
-from .rendering.inspect_tooltip import draw_inspect_tooltip
-from .rendering.layout import (
+from . import rendering
+from .rendering.llm_debug_window import LlmDebugWindow
+from .rendering import (
+    ACCENT,
+    DANGER,
+    GOLD,
+    GameFonts,
     LLM_PANEL_WIDTH,
     MAP_OFFSET_X,
     MAP_PIXEL_HEIGHT,
     MAP_PIXEL_WIDTH,
-    PANEL_WIDTH,
-    TILE_SIZE,
-    WINDOW_HEIGHT,
-    WINDOW_WIDTH,
-)
-from .rendering.llm_debug_window import LlmDebugWindow
-from .rendering.window import GameWindow
-from .rendering import hud_panel
-from .rendering.hud_panel import is_player_damage_message
-from .rendering.map_view import draw_map
-from .rendering.overlays import draw_autoplay_overlay, draw_resolving_indicator
-from .rendering.queue_debug import draw_queue_debug
-from .rendering.text import draw_text
-from .scenes.character_creation_scene import CharacterCreationScene
-from .scenes.character_view_scene import CharacterViewScene
-from .scenes.menu_scene import MenuScene
-from .scenes.standing_scene import StandingScene
-from .rendering.theme import (
-    ACCENT,
-    DANGER,
-    GOLD,
     MANA,
     MODE_COLORS,
     MODE_GREEN,
@@ -71,11 +51,21 @@ from .rendering.theme import (
     MUTED,
     PANEL,
     PANEL_EDGE,
+    PANEL_WIDTH,
     SELECTED,
     TEXT,
+    TILE_SIZE,
+    WINDOW_HEIGHT,
+    WINDOW_WIDTH,
+    GameWindow,
     blend_color,
+    is_player_damage_message,
     wrap_text,
 )
+from .scenes.character_creation_scene import CharacterCreationScene
+from .scenes.character_view_scene import CharacterViewScene
+from .scenes.menu_scene import MenuScene
+from .scenes.standing_scene import StandingScene
 from .models import (
     Entity,
 )
@@ -1571,7 +1561,7 @@ class GameUI:
         return [line for _rect, line in self.log_line_rects[start : end + 1]]
 
     def llm_line_index_at(self, pos: tuple[int, int]) -> int | None:
-        return llm_panel.line_index_at(self, pos)
+        return rendering.llm_line_index_at(self, pos)
 
     def copy_llm_selection(self) -> None:
         lines = self.selected_llm_lines()
@@ -1589,31 +1579,31 @@ class GameUI:
             self.engine.state.add_message("Could not access the system clipboard.")
 
     def selected_llm_lines(self) -> list[str]:
-        return llm_panel.selected_lines(self)
+        return rendering.selected_llm_lines(self)
 
     def _llm_block_index_for_line(self, line_index: int) -> int | None:
-        return llm_panel.block_index_for_line(self, line_index)
+        return rendering.llm_block_index_for_line(self, line_index)
 
     def _select_llm_block(self, block_index: int) -> bool:
-        return llm_panel.select_block(self, block_index)
+        return rendering.select_llm_block(self, block_index)
 
     def _move_llm_block_selection(self, direction: int) -> bool:
-        return llm_panel.move_block_selection(self, direction)
+        return rendering.move_llm_block_selection(self, direction)
 
     def _recent_llm_call_indices(self) -> list[int]:
-        return llm_panel.recent_call_indices(self)
+        return rendering.recent_llm_call_indices(self)
 
     def _llm_call_kind(self, entry: dict[str, Any]) -> str:
-        return llm_panel.call_kind(entry)
+        return rendering.llm_call_kind(entry)
 
     def _fit_text(self, text: str, font: pygame.font.Font, max_width: int) -> str:
-        return llm_panel.fit_text(text, font, max_width)
+        return rendering.fit_llm_text(text, font, max_width)
 
     def _activate_llm_call_button(self, entry_index: int) -> bool:
-        return llm_panel.activate_call_button(self, entry_index)
+        return rendering.activate_llm_call_button(self, entry_index)
 
     def _select_llm_entry_part(self, entry_index: int, part: str) -> bool:
-        return llm_panel.select_entry_part(self, entry_index, part)
+        return rendering.select_llm_entry_part(self, entry_index, part)
 
     def _investigate_command(self) -> str:
         """The x key: sweep the room, unless a found clue's anchor is in reach —
@@ -1653,44 +1643,46 @@ class GameUI:
         self.execute_command(command)
 
     def draw(self) -> None:
-        draw_game_frame(self)
+        rendering.draw_game_frame(self)
 
     def draw_resolving_indicator(self) -> None:
         """A small banner over the map while an urgent command resolves, so the player
         knows the wild magic is listening (and that new actions are being ignored)."""
-        draw_resolving_indicator(self.screen, self.small_font, self._command_label)
+        rendering.draw_resolving_indicator(
+            self.screen, self.small_font, self._command_label
+        )
 
     def draw_autoplay_overlay(self) -> None:
-        draw_autoplay_overlay(
+        rendering.draw_autoplay_overlay(
             self.screen, self.small_font, self.autoplay.overlay_lines()
         )
 
     def draw_inspect_tooltip(self) -> None:
-        draw_inspect_tooltip(self)
+        rendering.draw_inspect_tooltip(self)
 
     def draw_book_popup(self) -> None:
         """A parchment page for reading books, modal over everything else.
         Long texts paginate; arrows/space/clicks turn pages."""
-        book_popup_view.draw_book_popup(self)
+        rendering.draw_book_popup(self)
 
     def draw_queue_debug(self) -> None:
         """F7 overlay: the background generation (canon prewarm) queue. Shows what the
         single worker is doing now and queued next, then the whole zone's books with
         their title/pages state in proximity order. Rebuilt live each frame, so it
         updates as the queue drains; the book list scrolls."""
-        draw_queue_debug(self)
+        rendering.draw_queue_debug(self)
 
     def draw_menu(self) -> None:
         self.menu_scene.draw()
 
     def draw_map(self) -> None:
-        draw_map(self.screen, self.tile_font, self.engine)
+        rendering.draw_map(self.screen, self.tile_font, self.engine)
 
     def draw_panel(self) -> None:
-        hud_panel.draw_panel(self)
+        rendering.draw_hud_panel(self)
 
     def draw_curse_tooltip(self) -> None:
-        hud_panel.draw_curse_tooltip(self)
+        rendering.draw_curse_tooltip(self)
 
     def _visible_hostiles_to_player(self) -> list[Entity]:
         engine = self.engine
@@ -1724,13 +1716,13 @@ class GameUI:
 
     def draw_llm_panel(self) -> None:
         if self._llm_debug_embedded():
-            llm_panel.draw_panel(self)
+            rendering.draw_llm_panel(self)
 
     def draw_llm_call_buttons(self, x: int, y: int, width: int) -> int:
-        return llm_panel.draw_call_buttons(self, x, y, width)
+        return rendering.draw_llm_call_buttons(self, x, y, width)
 
     def draw_llm_content(self, x: int, y: int, width: int, height: int) -> None:
-        llm_panel.draw_content(self, x, y, width, height)
+        rendering.draw_llm_content(self, x, y, width, height)
 
     def draw_llm_scrollbar(
         self,
@@ -1741,7 +1733,9 @@ class GameUI:
         total_lines: int,
         visible_lines: int,
     ) -> None:
-        llm_panel.draw_scrollbar(self, x, y, width, height, total_lines, visible_lines)
+        rendering.draw_llm_scrollbar(
+            self, x, y, width, height, total_lines, visible_lines
+        )
 
     def _log_scroll_to_fraction(self, fraction: float) -> None:
         if self._log_max_scroll <= 0:
@@ -1761,26 +1755,26 @@ class GameUI:
         return (target_thumb_y - track.y) / usable
 
     def _refresh_llm_debug_entries(self) -> None:
-        llm_panel.refresh_debug_entries(self)
+        rendering.refresh_llm_debug_entries(self)
 
     def _parse_audit_timestamp(self, value: Any) -> datetime | None:
-        return llm_panel.parse_audit_timestamp(value)
+        return rendering.parse_audit_timestamp(value)
 
     def _audit_record_to_debug_entry(
         self, filename: str, record: dict[str, Any]
     ) -> dict[str, Any]:
-        return llm_panel.audit_record_to_debug_entry(filename, record)
+        return rendering.audit_record_to_debug_entry(filename, record)
 
     def _format_audit_prompt(self, record: dict[str, Any]) -> str:
-        return llm_panel.format_audit_prompt(record)
+        return rendering.format_audit_prompt(record)
 
     def _format_audit_response(self, record: dict[str, Any]) -> str:
-        return llm_panel.format_audit_response(record)
+        return rendering.format_audit_response(record)
 
     def _build_llm_lines(
         self, wrap_chars: int
     ) -> list[tuple[str, tuple[int, int, int]]]:
-        return llm_panel.build_lines(self, wrap_chars)
+        return rendering.build_llm_lines(self, wrap_chars)
 
     def handle_mouse_wheel(self, event: pygame.event.Event) -> None:
         scene = self._active_scene()
@@ -1812,10 +1806,10 @@ class GameUI:
             )
 
     def _llm_scroll_to_fraction(self, fraction: float) -> None:
-        llm_panel.scroll_to_fraction(self, fraction)
+        rendering.llm_scroll_to_fraction(self, fraction)
 
     def _llm_scrollbar_fraction_at(self, mouse_y: int) -> float | None:
-        return llm_panel.scrollbar_fraction_at(self, mouse_y)
+        return rendering.llm_scrollbar_fraction_at(self, mouse_y)
 
     def draw_text(
         self,
@@ -1825,7 +1819,7 @@ class GameUI:
         font: pygame.font.Font,
         color: tuple[int, int, int],
     ) -> int:
-        return draw_text(self.screen, text, x, y, font, color)
+        return rendering.draw_text(self.screen, text, x, y, font, color)
 
 
 def run_game(autoplay: bool = False, fullscreen: bool = False) -> None:

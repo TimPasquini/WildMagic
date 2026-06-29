@@ -1,1 +1,164 @@
-"""Rendering helpers for the Pygame front end."""
+"""Public rendering API for the Pygame front end.
+
+The rest of the client should import rendering entry points from this package
+instead of reaching into individual rendering modules. Internal modules remain
+small enough to test directly, but this file is the stable integration surface
+for callers such as ``wildmagic.ui`` and scene hosts.
+"""
+
+from __future__ import annotations
+
+from .book_popup import draw_book_popup
+from .fonts import GameFonts
+from .frame import draw_game_frame
+from .hud_panel import (
+    draw_curse_tooltip,
+    draw_panel as draw_hud_panel,
+    input_line_slices,
+    is_player_damage_message,
+)
+from .inspect_tooltip import draw_inspect_tooltip
+from .layout import (
+    DEFAULT_WINDOW_LAYOUT,
+    LLM_PANEL_WIDTH,
+    MAP_OFFSET_X,
+    MAP_PIXEL_HEIGHT,
+    MAP_PIXEL_WIDTH,
+    PANEL_WIDTH,
+    TILE_SIZE,
+    WINDOW_HEIGHT,
+    WINDOW_WIDTH,
+    WindowLayout,
+    auto_ui_scale,
+    logical_mouse_event,
+    logical_mouse_pos,
+    toggled_ui_scale,
+)
+from .llm_panel import (
+    activate_call_button as activate_llm_call_button,
+    audit_record_to_debug_entry,
+    block_index_for_line as llm_block_index_for_line,
+    build_lines as build_llm_lines,
+    call_kind as llm_call_kind,
+    draw_call_buttons as draw_llm_call_buttons,
+    draw_content as draw_llm_content,
+    draw_panel as draw_llm_panel,
+    draw_scrollbar as draw_llm_scrollbar,
+    fit_text as fit_llm_text,
+    format_audit_prompt,
+    format_audit_response,
+    line_index_at as llm_line_index_at,
+    move_block_selection as move_llm_block_selection,
+    parse_audit_timestamp,
+    recent_call_indices as recent_llm_call_indices,
+    refresh_debug_entries as refresh_llm_debug_entries,
+    scroll_to_fraction as llm_scroll_to_fraction,
+    scrollbar_fraction_at as llm_scrollbar_fraction_at,
+    select_block as select_llm_block,
+    select_entry_part as select_llm_entry_part,
+    selected_lines as selected_llm_lines,
+)
+from .map_view import (
+    ENTITY_COLORS,
+    draw_glyph,
+    draw_map,
+    draw_target_reticle,
+    entity_color,
+)
+from .overlays import draw_autoplay_overlay, draw_resolving_indicator
+from .queue_debug import draw_queue_debug
+from .text import draw_text
+from .theme import (
+    ACCENT,
+    BACKGROUND,
+    DANGER,
+    GOLD,
+    MANA,
+    MODE_COLORS,
+    MODE_GREEN,
+    MODE_ORANGE,
+    MODE_PURPLE,
+    MODE_YELLOW,
+    MUTED,
+    PANEL,
+    PANEL_EDGE,
+    SELECTED,
+    TEXT,
+    blend_color,
+    wrap_text,
+)
+from .window import GameWindow
+
+__all__ = [
+    "ACCENT",
+    "BACKGROUND",
+    "DANGER",
+    "DEFAULT_WINDOW_LAYOUT",
+    "ENTITY_COLORS",
+    "GOLD",
+    "GameFonts",
+    "GameWindow",
+    "LLM_PANEL_WIDTH",
+    "MANA",
+    "MAP_OFFSET_X",
+    "MAP_PIXEL_HEIGHT",
+    "MAP_PIXEL_WIDTH",
+    "MODE_COLORS",
+    "MODE_GREEN",
+    "MODE_ORANGE",
+    "MODE_PURPLE",
+    "MODE_YELLOW",
+    "MUTED",
+    "PANEL",
+    "PANEL_EDGE",
+    "PANEL_WIDTH",
+    "SELECTED",
+    "TEXT",
+    "TILE_SIZE",
+    "WINDOW_HEIGHT",
+    "WINDOW_WIDTH",
+    "WindowLayout",
+    "activate_llm_call_button",
+    "audit_record_to_debug_entry",
+    "auto_ui_scale",
+    "blend_color",
+    "build_llm_lines",
+    "draw_autoplay_overlay",
+    "draw_book_popup",
+    "draw_curse_tooltip",
+    "draw_game_frame",
+    "draw_glyph",
+    "draw_hud_panel",
+    "draw_inspect_tooltip",
+    "draw_llm_call_buttons",
+    "draw_llm_content",
+    "draw_llm_panel",
+    "draw_llm_scrollbar",
+    "draw_map",
+    "draw_queue_debug",
+    "draw_resolving_indicator",
+    "draw_target_reticle",
+    "draw_text",
+    "entity_color",
+    "fit_llm_text",
+    "format_audit_prompt",
+    "format_audit_response",
+    "input_line_slices",
+    "is_player_damage_message",
+    "logical_mouse_event",
+    "logical_mouse_pos",
+    "llm_block_index_for_line",
+    "llm_call_kind",
+    "llm_line_index_at",
+    "llm_scroll_to_fraction",
+    "llm_scrollbar_fraction_at",
+    "move_llm_block_selection",
+    "parse_audit_timestamp",
+    "recent_llm_call_indices",
+    "refresh_llm_debug_entries",
+    "select_llm_block",
+    "select_llm_entry_part",
+    "selected_llm_lines",
+    "toggled_ui_scale",
+    "wrap_text",
+]

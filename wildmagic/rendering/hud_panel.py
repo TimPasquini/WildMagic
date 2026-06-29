@@ -15,6 +15,7 @@ from wildmagic.rendering.layout import (
     WINDOW_HEIGHT,
     WINDOW_WIDTH,
 )
+from wildmagic.rendering.primitives import draw_vertical_scrollbar
 from wildmagic.rendering.theme import (
     ACCENT,
     DANGER,
@@ -678,19 +679,20 @@ def draw_log_scrollbar(
     total_lines: int,
     visible_lines: int,
 ) -> None:
-    track = pygame.Rect(x, y, width, height)
-    pygame.draw.rect(host.screen, (20, 22, 27), track, border_radius=4)
-    if total_lines <= visible_lines or host._log_max_scroll <= 0:
-        host.log_scrollbar_track_rect = None
-        host.log_scrollbar_thumb_rect = None
-        return
-    thumb_height = max(28, int(height * (visible_lines / total_lines)))
-    usable = max(1, height - thumb_height)
-    thumb_y = y + usable - int(usable * (host.log_scroll_offset / host._log_max_scroll))
-    thumb = pygame.Rect(x, thumb_y, width, thumb_height)
-    thumb_color = ACCENT if host.log_dragging_scrollbar else PANEL_EDGE
-    pygame.draw.rect(host.screen, thumb_color, thumb, border_radius=4)
-    host.log_scrollbar_track_rect = track
+    track, thumb = draw_vertical_scrollbar(
+        host.screen,
+        x,
+        y,
+        width,
+        height,
+        total_items=total_lines,
+        visible_items=visible_lines,
+        offset=host.log_scroll_offset,
+        max_offset=host._log_max_scroll,
+        dragging=host.log_dragging_scrollbar,
+        reverse=True,
+    )
+    host.log_scrollbar_track_rect = track if thumb is not None else None
     host.log_scrollbar_thumb_rect = thumb
 
 

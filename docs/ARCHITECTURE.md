@@ -28,11 +28,13 @@ standing summaries; the full standing readout is opened as a modal scene. Base w
 geometry and physical-to-logical UI scaling live in `wildmagic/rendering/layout.py`.
 
 ### `wildmagic/rendering/`
-Pygame rendering support modules shared by UI components. `layout.py` owns the base tile,
-panel, and window dimensions, chooses the default integer UI scale from the desktop size,
-computes fit-to-monitor viewports, and converts mouse input from scaled or letterboxed
-physical window coordinates back into logical UI coordinates. `theme.py` owns the shared
-rendering palette and pure text/color helpers.
+Pygame rendering support modules shared by UI components. The package `__init__.py` is the
+public integration surface for callers such as `wildmagic.ui`, re-exporting stable draw
+entry points, layout/window objects, theme values, and LLM-debug interaction helpers.
+`layout.py` owns the base tile, panel, and window dimensions, chooses the default integer UI
+scale from the desktop size, computes fit-to-monitor viewports, and converts mouse input
+from scaled or letterboxed physical window coordinates back into logical UI coordinates.
+`theme.py` owns the shared rendering palette and pure text/color helpers.
 `map_view.py` renders the explored dungeon tiles, visible/revealed entities,
 map glyph placement, and target reticle. `hud_panel.py` renders the right-side HUD,
 including bars, statuses, visible enemies, floor items, inventory, curses, standing,
@@ -45,8 +47,10 @@ Pygame init/quit lifecycle.
 `fonts.py` owns construction of the Pygame font bundle used by the host, scenes, and
 rendering helpers. `overlays.py` renders small map-area overlays such as the resolving
 banner and AI watch status panel. `frame.py` composes the normal in-game render pass and
-delegates full-screen scene drawing before the game frame is drawn. `text.py` contains
-small reusable text rendering helpers used through the host wrapper. `book_popup.py`
+delegates full-screen scene drawing before the game frame is drawn. `primitives.py` contains
+small reusable drawing primitives, such as the shared vertical scrollbar implementation used
+by both the HUD log and LLM/debug panel. `text.py` contains small reusable text rendering
+helpers used through the host wrapper. `book_popup.py`
 renders the modal parchment reader and keeps its pagination state synchronized.
 `queue_debug.py` renders the F7 background-generation queue overlay and synchronizes its
 scroll bounds. `inspect_tooltip.py` renders map-tile inspection details and clickable
