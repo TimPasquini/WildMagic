@@ -17,6 +17,9 @@ class Host(SimpleNamespace):
             menu_models=[],
             closed=False,
             scaled=False,
+            fullscreen=False,
+            llm_debug_mode="embedded",
+            window=SimpleNamespace(fullscreen=False),
         )
 
     def _close_menu(self) -> None:
@@ -25,6 +28,13 @@ class Host(SimpleNamespace):
 
     def _toggle_ui_scale(self) -> None:
         self.scaled = True
+
+    def _toggle_fullscreen(self) -> None:
+        self.fullscreen = not self.fullscreen
+        self.window.fullscreen = self.fullscreen
+
+    def _set_llm_debug_mode(self, mode: str) -> None:
+        self.llm_debug_mode = mode
 
 
 def test_menu_scene_builds_main_items_from_host_state() -> None:
@@ -35,10 +45,14 @@ def test_menu_scene_builds_main_items_from_host_state() -> None:
     assert [item["action"] for item in items] == [
         "resume",
         "toggle_ui_scale",
+        "toggle_fullscreen",
+        "cycle_llm_debug",
         "config",
         "quit",
     ]
     assert items[1]["label"] == "UI Scale: 2x"
+    assert items[2]["label"] == "Fullscreen: OFF"
+    assert items[3]["label"] == "LLM Debug: Embedded"
 
 
 def test_menu_scene_cycle_updates_config_without_touching_disk(monkeypatch) -> None:
@@ -70,6 +84,12 @@ def test_menu_scene_select_delegates_host_actions() -> None:
 
     scene.select([{"action": "toggle_ui_scale"}])
     assert host.scaled
+
+    scene.select([{"action": "toggle_fullscreen"}])
+    assert host.window.fullscreen
+
+    scene.select([{"action": "cycle_llm_debug"}])
+    assert host.llm_debug_mode == "popout"
 
     scene.select([{"action": "resume"}])
     assert host.closed
