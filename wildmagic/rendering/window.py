@@ -117,12 +117,6 @@ class GameWindow:
             return
         self.base_view_rect = rect
         self.active_view_rect = rect.copy()
-        if not self.fullscreen:
-            self.display = pygame.display.set_mode(
-                windowed_fit_size(rect.size, self.ui_scale, self.layout),
-                pygame.RESIZABLE,
-            )
-            self.window_id = _display_window_id()
         self._refresh_content_rect()
 
     def set_active_view_rect(self, rect: pygame.Rect | None) -> None:
@@ -189,7 +183,11 @@ class GameWindow:
 
 def _event_window_id(event: pygame.event.Event) -> int | None:
     """Return a stable SDL window id without comparing SDL2 Window objects directly."""
-    event_window = getattr(event, "window", None)
+    event_window = (
+        getattr(event, "window", None)
+        or getattr(event, "windowID", None)
+        or getattr(event, "window_id", None)
+    )
     if event_window is None:
         return None
     if isinstance(event_window, int):

@@ -86,7 +86,11 @@ class LlmDebugWindow:
 
 
 def _event_window_id(event: pygame.event.Event) -> int | None:
-    event_window = getattr(event, "window", None)
+    event_window = (
+        getattr(event, "window", None)
+        or getattr(event, "windowID", None)
+        or getattr(event, "window_id", None)
+    )
     if event_window is None:
         return None
     if isinstance(event_window, int):
