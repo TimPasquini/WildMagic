@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from types import SimpleNamespace
 
 import pygame
@@ -262,15 +263,17 @@ def test_game_window_resize_event_refreshes_surface_without_recreating_window(
     assert window.content_rect == pygame.Rect(0, 0, 300, 150)
 
 
-def test_game_window_videoresize_recreates_legacy_resizable_display(
+def test_game_window_videoresize_refreshes_surface_without_recreating_window(
     monkeypatch,
 ) -> None:
+    resized = DisplaySurface((300, 150))
     set_modes: list[tuple[tuple[int, int], int]] = []
     monkeypatch.setattr(
         pygame.display,
         "set_mode",
         lambda size, flags=0: set_modes.append((size, flags)) or DisplaySurface(size),
     )
+    monkeypatch.setattr(pygame.display, "get_surface", lambda: resized)
     monkeypatch.setattr(pygame.display, "get_window_id", lambda: 12, raising=False)
     window = GameWindow(
         display=DisplaySurface((100, 50)),
@@ -288,8 +291,8 @@ def test_game_window_videoresize_recreates_legacy_resizable_display(
     )
 
     assert handled is True
-    assert set_modes == [((300, 150), pygame.RESIZABLE)]
-    assert window.display.get_size() == (300, 150)
+    assert set_modes == []
+    assert window.display is resized
     assert window.window_id == 12
 
 
@@ -331,3 +334,32 @@ def test_game_window_accepts_alternate_window_id_fields() -> None:
     assert not window.owns_event(
         pygame.event.Event(pygame.WINDOWRESIZED, {"window_id": 99})
     )
+
+
+def test_game_window_create_uses_sdl2_display_window_id_fallback(monkeypatch) -> None:
+    class FakeWindow:
+        id = 42
+
+        @staticmethod
+        def from_display_module() -> FakeWindow:
+            return FakeWindow()
+
+    layout = WindowLayout(width=100, height=50, max_ui_scale=1)
+    monkeypatch.delattr(pygame.display, "get_window_id", raising=False)
+    monkeypatch.setitem(
+        sys.modules,
+        "pygame._sdl2.video",
+        SimpleNamespace(Window=FakeWindow),
+    )
+    monkeypatch.setattr(pygame, "init", lambda: None)
+    monkeypatch.setattr(pygame.key, "set_repeat", lambda: None)
+    monkeypatch.setattr(pygame.display, "set_caption", lambda _caption: None)
+    monkeypatch.setattr(
+        pygame.display, "set_mode", lambda _size, _flags=0: DisplaySurface(_size)
+    )
+    monkeypatch.setattr(pygame, "Surface", lambda size: SimpleNamespace(size=size))
+    monkeypatch.setattr(pygame.time, "Clock", Clock)
+
+    window = GameWindow.create("Wild Magic", layout)
+
+    assert window.window_id == 42

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
 
 import pygame
@@ -93,11 +94,8 @@ class GameWindow:
         )
         if not size or size[0] <= 0 or size[1] <= 0:
             return True
-        if event.type == pygame.VIDEORESIZE:
-            self.display = pygame.display.set_mode(size, pygame.RESIZABLE)
-            self.window_id = _display_window_id()
-        else:
-            self.display = pygame.display.get_surface() or self.display
+        self.display = pygame.display.get_surface() or self.display
+        self.window_id = _display_window_id() or self.window_id
         self._refresh_content_rect()
         return True
 
@@ -200,9 +198,16 @@ def _event_window_id(event: pygame.event.Event) -> int | None:
 
 def _display_window_id() -> int | None:
     get_window_id = getattr(pygame.display, "get_window_id", None)
-    if get_window_id is None:
-        return None
+    if get_window_id is not None:
+        try:
+            return int(get_window_id())
+        except Exception:
+            pass
     try:
-        return int(get_window_id())
+        from pygame._sdl2.video import Window
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return int(Window.from_display_module().id)
     except Exception:
         return None
