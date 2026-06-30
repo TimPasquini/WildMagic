@@ -119,6 +119,24 @@ def test_draw_game_frame_composes_base_view_in_order(monkeypatch) -> None:
     ]
 
 
+def test_draw_game_frame_skips_embedded_llm_panel_when_debug_is_external(
+    monkeypatch,
+) -> None:
+    host = FakeHost()
+    host._llm_debug_embedded = lambda: False  # type: ignore[method-assign]
+    _spy_frame_rendering(monkeypatch, host)
+
+    draw_game_frame(host)
+
+    assert host.calls == [
+        "fill",
+        "map",
+        "panel",
+        "autoplay",
+        "curse",
+    ]
+
+
 def test_draw_game_frame_draws_active_overlays_after_base_view(monkeypatch) -> None:
     host = FakeHost()
     _spy_frame_rendering(monkeypatch, host)
