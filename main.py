@@ -10,5 +10,10 @@ if __name__ == "__main__":
         action="store_true",
         help="Start the pygame UI with AI watch mode already enabled.",
     )
+    parser.add_argument(
+        "--fullscreen",
+        action="store_true",
+        help="Start the pygame UI in fullscreen mode.",
+    )
     args = parser.parse_args()
-    run_game(autoplay=args.autoplay)
+    run_game(autoplay=args.autoplay, fullscreen=args.fullscreen)

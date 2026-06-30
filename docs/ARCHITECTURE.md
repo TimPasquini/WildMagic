@@ -18,8 +18,9 @@ graphical UI with AI watch mode already enabled.
 
 ### `wildmagic/ui.py`
 Pygame front-end. Owns the game loop, hosts renderers, handles keyboard
-input, and routes commands to `GameSession`. Also shows the LLM thinking panel, the model
-selector overlay, and a visual AI watch controller that lets the autoplay command chooser
+input, display/window toggles, and routes commands to `GameSession`. Also shows the LLM
+thinking panel, can pop that debug panel into an independent SDL2 window, shows the model
+selector overlay, and hosts a visual AI watch controller that lets the autoplay command chooser
 drive the same command path while the renderer stays responsive. Equipment and inventory
 screens consume `GameSession.equipment_inventory_view()` rather than importing equipment
 rules or reconstructing wearability from item names. The side panel uses compact shared
@@ -29,16 +30,18 @@ geometry and physical-to-logical UI scaling live in `wildmagic/rendering/layout.
 ### `wildmagic/rendering/`
 Pygame rendering support modules shared by UI components. `layout.py` owns the base tile,
 panel, and window dimensions, chooses the default integer UI scale from the desktop size,
-and converts mouse input from scaled physical window coordinates back into logical UI
-coordinates. `theme.py` owns the shared rendering palette and pure text/color helpers.
+computes fit-to-monitor viewports, and converts mouse input from scaled or letterboxed
+physical window coordinates back into logical UI coordinates. `theme.py` owns the shared
+rendering palette and pure text/color helpers.
 `map_view.py` renders the explored dungeon tiles, visible/revealed entities,
 map glyph placement, and target reticle. `hud_panel.py` renders the right-side HUD,
 including bars, statuses, visible enemies, floor items, inventory, curses, standing,
-message log, and spell/input box. `llm_panel.py` renders the left-side LLM/debug panel,
-reads audit JSONL records, formats prompt/response blocks, and owns debug-panel
-scroll/selection helpers. `window.py` owns the Pygame display surface, logical render
-surface, frame presentation, runtime UI scale toggling, key-repeat setup, and Pygame
-init/quit lifecycle.
+message log, and spell/input box. `llm_panel.py` renders the LLM/debug panel, reads audit
+JSONL records, formats prompt/response blocks, and owns debug-panel scroll/selection
+helpers. `llm_debug_window.py` hosts the same panel in an optional independent SDL2
+window. `window.py` owns the Pygame display surface, logical render surface,
+fit-to-display/fullscreen presentation, runtime UI scale toggling, key-repeat setup, and
+Pygame init/quit lifecycle.
 `fonts.py` owns construction of the Pygame font bundle used by the host, scenes, and
 rendering helpers. `overlays.py` renders small map-area overlays such as the resolving
 banner and AI watch status panel. `frame.py` composes the normal in-game render pass and

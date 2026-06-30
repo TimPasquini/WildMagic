@@ -39,8 +39,8 @@ CONTROLS_HINT = (
     "Keyboard controls active - arrows/WASD/keypad move, > descend, < ascend, o open, "
     "g pick up, f cast spark, x investigate, e examine, r read, u free, z rest, "
     "b wares, p possess, l inspect, m atlas, t standing, n followers, h help, c character, "
-    "j journal, q quests, i inventory, period or keypad-5 to wait, F7 generation queue, "
-    "F8 watch AI, F9 pause AI, F10 step AI, Esc back to Wild Spell. "
+    "j journal, q quests, i inventory, period or keypad-5 to wait, F6 LLM debug, "
+    "F7 generation queue, F8 watch AI, F9 pause AI, F10 step AI, F11 fullscreen, Esc back to Wild Spell. "
     "Tab switches Wild Spell / Controls / Talk; hold Ctrl for a quick control key (Ctrl+c = character)."
 )
 CONTROLS_HINT_WRAP = 48

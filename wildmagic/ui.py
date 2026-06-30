@@ -46,6 +46,7 @@ from .rendering.layout import (
     WINDOW_HEIGHT,
     WINDOW_WIDTH,
 )
+from .rendering.llm_debug_window import LlmDebugWindow
 from .rendering.window import GameWindow
 from .rendering import hud_panel
 from .rendering.hud_panel import is_player_damage_message
@@ -377,8 +378,8 @@ class VisualAutoplayController:
 
 
 class GameUI:
-    def __init__(self, autoplay: bool = False) -> None:
-        self.window = GameWindow.create("Wild Magic")
+    def __init__(self, autoplay: bool = False, fullscreen: bool = False) -> None:
+        self.window = GameWindow.create("Wild Magic", fullscreen=fullscreen)
         # GameWindow disables pygame key auto-repeat: this is a turn-based game, so one
         # physical key press must equal exactly one step. pygame repeat previously caused
         # double-steps when KEYUP was buffered behind a slow generation frame.
@@ -440,6 +441,12 @@ class GameUI:
         self.llm_selection_anchor: int | None = None
         self.llm_selection_focus: int | None = None
         self.dragging_llm_selection = False
+        self.llm_debug_mode = "embedded"
+        self.llm_debug_window: LlmDebugWindow | None = None
+        self._full_view_rect = pygame.Rect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT)
+        self._compact_view_rect = pygame.Rect(
+            LLM_PANEL_WIDTH, 0, WINDOW_WIDTH - LLM_PANEL_WIDTH, WINDOW_HEIGHT
+        )
 
         self.inspect_tile: tuple[int, int] | None = None
         self.inspect_button_rects: list[tuple[pygame.Rect, str]] = []
@@ -505,6 +512,7 @@ class GameUI:
         self.standing_scene = StandingScene(self)
         if not autoplay:
             self.creation_scene.start()
+        self._sync_window_view()
 
     def _config_value(self, spec: dict) -> str:
         return self.menu_scene._config_value(spec)
@@ -533,12 +541,25 @@ class GameUI:
         running = True
         try:
             while running:
+                self._sync_window_view()
                 self._acted_this_frame = False
-                for event in pygame.event.get():
-                    event = self._logical_mouse_event(event)
-                    if event.type == pygame.QUIT:
+                for raw_event in pygame.event.get():
+                    if self._handle_llm_debug_window_event(raw_event):
+                        continue
+                    if not self.window.owns_event(raw_event):
+                        continue
+                    if raw_event.type == pygame.QUIT:
                         running = False
-                    elif event.type in {
+                        continue
+                    if raw_event.type == getattr(
+                        pygame, "WINDOWCLOSE", None
+                    ) and self.window.owns_event(raw_event):
+                        running = False
+                        continue
+                    if self.window.handle_window_event(raw_event):
+                        continue
+                    event = self._logical_mouse_event(raw_event)
+                    if event.type in {
                         pygame.MOUSEBUTTONDOWN,
                         pygame.MOUSEBUTTONUP,
                         pygame.MOUSEMOTION,
@@ -561,6 +582,7 @@ class GameUI:
                     if not self._awaiting_command():
                         self.session.pump_canon_prewarm()
                 try:
+                    self._sync_window_view()
                     self.draw()
                 except RuntimeError:
                     # An urgent command is mutating engine state on its worker thread
@@ -569,9 +591,11 @@ class GameUI:
                     if self._command_future is None:
                         raise
                 self.window.present()
+                self._draw_llm_debug_window()
         finally:
             self.autoplay.close()
             self._command_executor.shutdown(wait=False, cancel_futures=True)
+            self._close_llm_debug_window()
             self.portraits.close()
             self.session.close()
             self.window.close()
@@ -586,6 +610,180 @@ class GameUI:
         self.window.toggle_scale()
         self.ui_scale = self.window.ui_scale
         self.display = self.window.display
+
+    def _toggle_fullscreen(self) -> None:
+        self.window.toggle_fullscreen()
+        self.display = self.window.display
+
+    def _llm_debug_embedded(self) -> bool:
+        return self.llm_debug_mode == "embedded"
+
+    def _set_llm_debug_mode(self, mode: str) -> None:
+        if mode not in {"embedded", "popout", "hidden"}:
+            mode = "embedded"
+        if mode == "embedded":
+            self._close_llm_debug_window()
+        elif mode == "popout" and self.llm_debug_window is None:
+            try:
+                self.llm_debug_window = LlmDebugWindow()
+            except Exception as exc:
+                self.engine.state.add_message(f"Could not open LLM debug window: {exc}")
+                mode = "embedded"
+        elif mode == "hidden":
+            self._close_llm_debug_window()
+        self.llm_debug_mode = mode
+        self._sync_window_view(force=True)
+
+    def _toggle_llm_debug_popout(self) -> None:
+        if self.llm_debug_mode == "popout":
+            self._set_llm_debug_mode("embedded")
+        else:
+            self._set_llm_debug_mode("popout")
+
+    def _close_llm_debug_window(self) -> None:
+        if self.llm_debug_window is not None:
+            self.llm_debug_window.close()
+            self.llm_debug_window = None
+
+    def _sync_window_view(self, *, force: bool = False) -> None:
+        base = (
+            self._full_view_rect
+            if self._llm_debug_embedded()
+            else self._compact_view_rect
+        )
+        if force or self.window.base_view_rect != base:
+            self.window.set_base_view_rect(base)
+        active = base
+        if not self._llm_debug_embedded() and (
+            self._active_scene() is not None
+            or self.menu_active
+            or self.book_popup is not None
+            or self.queue_debug_active
+        ):
+            active = self._full_view_rect
+        self.window.set_active_view_rect(active)
+        self.ui_scale = self.window.ui_scale
+        self.display = self.window.display
+
+    def _draw_llm_debug_window(self) -> None:
+        if self.llm_debug_window is not None:
+            self.llm_debug_window.draw(self)
+
+    def _handle_llm_debug_window_event(self, event: pygame.event.Event) -> bool:
+        window = self.llm_debug_window
+        if window is None or not window.owns_event(event):
+            return False
+        if event.type == getattr(pygame, "WINDOWCLOSE", None):
+            self._set_llm_debug_mode("hidden")
+            return True
+        if event.type in {
+            getattr(pygame, "WINDOWRESIZED", None),
+            getattr(pygame, "WINDOWSIZECHANGED", None),
+        }:
+            self._llm_lines_cache = None
+            return True
+        if event.type == pygame.KEYDOWN:
+            self._handle_llm_debug_key(event)
+            return True
+        if event.type in {
+            pygame.MOUSEBUTTONDOWN,
+            pygame.MOUSEBUTTONUP,
+            pygame.MOUSEMOTION,
+        }:
+            self._handle_llm_debug_mouse(event)
+            return True
+        if event.type == pygame.MOUSEWHEEL:
+            self._handle_llm_debug_wheel(event)
+            return True
+        return True
+
+    def _handle_llm_debug_key(self, event: pygame.event.Event) -> None:
+        if event.key in (pygame.K_ESCAPE, pygame.K_F6):
+            self._set_llm_debug_mode("hidden")
+            return
+        if event.mod & pygame.KMOD_CTRL:
+            if event.key == pygame.K_c:
+                self.copy_llm_selection()
+            elif event.key == pygame.K_a and self._llm_lines_cache:
+                self.llm_selection_anchor = 0
+                self.llm_selection_focus = len(self._llm_lines_cache) - 1
+            return
+        if (
+            event.key in (pygame.K_UP, pygame.K_DOWN)
+            and self.llm_selection_anchor is not None
+            and self.llm_selection_focus is not None
+        ):
+            self._move_llm_block_selection(-1 if event.key == pygame.K_UP else 1)
+
+    def _handle_llm_debug_wheel(self, event: pygame.event.Event) -> None:
+        self.llm_scroll_offset -= event.y * 3
+        self.llm_scroll_offset = max(
+            0, min(self.llm_scroll_offset, self._llm_max_scroll)
+        )
+        self.llm_autoscroll = (
+            self._llm_max_scroll > 0 and self.llm_scroll_offset >= self._llm_max_scroll
+        )
+
+    def _handle_llm_debug_mouse(self, event: pygame.event.Event) -> None:
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if (
+                self.llm_scrollbar_thumb_rect
+                and self.llm_scrollbar_thumb_rect.collidepoint(event.pos)
+            ):
+                self.llm_dragging_scrollbar = True
+                self.llm_drag_grab_dy = event.pos[1] - self.llm_scrollbar_thumb_rect.y
+                return
+            if (
+                self.llm_scrollbar_track_rect
+                and self.llm_scrollbar_track_rect.collidepoint(event.pos)
+            ):
+                thumb = self.llm_scrollbar_thumb_rect
+                self.llm_drag_grab_dy = thumb.height // 2 if thumb else 0
+                track = self.llm_scrollbar_track_rect
+                thumb_height = thumb.height if thumb else 0
+                usable = max(1, track.height - thumb_height)
+                fraction = (event.pos[1] - self.llm_drag_grab_dy - track.y) / usable
+                self._llm_scroll_to_fraction(fraction)
+                self.llm_dragging_scrollbar = True
+                return
+            for rect, entry_index in self.llm_call_button_rects:
+                if rect.collidepoint(event.pos):
+                    if self._activate_llm_call_button(entry_index):
+                        self.dragging_llm_selection = False
+                        self.dragging_log_selection = False
+                        self.log_selection_anchor = None
+                        self.log_selection_focus = None
+                        self.input_active = False
+                    return
+            llm_index = self.llm_line_index_at(event.pos)
+            if llm_index is not None:
+                self.llm_selection_anchor = llm_index
+                self.llm_selection_focus = llm_index
+                self.dragging_llm_selection = True
+                self.dragging_log_selection = False
+                self.log_selection_anchor = None
+                self.log_selection_focus = None
+                self.input_active = False
+            return
+        if event.type == pygame.MOUSEMOTION and self.llm_dragging_scrollbar:
+            fraction = self._llm_scrollbar_fraction_at(event.pos[1])
+            if fraction is not None:
+                self._llm_scroll_to_fraction(fraction)
+            return
+        if event.type == pygame.MOUSEMOTION and self.dragging_llm_selection:
+            index = self.llm_line_index_at(event.pos)
+            if index is not None:
+                self.llm_selection_focus = index
+            return
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            if self.llm_dragging_scrollbar:
+                self.llm_dragging_scrollbar = False
+                return
+            if self.dragging_llm_selection:
+                index = self.llm_line_index_at(event.pos)
+                if index is not None:
+                    self.llm_selection_focus = index
+                self.dragging_llm_selection = False
 
     def _awaiting_command(self) -> bool:
         """True while a player-issued LLM command is still resolving on the worker."""
@@ -784,6 +982,15 @@ class GameUI:
         return True
 
     def handle_key(self, event: pygame.event.Event) -> None:
+        if event.key == pygame.K_F11 or (
+            event.key in (pygame.K_RETURN, pygame.K_KP_ENTER)
+            and event.mod & pygame.KMOD_ALT
+        ):
+            self._toggle_fullscreen()
+            return
+        if event.key == pygame.K_F6:
+            self._toggle_llm_debug_popout()
+            return
         scene = self._active_scene()
         if scene is not None:
             scene.handle_key(event)
@@ -1516,7 +1723,8 @@ class GameUI:
         return min(adjacent, key=lambda entity: entity.id) if adjacent else None
 
     def draw_llm_panel(self) -> None:
-        llm_panel.draw_panel(self)
+        if self._llm_debug_embedded():
+            llm_panel.draw_panel(self)
 
     def draw_llm_call_buttons(self, x: int, y: int, width: int) -> int:
         return llm_panel.draw_call_buttons(self, x, y, width)
@@ -1620,5 +1828,5 @@ class GameUI:
         return draw_text(self.screen, text, x, y, font, color)
 
 
-def run_game(autoplay: bool = False) -> None:
-    GameUI(autoplay=autoplay).run()
+def run_game(autoplay: bool = False, fullscreen: bool = False) -> None:
+    GameUI(autoplay=autoplay, fullscreen=fullscreen).run()

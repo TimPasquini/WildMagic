@@ -55,29 +55,29 @@ LLM_CALL_COLORS = {
 
 def draw_panel(host: Any) -> None:
     x = 0
-    pygame.draw.rect(host.screen, PANEL, (x, 0, LLM_PANEL_WIDTH, WINDOW_HEIGHT))
+    panel_width = int(getattr(host, "llm_panel_width", LLM_PANEL_WIDTH))
+    panel_height = int(getattr(host, "llm_panel_height", WINDOW_HEIGHT))
+    pygame.draw.rect(host.screen, PANEL, (x, 0, panel_width, panel_height))
     pygame.draw.line(
         host.screen,
         PANEL_EDGE,
-        (LLM_PANEL_WIDTH, 0),
-        (LLM_PANEL_WIDTH, WINDOW_HEIGHT),
+        (panel_width - 1, 0),
+        (panel_width - 1, panel_height),
         2,
     )
     cursor_y = host.draw_text("LLM Debug", x + 16, 16, host.ui_font, ACCENT)
-    buttons_bottom = draw_call_buttons(
-        host, x + 16, cursor_y + 12, LLM_PANEL_WIDTH - 32
-    )
+    buttons_bottom = draw_call_buttons(host, x + 16, cursor_y + 12, panel_width - 32)
     divider_y = max(cursor_y + 10, buttons_bottom + 8)
     pygame.draw.line(
         host.screen,
         PANEL_EDGE,
         (x + 16, divider_y),
-        (LLM_PANEL_WIDTH - 16, divider_y),
+        (panel_width - 16, divider_y),
         1,
     )
     content_y = divider_y + 10
-    content_height = WINDOW_HEIGHT - content_y - 16
-    draw_content(host, x + 16, content_y, LLM_PANEL_WIDTH - 32, content_height)
+    content_height = panel_height - content_y - 16
+    draw_content(host, x + 16, content_y, panel_width - 32, content_height)
 
 
 def draw_call_buttons(host: Any, x: int, y: int, width: int) -> int:

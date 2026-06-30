@@ -99,11 +99,24 @@ class MenuScene:
 
     def items(self) -> list[dict]:
         if self.menu_page == "main":
+            llm_modes = {
+                "embedded": "Embedded",
+                "popout": "Popout",
+                "hidden": "Hidden",
+            }
             return [
                 {"label": "Resume", "action": "resume"},
                 {
                     "label": f"UI Scale: {self.ui_scale}x",
                     "action": "toggle_ui_scale",
+                },
+                {
+                    "label": f"Fullscreen: {'ON' if self.window.fullscreen else 'OFF'}",
+                    "action": "toggle_fullscreen",
+                },
+                {
+                    "label": f"LLM Debug: {llm_modes.get(self.llm_debug_mode, 'Embedded')}",
+                    "action": "cycle_llm_debug",
                 },
                 {"label": "Configuration", "action": "config"},
                 {"label": "Quit", "action": "quit"},
@@ -286,6 +299,15 @@ class MenuScene:
             self._close_menu()
         elif action == "toggle_ui_scale":
             self._toggle_ui_scale()
+        elif action == "toggle_fullscreen":
+            self._toggle_fullscreen()
+        elif action == "cycle_llm_debug":
+            order = ["embedded", "popout", "hidden"]
+            try:
+                index = order.index(self.llm_debug_mode)
+            except ValueError:
+                index = 0
+            self._set_llm_debug_mode(order[(index + 1) % len(order)])
         elif action == "quit":
             pygame.event.post(pygame.event.Event(pygame.QUIT))
         elif action == "config":
